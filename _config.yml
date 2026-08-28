@@ -1,0 +1,16 @@
+title: Bug-Fix Blog
+description: >-
+  Fast, terse write-ups of bugs, error messages, and their fixes.
+theme: minima
+
+markdown: kramdown
+permalink: /:year/:month/:day/:title/
+
+# minima theme settings
+minima:
+  skin: classic
+
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - vendor
