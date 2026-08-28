@@ -6,10 +6,6 @@ theme: minima
 markdown: kramdown
 permalink: /:year/:month/:day/:title/
 
-# minima theme settings
-minima:
-  skin: classic
-
 exclude:
   - Gemfile
   - Gemfile.lock
