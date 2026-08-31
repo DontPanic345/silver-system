@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Falling Sand</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%2312141a'/%3E%3Cpath d='M8 2l5 11H3z' fill='%23d9b158'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <h1>Falling Sand</h1>
+      <div class="stats">
+        <span id="fps">0</span> fps &middot; <span id="count">0</span> particles
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside class="sidebar">
+        <section class="panel">
+          <h2>Materials</h2>
+          <div class="materials" id="materials">
+            <button class="mat-btn" data-mat="sand" style="--c:#d9b158">
+              <span class="swatch"></span>Sand
+            </button>
+            <button class="mat-btn" data-mat="water" style="--c:#3aa0ff">
+              <span class="swatch"></span>Water
+            </button>
+            <button class="mat-btn" data-mat="stone" style="--c:#8a8f98">
+              <span class="swatch"></span>Stone
+            </button>
+            <button class="mat-btn" data-mat="wood" style="--c:#8a5a34">
+              <span class="swatch"></span>Wood
+            </button>
+            <button class="mat-btn" data-mat="fire" style="--c:#ff5a2e">
+              <span class="swatch"></span>Fire
+            </button>
+            <button class="mat-btn" data-mat="empty" style="--c:#1a1d24">
+              <span class="swatch"></span>Eraser
+            </button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Brush</h2>
+          <label class="slider-row">
+            <span>Size</span>
+            <input type="range" id="brushSize" min="1" max="20" value="5" />
+            <span id="brushSizeVal">5</span>
+          </label>
+        </section>
+
+        <section class="panel">
+          <h2>Simulation</h2>
+          <div class="btn-row">
+            <button id="pauseBtn" class="action-btn">Pause</button>
+            <button id="clearBtn" class="action-btn">Clear</button>
+          </div>
+        </section>
+
+        <section class="panel hint">
+          <p>Click / touch and drag to draw. Pick a material, then paint onto the canvas.</p>
+        </section>
+      </aside>
+
+      <main class="canvas-wrap">
+        <canvas id="sim"></canvas>
+      </main>
+    </div>
+  </div>
+
+  <script src="js/main.js"></script>
+</body>
+</html>
