@@ -1,36 +1,83 @@
 "use strict";
 
 /**
- * Falling Sand — a small cellular-automaton particle simulator.
+ * Falling Sand — a continuous-composition cellular automaton.
  *
- * The grid is a flat typed array of material ids. Each simulation step
- * scans the grid bottom-to-top (so nothing falls through a cell it just
- * vacated this frame) and alternates scan direction left/right per row
- * per frame to avoid a directional drift bias.
+ * Unlike a classic falling-sand sim (one material id per cell), every cell
+ * here holds a *mixture*: fractional amounts of four condensed substances
+ * (sand, clay, biomass, water) plus four gases (N2, O2, CO2, smoke). The
+ * eight fractions in a cell always sum to 1 — a cell is never "empty", it's
+ * just mostly air. Stone and wood are the only pure, immovable materials.
+ *
+ * Movement is a single density-ordered swap rule applied uniformly to every
+ * non-solid cell (dense mixtures sink, buoyant ones rise), and a separate
+ * diffusion pass exchanges small amounts of composition between neighbors
+ * every tick. That diffusion is what lets sand + clay + biomass + water
+ * settle into "soil" over time, purely as an emergent blend — there's no
+ * dedicated soil material, just a composition that renders and behaves like
+ * one.
+ *
+ * The grid scans bottom-to-top (so nothing falls through a cell it just
+ * vacated this frame) and alternates scan direction left/right per row per
+ * frame to avoid directional bias.
  */
 
-// ---- Materials -------------------------------------------------------
+// ---- Substances --------------------------------------------------------
 
-const EMPTY = 0;
-const SAND = 1;
-const WATER = 2;
-const STONE = 3;
-const WOOD = 4;
-const FIRE = 5;
-const SMOKE = 6;
+// Condensed (liquid/solid-ish) channels — these plus the gas channels
+// below always sum to 1 for a given cell.
+const SAND = 0, CLAY = 1, BIOMASS = 2, WATER = 3;
+const N_COND = 4;
 
-const STATIC = new Set([EMPTY, STONE, WOOD]); // wood only moves via combustion
-const DENSITY = { [EMPTY]: 0, [SAND]: 3, [WATER]: 1, [STONE]: 99, [WOOD]: 99, [FIRE]: -1, [SMOKE]: -2 };
+// Gas channels.
+const N2 = 0, O2 = 1, CO2 = 2, SMOKE = 3;
+const N_GAS = 4;
 
-// Base colors [r,g,b] per material; actual pixel color gets small per-cell jitter.
-const BASE_COLOR = {
-  [EMPTY]: [12, 13, 17],
-  [SAND]: [217, 177, 88],
-  [WATER]: [58, 160, 255],
-  [STONE]: [138, 143, 152],
-  [WOOD]: [138, 90, 52],
-  [FIRE]: [255, 90, 46],
-  [SMOKE]: [90, 92, 98],
+// Discrete, immovable, non-mixing materials (stored separately — they own
+// the whole cell, not a fraction of it).
+const SOLID_NONE = 0, SOLID_STONE = 1, SOLID_WOOD = 2;
+
+// Arbitrary density units; higher sinks through lower. Biomass floats on
+// water (like leaves/debris), smoke is buoyant (negative — rises through air).
+const COND_DENSITY = [5, 6, 0.7, 1]; // sand, clay, biomass, water
+const GAS_DENSITY = [0.12, 0.13, 0.18, -0.4]; // n2, o2, co2, smoke
+
+// Sand/clay/biomass colors, indexed by their channel constant (0..2).
+const EARTH_COLOR = [
+  [217, 177, 88], // sand
+  [150, 96, 64],  // clay
+  [95, 130, 60],  // biomass
+];
+// Water renders as vivid blue in open water, but as a dark, low-saturation
+// tint when it's soaked into solids — real wet dirt reads as darker dirt,
+// not blue-gray. Which one applies is a function of how much solid grit
+// shares the cell (see `waterTint` in render()), not of the water fraction.
+const WATER_OPEN_COLOR = [58, 160, 255];
+const WATER_MUD_TINT = [45, 50, 45];
+const SOLID_COLOR = { [SOLID_STONE]: [138, 143, 152], [SOLID_WOOD]: [138, 90, 52] };
+const BG_COLOR = [18, 20, 26];
+const SMOKE_COLOR = [130, 130, 130];
+const CO2_TINT = [150, 140, 110];
+const FIRE_GLOW = [255, 120, 40];
+
+// Default atmosphere: every cell starts full of this, not "nothing".
+const ATMOSPHERE = [0.78, 0.21, 0.01, 0]; // N2, O2, CO2, smoke
+
+const DIFFUSE_K = 0.14; // condensed<->condensed / gas<->gas mixing rate per tick
+const GAS_LEAK_K = 0.1; // gas mixing rate across a condensed/air boundary
+const VISCOSITY_SKIP = 0.5; // chance a "wet" (soil-like) cell skips a movement attempt
+const EPS = 0.02;
+
+const MAT_INFO = {
+  sand: { kind: "cond", ch: SAND },
+  clay: { kind: "cond", ch: CLAY },
+  biomass: { kind: "cond", ch: BIOMASS },
+  water: { kind: "cond", ch: WATER },
+  soil: { kind: "mix", mix: [0.35, 0.25, 0.15, 0.25] }, // pre-mixed preset, same substances
+  stone: { kind: "solid", id: SOLID_STONE },
+  wood: { kind: "solid", id: SOLID_WOOD },
+  fire: { kind: "fire" },
+  empty: { kind: "air" },
 };
 
 // ---- Canvas / grid setup ----------------------------------------------
@@ -39,12 +86,19 @@ const canvas = document.getElementById("sim");
 const ctx = canvas.getContext("2d", { alpha: false });
 const wrap = document.querySelector(".canvas-wrap");
 
-const CELL_PX = 5; // displayed size of one simulation cell, in CSS pixels
+const CELL_PX = 6; // displayed size of one simulation cell, in CSS pixels
 
 let cols = 0;
 let rows = 0;
-let grid, nextVariant, life, moved; // typed arrays, sized cols*rows
-let imageData, pixels; // for fast blit
+// Per-cell state, all typed arrays sized cols*rows (structure-of-arrays for speed).
+let comp; // [N_COND] Float32Array — condensed fractions
+let gas; // [N_GAS] Float32Array — gas fractions
+let solid; // Uint8Array — SOLID_NONE / SOLID_STONE / SOLID_WOOD
+let woodHp; // Uint8Array — remaining fuel for burning wood
+let burning; // Uint8Array — 0/1 flag, applies to wood or biomass-bearing cells
+let variant; // Uint8Array — stable per-cell render jitter
+let moved; // Uint8Array — scratch: already simulated this frame?
+let imageData, pixels;
 
 function idx(x, y) {
   return y * cols + x;
@@ -57,10 +111,23 @@ function inBounds(x, y) {
 function allocate(newCols, newRows) {
   cols = newCols;
   rows = newRows;
-  grid = new Uint8Array(cols * rows);
-  nextVariant = new Uint8Array(cols * rows); // per-cell color jitter, stable per particle
-  life = new Uint8Array(cols * rows); // used by fire/smoke as a countdown
-  moved = new Uint8Array(cols * rows); // scratch: has this cell already been simulated this frame?
+  const n = cols * rows;
+
+  comp = [new Float32Array(n), new Float32Array(n), new Float32Array(n), new Float32Array(n)];
+  gas = [new Float32Array(n), new Float32Array(n), new Float32Array(n), new Float32Array(n)];
+  solid = new Uint8Array(n);
+  woodHp = new Uint8Array(n);
+  burning = new Uint8Array(n);
+  variant = new Uint8Array(n);
+  moved = new Uint8Array(n);
+
+  for (let i = 0; i < n; i++) {
+    gas[N2][i] = ATMOSPHERE[N2];
+    gas[O2][i] = ATMOSPHERE[O2];
+    gas[CO2][i] = ATMOSPHERE[CO2];
+    gas[SMOKE][i] = ATMOSPHERE[SMOKE];
+    variant[i] = (Math.random() * 16) | 0;
+  }
 
   canvas.width = cols;
   canvas.height = rows;
@@ -78,50 +145,112 @@ function resize() {
   const newRows = Math.max(10, Math.floor(h / CELL_PX));
   if (newCols === cols && newRows === rows) return;
 
-  // Preserve existing particles when the canvas grows/shrinks, anchored
-  // to the bottom-left so the user doesn't lose their scene on a resize.
-  const old = grid;
+  // Preserve existing content when the canvas grows/shrinks, anchored to
+  // the bottom-left so the user doesn't lose their scene on a resize.
+  const old = { comp, gas, solid, woodHp, burning };
   const oldCols = cols;
   const oldRows = rows;
 
   allocate(newCols, newRows);
 
-  if (old) {
+  if (old.solid) {
     const yOffset = rows - oldRows;
     for (let y = 0; y < oldRows; y++) {
       const ny = y + yOffset;
       if (ny < 0 || ny >= rows) continue;
       for (let x = 0; x < oldCols && x < cols; x++) {
-        const v = old[y * oldCols + x];
-        if (v !== EMPTY) grid[idx(x, ny)] = v;
+        const oi = y * oldCols + x;
+        const ni = idx(x, ny);
+        for (let c = 0; c < N_COND; c++) comp[c][ni] = old.comp[c][oi];
+        for (let c = 0; c < N_GAS; c++) gas[c][ni] = old.gas[c][oi];
+        solid[ni] = old.solid[oi];
+        woodHp[ni] = old.woodHp[oi];
+        burning[ni] = old.burning[oi];
       }
     }
   }
 }
 
+// ---- Cell helpers -------------------------------------------------------
+
+function mt(i) {
+  return comp[SAND][i] + comp[CLAY][i] + comp[BIOMASS][i] + comp[WATER][i];
+}
+
+function density(i) {
+  return (
+    comp[SAND][i] * COND_DENSITY[SAND] +
+    comp[CLAY][i] * COND_DENSITY[CLAY] +
+    comp[BIOMASS][i] * COND_DENSITY[BIOMASS] +
+    comp[WATER][i] * COND_DENSITY[WATER] +
+    gas[N2][i] * GAS_DENSITY[N2] +
+    gas[O2][i] * GAS_DENSITY[O2] +
+    gas[CO2][i] * GAS_DENSITY[CO2] +
+    gas[SMOKE][i] * GAS_DENSITY[SMOKE]
+  );
+}
+
+function clearCell(i) {
+  comp[SAND][i] = 0; comp[CLAY][i] = 0; comp[BIOMASS][i] = 0; comp[WATER][i] = 0;
+  gas[N2][i] = ATMOSPHERE[N2]; gas[O2][i] = ATMOSPHERE[O2]; gas[CO2][i] = ATMOSPHERE[CO2]; gas[SMOKE][i] = ATMOSPHERE[SMOKE];
+  solid[i] = SOLID_NONE;
+  woodHp[i] = 0;
+  burning[i] = 0;
+}
+
 // ---- Drawing (input) --------------------------------------------------
 
-let currentMaterial = SAND;
+let currentMaterial = "sand";
 let brushSize = 5;
 let isPointerDown = false;
 let lastPointerCell = null;
 
-function setCell(x, y, mat) {
+function setCell(x, y, matName) {
   if (!inBounds(x, y)) return;
   const i = idx(x, y);
-  grid[i] = mat;
-  nextVariant[i] = (Math.random() * 16) | 0;
-  life[i] = mat === FIRE ? 18 + ((Math.random() * 10) | 0) : mat === SMOKE ? 40 + ((Math.random() * 30) | 0) : 0;
+  const info = MAT_INFO[matName];
+  variant[i] = (Math.random() * 16) | 0;
+
+  if (info.kind === "air") {
+    clearCell(i);
+    return;
+  }
+  if (info.kind === "solid") {
+    clearCell(i);
+    solid[i] = info.id;
+    if (info.id === SOLID_WOOD) woodHp[i] = 60;
+    return;
+  }
+  if (info.kind === "fire") {
+    if (solid[i] === SOLID_WOOD || comp[BIOMASS][i] > 0.02) burning[i] = 1;
+    return;
+  }
+  // "cond" (pure substance) or "mix" (preset blend)
+  solid[i] = SOLID_NONE;
+  woodHp[i] = 0;
+  burning[i] = 0;
+  if (info.kind === "cond") {
+    comp[SAND][i] = info.ch === SAND ? 1 : 0;
+    comp[CLAY][i] = info.ch === CLAY ? 1 : 0;
+    comp[BIOMASS][i] = info.ch === BIOMASS ? 1 : 0;
+    comp[WATER][i] = info.ch === WATER ? 1 : 0;
+  } else {
+    comp[SAND][i] = info.mix[SAND];
+    comp[CLAY][i] = info.mix[CLAY];
+    comp[BIOMASS][i] = info.mix[BIOMASS];
+    comp[WATER][i] = info.mix[WATER];
+  }
+  gas[N2][i] = 0; gas[O2][i] = 0; gas[CO2][i] = 0; gas[SMOKE][i] = 0;
 }
 
 function stampBrush(cx, cy) {
   const r = brushSize;
   const r2 = r * r;
+  const sparse = currentMaterial === "sand" || currentMaterial === "clay" || currentMaterial === "water";
   for (let dy = -r; dy <= r; dy++) {
     for (let dx = -r; dx <= r; dx++) {
       if (dx * dx + dy * dy > r2) continue;
-      // sparse fill for gases/solids to avoid one click filling a solid disc too densely
-      if ((currentMaterial === SAND || currentMaterial === WATER) && Math.random() < 0.25 && (dx || dy)) continue;
+      if (sparse && Math.random() < 0.25 && (dx || dy)) continue;
       setCell(cx + dx, cy + dy, currentMaterial);
     }
   }
@@ -175,196 +304,277 @@ window.addEventListener("mouseup", handlePointerUp);
 
 canvas.addEventListener(
   "touchstart",
-  (e) => {
-    if (e.touches[0]) handlePointerDown(e.touches[0]);
-  },
+  (e) => { if (e.touches[0]) handlePointerDown(e.touches[0]); },
   { passive: false }
 );
 canvas.addEventListener(
   "touchmove",
-  (e) => {
-    if (e.touches[0]) handlePointerMove(e.touches[0]);
-  },
+  (e) => { if (e.touches[0]) handlePointerMove(e.touches[0]); },
   { passive: false }
 );
 window.addEventListener("touchend", handlePointerUp);
 
-// ---- Simulation step ---------------------------------------------------
+// ---- Simulation step: movement -----------------------------------------
 
-function swap(i, j) {
-  const gi = grid[i], vi = nextVariant[i], li = life[i];
-  grid[i] = grid[j]; nextVariant[i] = nextVariant[j]; life[i] = life[j];
-  grid[j] = gi; nextVariant[j] = vi; life[j] = li;
+function swapCells(i, j) {
+  for (let c = 0; c < N_COND; c++) { const t = comp[c][i]; comp[c][i] = comp[c][j]; comp[c][j] = t; }
+  for (let c = 0; c < N_GAS; c++) { const t = gas[c][i]; gas[c][i] = gas[c][j]; gas[c][j] = t; }
+  const b = burning[i]; burning[i] = burning[j]; burning[j] = b;
   moved[i] = 1;
   moved[j] = 1;
 }
 
-function tryMove(x, y, dx, dy) {
+function tryMove(x, y, dx, dy, dens) {
   const nx = x + dx, ny = y + dy;
   if (!inBounds(nx, ny)) return false;
   const i = idx(x, y);
   const j = idx(nx, ny);
-  if (moved[j]) return false;
-  const here = grid[i];
-  const there = grid[j];
-  if (there === EMPTY) {
-    swap(i, j);
-    return true;
-  }
-  // Denser particles sink through less dense fluids (sand through water).
-  if (DENSITY[here] > 0 && DENSITY[there] >= 0 && DENSITY[here] > DENSITY[there]) {
-    swap(i, j);
+  if (moved[j] || solid[j] !== SOLID_NONE) return false;
+  if (dens > density(j) + EPS) {
+    swapCells(i, j);
     return true;
   }
   return false;
 }
 
-function simulateSand(x, y) {
-  if (tryMove(x, y, 0, 1)) return;
-  const dir = Math.random() < 0.5 ? 1 : -1;
-  if (tryMove(x, y, dir, 1)) return;
-  tryMove(x, y, -dir, 1);
-}
+let frameParity = 0;
 
-function simulateWater(x, y) {
-  if (tryMove(x, y, 0, 1)) return;
-  const dir = Math.random() < 0.5 ? 1 : -1;
-  if (tryMove(x, y, dir, 1)) return;
-  if (tryMove(x, y, -dir, 1)) return;
-  if (tryMove(x, y, dir, 0)) return;
-  tryMove(x, y, -dir, 0);
-}
-
-const FIRE_NEIGHBORS = [
-  [1, 0], [-1, 0], [0, 1], [0, -1],
-  [1, 1], [-1, 1], [1, -1], [-1, -1],
-];
-
-function simulateFire(x, y) {
+function stepCell(x, y, dirs) {
   const i = idx(x, y);
-  life[i]--;
+  if (moved[i] || solid[i] !== SOLID_NONE) return;
 
-  // Ignite adjacent wood, and get doused by adjacent water.
-  let dousedByWater = false;
-  for (const [dx, dy] of FIRE_NEIGHBORS) {
-    const nx = x + dx, ny = y + dy;
-    if (!inBounds(nx, ny)) continue;
-    const j = idx(nx, ny);
-    const mat = grid[j];
-    if (mat === WOOD && Math.random() < 0.045) {
-      grid[j] = FIRE;
-      life[j] = 25 + ((Math.random() * 15) | 0);
-      nextVariant[j] = (Math.random() * 16) | 0;
-    } else if (mat === WATER) {
-      dousedByWater = true;
+  const m = mt(i);
+  const waterFrac = m > 0.01 ? comp[WATER][i] / m : 0;
+  const isLiquid = m > 0.05 && waterFrac > 0.55;
+  const isWet = m > 0.05 && waterFrac > 0.12 && waterFrac <= 0.55;
+  if (isWet && Math.random() < VISCOSITY_SKIP) return;
+
+  const dens = density(i);
+
+  if (tryMove(x, y, 0, 1, dens)) return;
+  for (const dx of dirs) if (tryMove(x, y, dx, 1, dens)) return;
+  if (isLiquid) for (const dx of dirs) if (tryMove(x, y, dx, 0, dens)) return;
+
+  // Buoyancy: rise past whatever's directly above if this cell is lighter
+  // (this is how smoke climbs through air and gas bubbles rise through water).
+  if (y > 0) {
+    const up = idx(x, y - 1);
+    if (solid[up] === SOLID_NONE && !moved[up] && dens < density(up) - EPS) {
+      if (tryMove(x, y, 0, -1, dens)) return;
+      for (const dx of dirs) if (tryMove(x, y, dx, -1, dens)) return;
     }
   }
-
-  if (dousedByWater || life[i] <= 0) {
-    grid[i] = Math.random() < 0.6 ? SMOKE : EMPTY;
-    life[i] = 40 + ((Math.random() * 30) | 0);
-    moved[i] = 1;
-    return;
-  }
-
-  // Fire drifts upward with some flicker, and can move into empty/smoke.
-  const dir = Math.random() < 0.5 ? 1 : -1;
-  const choices = [[0, -1], [dir, -1], [0, 0], [dir, 0]];
-  for (const [dx, dy] of choices) {
-    if (dx === 0 && dy === 0) break; // stay put (flicker in place)
-    const nx = x + dx, ny = y + dy;
-    if (!inBounds(nx, ny)) continue;
-    const j = idx(nx, ny);
-    if (moved[j]) continue;
-    if (grid[j] === EMPTY || grid[j] === SMOKE) {
-      swap(i, j);
-      return;
-    }
-  }
-  moved[i] = 1;
 }
 
-function simulateSmoke(x, y) {
-  const i = idx(x, y);
-  life[i]--;
-  if (life[i] <= 0) {
-    grid[i] = EMPTY;
-    life[i] = 0;
-    moved[i] = 1;
-    return;
-  }
-  const dir = Math.random() < 0.5 ? 1 : -1;
-  if (tryMove(x, y, 0, -1)) return;
-  if (tryMove(x, y, dir, -1)) return;
-  if (tryMove(x, y, -dir, -1)) return;
-  moved[i] = 1;
-}
-
-function step() {
-  moved.fill(0);
+function stepMovement() {
+  const dirsA = [1, -1], dirsB = [-1, 1];
   for (let y = rows - 1; y >= 0; y--) {
     const leftToRight = (y + frameParity) % 2 === 0;
+    const dirs = leftToRight ? dirsA : dirsB;
     if (leftToRight) {
-      for (let x = 0; x < cols; x++) simulateCell(x, y);
+      for (let x = 0; x < cols; x++) stepCell(x, y, dirs);
     } else {
-      for (let x = cols - 1; x >= 0; x--) simulateCell(x, y);
+      for (let x = cols - 1; x >= 0; x--) stepCell(x, y, dirs);
     }
   }
   frameParity ^= 1;
 }
 
-function simulateCell(x, y) {
-  const i = idx(x, y);
-  if (moved[i]) return;
-  const mat = grid[i];
-  switch (mat) {
-    case SAND:
-      simulateSand(x, y);
-      break;
-    case WATER:
-      simulateWater(x, y);
-      break;
-    case FIRE:
-      simulateFire(x, y);
-      break;
-    case SMOKE:
-      simulateSmoke(x, y);
-      break;
-    default:
-      break; // empty, stone, wood: static
+// ---- Simulation step: diffusion (this is what blends materials into soil) --
+
+function diffusePair(i, j) {
+  if (solid[i] !== SOLID_NONE || solid[j] !== SOLID_NONE) return;
+  const mi = mt(i), mj = mt(j);
+  if (mi > 0.05 && mj > 0.05) {
+    // Both are "ground"/liquid cells: mix everything (condensed + gas) at a
+    // single uniform rate. Because both cells already sum to 1, this exactly
+    // conserves each cell's total — no renormalization needed.
+    for (let c = 0; c < N_COND; c++) {
+      const d = (comp[c][j] - comp[c][i]) * DIFFUSE_K;
+      comp[c][i] += d; comp[c][j] -= d;
+    }
+    for (let c = 0; c < N_GAS; c++) {
+      const d = (gas[c][j] - gas[c][i]) * DIFFUSE_K;
+      gas[c][i] += d; gas[c][j] -= d;
+    }
+  } else {
+    // At least one side is air-dominant. Only the *composition* of each
+    // side's gas headspace mixes (what ratio of N2/O2/CO2/smoke it holds) —
+    // never the absolute amount. A cell's matter/air split is decided by
+    // movement and combustion, never by this pass, so each side's total gas
+    // volume (its headspace, 1 - matter) is fixed going in and holds exactly
+    // going out: condensed matter can't "evaporate" into a neighbor just
+    // because it happens to sit next to open air.
+    const gi = gas[N2][i] + gas[O2][i] + gas[CO2][i] + gas[SMOKE][i];
+    const gj = gas[N2][j] + gas[O2][j] + gas[CO2][j] + gas[SMOKE][j];
+    if (gi < 1e-6 || gj < 1e-6) return; // no headspace on one side — nothing to mix
+    for (let c = 0; c < N_GAS; c++) {
+      const ni = gas[c][i] / gi, nj = gas[c][j] / gj;
+      const d = (nj - ni) * GAS_LEAK_K;
+      gas[c][i] = (ni + d) * gi;
+      gas[c][j] = (nj - d) * gj;
+    }
   }
 }
 
-let frameParity = 0;
+function stepDiffusion() {
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const i = idx(x, y);
+      if (x + 1 < cols) diffusePair(i, i + 1);
+      if (y + 1 < rows) diffusePair(i, i + cols);
+    }
+  }
+}
+
+// ---- Simulation step: combustion ----------------------------------------
+
+const NEIGHBORS8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]];
+const BURN_RATE = 0.05;
+const IGNITE_CHANCE = 0.028;
+
+function stepCombustion() {
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const i = idx(x, y);
+      if (!burning[i]) continue;
+
+      if (solid[i] === SOLID_WOOD) {
+        if (woodHp[i] > 0 && Math.random() < 0.5) woodHp[i]--;
+        if (Math.random() < 0.5) {
+          // Puff smoke + CO2 into a random neighbor, converting some of its
+          // own N2/O2 — never adding mass, just changing what's in the air.
+          // Capping `take` by what's actually there to convert keeps this
+          // exact even against a packed neighbor with little or no headspace.
+          const [dx, dy] = NEIGHBORS8[(Math.random() * NEIGHBORS8.length) | 0];
+          const nx = x + dx, ny = y + dy;
+          if (inBounds(nx, ny)) {
+            const j = idx(nx, ny);
+            if (solid[j] === SOLID_NONE) {
+              const take = Math.min(0.05, gas[N2][j], gas[O2][j]);
+              if (take > 0.0005) {
+                gas[N2][j] -= take * 0.5;
+                gas[O2][j] -= take * 0.5;
+                gas[SMOKE][j] += take * 0.6;
+                gas[CO2][j] += take * 0.4;
+              }
+            }
+          }
+        }
+        if (woodHp[i] <= 0) {
+          clearCell(i);
+          gas[SMOKE][i] = 0.7; gas[CO2][i] = 0.2; gas[N2][i] = 0.1; gas[O2][i] = 0;
+          continue;
+        }
+      } else {
+        const burn = Math.min(comp[BIOMASS][i], BURN_RATE);
+        comp[BIOMASS][i] -= burn;
+        gas[CO2][i] += burn * 0.6;
+        gas[SMOKE][i] += burn * 0.4;
+        if (comp[WATER][i] > 0.2 || comp[BIOMASS][i] <= 0.005) {
+          burning[i] = 0;
+          continue;
+        }
+      }
+
+      // Spread to flammable neighbors.
+      for (const [dx, dy] of NEIGHBORS8) {
+        const nx = x + dx, ny = y + dy;
+        if (!inBounds(nx, ny)) continue;
+        const j = idx(nx, ny);
+        if (burning[j]) continue;
+        const flammable = solid[j] === SOLID_WOOD || comp[BIOMASS][j] > 0.05;
+        if (!flammable) continue;
+        const wet = solid[j] === SOLID_NONE && mt(j) > 0.05 && comp[WATER][j] / mt(j) > 0.25;
+        if (wet) continue;
+        if (Math.random() < IGNITE_CHANCE) burning[j] = 1;
+      }
+    }
+  }
+}
+
+function step() {
+  moved.fill(0);
+  stepMovement();
+  stepDiffusion();
+  stepCombustion();
+}
 
 // ---- Render --------------------------------------------------------------
 
+function clamp8(v) {
+  return v < 0 ? 0 : v > 255 ? 255 : v;
+}
+
 function render() {
   let count = 0;
-  for (let i = 0; i < grid.length; i++) {
-    const mat = grid[i];
-    const base = BASE_COLOR[mat];
+  const n = cols * rows;
+  for (let i = 0; i < n; i++) {
     const o = i * 4;
-    if (mat === EMPTY) {
-      pixels[o] = base[0];
-      pixels[o + 1] = base[1];
-      pixels[o + 2] = base[2];
-      pixels[o + 3] = 255;
+    const jitter = (variant[i] - 8) * 1.5;
+
+    if (solid[i] === SOLID_STONE) {
+      const c = SOLID_COLOR[SOLID_STONE];
+      pixels[o] = clamp8(c[0] + jitter); pixels[o + 1] = clamp8(c[1] + jitter); pixels[o + 2] = clamp8(c[2] + jitter); pixels[o + 3] = 255;
+      count++;
       continue;
     }
+    if (solid[i] === SOLID_WOOD) {
+      const c = SOLID_COLOR[SOLID_WOOD];
+      const glow = burning[i] ? 0.5 + 0.5 * Math.sin(i * 0.7 + performance.now() * 0.02) : 0;
+      const r = c[0] * (1 - glow) + FIRE_GLOW[0] * glow;
+      const g = c[1] * (1 - glow) + FIRE_GLOW[1] * glow;
+      const b = c[2] * (1 - glow) + FIRE_GLOW[2] * glow;
+      pixels[o] = clamp8(r + jitter); pixels[o + 1] = clamp8(g + jitter); pixels[o + 2] = clamp8(b + jitter); pixels[o + 3] = 255;
+      count++;
+      continue;
+    }
+
+    const m = mt(i);
+    if (m < 0.04) {
+      const smoke = Math.min(1, gas[SMOKE][i] * 3);
+      const co2 = Math.min(1, gas[CO2][i] * 2);
+      let r = BG_COLOR[0] + (SMOKE_COLOR[0] - BG_COLOR[0]) * smoke + (CO2_TINT[0] - BG_COLOR[0]) * co2 * (1 - smoke);
+      let g = BG_COLOR[1] + (SMOKE_COLOR[1] - BG_COLOR[1]) * smoke + (CO2_TINT[1] - BG_COLOR[1]) * co2 * (1 - smoke);
+      let b = BG_COLOR[2] + (SMOKE_COLOR[2] - BG_COLOR[2]) * smoke + (CO2_TINT[2] - BG_COLOR[2]) * co2 * (1 - smoke);
+      pixels[o] = clamp8(r); pixels[o + 1] = clamp8(g); pixels[o + 2] = clamp8(b); pixels[o + 3] = 255;
+      continue;
+    }
+
     count++;
-    const jitter = (nextVariant[i] - 8) * 2; // -16..16
-    pixels[o] = clamp8(base[0] + jitter);
-    pixels[o + 1] = clamp8(base[1] + jitter);
-    pixels[o + 2] = clamp8(base[2] + jitter);
+    // How much solid grit shares this cell decides whether water reads as
+    // open water (blue) or as dampness soaked into the grit (dark, muted) —
+    // that's what keeps a sand+clay+biomass+water mix looking like soil
+    // instead of blue-gray sludge.
+    const solidsTotal = comp[SAND][i] + comp[CLAY][i] + comp[BIOMASS][i];
+    const openness = Math.max(0, Math.min(1, 1 - solidsTotal * 3));
+    const wr = WATER_MUD_TINT[0] + (WATER_OPEN_COLOR[0] - WATER_MUD_TINT[0]) * openness;
+    const wg = WATER_MUD_TINT[1] + (WATER_OPEN_COLOR[1] - WATER_MUD_TINT[1]) * openness;
+    const wb = WATER_MUD_TINT[2] + (WATER_OPEN_COLOR[2] - WATER_MUD_TINT[2]) * openness;
+
+    let r = (comp[SAND][i] * EARTH_COLOR[SAND][0] + comp[CLAY][i] * EARTH_COLOR[CLAY][0] + comp[BIOMASS][i] * EARTH_COLOR[BIOMASS][0] + comp[WATER][i] * wr) / m;
+    let g = (comp[SAND][i] * EARTH_COLOR[SAND][1] + comp[CLAY][i] * EARTH_COLOR[CLAY][1] + comp[BIOMASS][i] * EARTH_COLOR[BIOMASS][1] + comp[WATER][i] * wg) / m;
+    let b = (comp[SAND][i] * EARTH_COLOR[SAND][2] + comp[CLAY][i] * EARTH_COLOR[CLAY][2] + comp[BIOMASS][i] * EARTH_COLOR[BIOMASS][2] + comp[WATER][i] * wb) / m;
+
+    // Fade toward background as the cell becomes more air (thin mixtures).
+    r = BG_COLOR[0] + (r - BG_COLOR[0]) * m;
+    g = BG_COLOR[1] + (g - BG_COLOR[1]) * m;
+    b = BG_COLOR[2] + (b - BG_COLOR[2]) * m;
+
+    if (burning[i]) {
+      const glow = 0.4 + 0.3 * Math.sin(i * 0.9 + performance.now() * 0.03);
+      r = r * (1 - glow) + FIRE_GLOW[0] * glow;
+      g = g * (1 - glow) + FIRE_GLOW[1] * glow;
+      b = b * (1 - glow) + FIRE_GLOW[2] * glow;
+    }
+
+    pixels[o] = clamp8(r + jitter);
+    pixels[o + 1] = clamp8(g + jitter);
+    pixels[o + 2] = clamp8(b + jitter);
     pixels[o + 3] = 255;
   }
   ctx.putImageData(imageData, 0, 0);
   document.getElementById("count").textContent = count;
-}
-
-function clamp8(v) {
-  return v < 0 ? 0 : v > 255 ? 255 : v;
 }
 
 // ---- Main loop -------------------------------------------------------
@@ -400,20 +610,14 @@ function loop(now) {
 
 function setActiveMaterialButton() {
   document.querySelectorAll(".mat-btn").forEach((btn) => {
-    btn.classList.toggle("active", btn.dataset.mat === materialName(currentMaterial));
+    btn.classList.toggle("active", btn.dataset.mat === currentMaterial);
   });
 }
-
-function materialName(mat) {
-  return { [SAND]: "sand", [WATER]: "water", [STONE]: "stone", [WOOD]: "wood", [FIRE]: "fire", [EMPTY]: "empty" }[mat];
-}
-
-const MATERIAL_BY_NAME = { sand: SAND, water: WATER, stone: STONE, wood: WOOD, fire: FIRE, empty: EMPTY };
 
 document.getElementById("materials").addEventListener("click", (e) => {
   const btn = e.target.closest(".mat-btn");
   if (!btn) return;
-  currentMaterial = MATERIAL_BY_NAME[btn.dataset.mat];
+  currentMaterial = btn.dataset.mat;
   setActiveMaterialButton();
 });
 
@@ -432,8 +636,7 @@ pauseBtn.addEventListener("click", () => {
 });
 
 document.getElementById("clearBtn").addEventListener("click", () => {
-  grid.fill(EMPTY);
-  life.fill(0);
+  for (let i = 0; i < cols * rows; i++) clearCell(i);
 });
 
 window.addEventListener("keydown", (e) => {
