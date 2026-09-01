@@ -61,7 +61,7 @@ const WATER_OPEN_COLOR = [58, 160, 255];
 const WATER_MUD_TINT = [45, 50, 45];
 const SOLID_COLOR = { [SOLID_STONE]: [138, 143, 152], [SOLID_WOOD]: [138, 90, 52] };
 const GLASS_COLOR = [178, 206, 214]; // pale blue-grey; blended lightly over the background
-const GLASS_ALPHA = 0.2;
+const GLASS_ALPHA = 0.28;
 const BG_COLOR = [18, 20, 26];
 const SMOKE_COLOR = [130, 130, 130];
 const VAPOR_FOG = [120, 140, 165]; // cool pale haze for humid air
@@ -84,10 +84,10 @@ const EPS = 0.02;
 // glass it condenses back to liquid in the cell beside the pane, which then
 // runs down the glass and pools using the ordinary gravity code. Evaporation
 // tracks the light/heat of the day; condensation is stronger at night.
-const EVAP_BASE = 0.0001;   // per tick, at full daylight, for fully-exposed water
+const EVAP_BASE = 0.00022;   // per tick, at full daylight, for fully-exposed water
 const EVAP_NIGHT = 0.25;    // fraction of that rate still running at midnight
 const EVAP_SAT = 0.09;      // local vapour fraction at which the air is "full" and evaporation stops
-const CONDENSE_BASE = 0.06; // per tick fraction of a cell's vapour that condenses on glass
+const CONDENSE_BASE = 0.09; // per tick fraction of a cell's vapour that condenses on glass
 const CONDENSE_NIGHT_BONUS = 2.5; // condensation multiplier swing from noon->midnight
 const VAPOR_SUPERSAT = 0.02; // vapour fraction above which it also condenses as mid-air mist
 const VAPOR_MIST_K = 0.9;  // how fast that excess mist forms
@@ -771,7 +771,7 @@ function render() {
         if (!inBounds(nx, ny)) continue;
         const j = idx(nx, ny);
         if (solid[j] !== SOLID_NONE) continue;
-        mist += gas[VAPOR][j] * 4 + (comp[WATER][j] < 0.3 ? comp[WATER][j] : 0.3) * 2;
+        mist += gas[VAPOR][j] * 11 + (comp[WATER][j] < 0.3 ? comp[WATER][j] : 0.3) * 2.5;
       }
       if (mist > 0.85) mist = 0.85;
       r += (GLASS_FOG[0] - r) * mist;
@@ -800,7 +800,7 @@ function render() {
       let g = BG_COLOR[1] + (SMOKE_COLOR[1] - BG_COLOR[1]) * smoke + (CO2_TINT[1] - BG_COLOR[1]) * co2 * (1 - smoke);
       let b = BG_COLOR[2] + (SMOKE_COLOR[2] - BG_COLOR[2]) * smoke + (CO2_TINT[2] - BG_COLOR[2]) * co2 * (1 - smoke);
       // Humid air reads as a faint cool haze lifting the background.
-      const fog = Math.min(0.5, gas[VAPOR][i] * 6) * (1 - smoke);
+      const fog = Math.min(0.55, gas[VAPOR][i] * 12) * (1 - smoke);
       r += (VAPOR_FOG[0] - r) * fog;
       g += (VAPOR_FOG[1] - g) * fog;
       b += (VAPOR_FOG[2] - b) * fog;
