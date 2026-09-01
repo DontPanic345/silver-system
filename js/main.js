@@ -65,6 +65,7 @@ const GLASS_ALPHA = 0.2;
 const BG_COLOR = [18, 20, 26];
 const SMOKE_COLOR = [130, 130, 130];
 const VAPOR_FOG = [120, 140, 165]; // cool pale haze for humid air
+const GLASS_FOG = [206, 222, 230]; // pale bloom on the pane where vapour/dew gathers
 const CO2_TINT = [150, 140, 110];
 const FIRE_GLOW = [255, 120, 40];
 
@@ -758,9 +759,24 @@ function render() {
     }
     if (solid[i] === SOLID_GLASS) {
       const a = GLASS_ALPHA;
-      const r = BG_COLOR[0] * (1 - a) + GLASS_COLOR[0] * a;
-      const g = BG_COLOR[1] * (1 - a) + GLASS_COLOR[1] * a;
-      const b = BG_COLOR[2] * (1 - a) + GLASS_COLOR[2] * a;
+      let r = BG_COLOR[0] * (1 - a) + GLASS_COLOR[0] * a;
+      let g = BG_COLOR[1] * (1 - a) + GLASS_COLOR[1] * a;
+      let b = BG_COLOR[2] * (1 - a) + GLASS_COLOR[2] * a;
+      // Fogging: bloom the pane where adjacent air is humid or dew has
+      // condensed on it — the visible half of the water cycle.
+      const gx = i % cols, gy = (i - gx) / cols;
+      let mist = 0;
+      for (let k = 0; k < 4; k++) {
+        const nx = gx + NEIGHBORS4[k][0], ny = gy + NEIGHBORS4[k][1];
+        if (!inBounds(nx, ny)) continue;
+        const j = idx(nx, ny);
+        if (solid[j] !== SOLID_NONE) continue;
+        mist += gas[VAPOR][j] * 4 + (comp[WATER][j] < 0.3 ? comp[WATER][j] : 0.3) * 2;
+      }
+      if (mist > 0.85) mist = 0.85;
+      r += (GLASS_FOG[0] - r) * mist;
+      g += (GLASS_FOG[1] - g) * mist;
+      b += (GLASS_FOG[2] - b) * mist;
       pixels[o] = clamp8((r + jitter * 0.3) * ambient); pixels[o + 1] = clamp8((g + jitter * 0.3) * ambient); pixels[o + 2] = clamp8((b + jitter * 0.3) * ambient); pixels[o + 3] = 255;
       count++;
       continue;
