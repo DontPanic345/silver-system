@@ -6,6 +6,23 @@ condensation → rain), and plants that germinate, grow, photosynthesize, and
 decay. The goal is a small system that can run itself indefinitely once
 sealed — not just a prettier sandbox.
 
+## Status
+
+- **Phase 0 — Jar & light cycle: done.** `GLASS` material, `Build Jar` /
+  `Seal Lid` controls, global day/night clock driving `lightLevel`, ambient
+  scene dimming at night.
+- **Phase 1 — Closed water cycle: done.** `VAPOR` gas channel; light-scaled
+  evaporation with a saturation cutoff; buoyant vapour; condensation on the
+  glass and as mid-air mist; dew runs down and re-pools on the existing
+  gravity code. `Σ water + Σ vapour` is conserved by construction and checked
+  in `test/sim-invariants.js`. Humidity readout in the header.
+- **Next: Phase 2 — plants.**
+
+Also fixed along the way: water now finds its level (long-range surface flow
+toward a fall point) instead of freezing into a heap, and the movement pass
+no longer strobes left/right every frame (stable per-cell direction
+preference; the per-frame flip is kept only for scan order).
+
 ## Conceptual shift from where the sim is now
 
 The current engine is *reactive*: cells fall, mix, and burn only in response
@@ -19,7 +36,7 @@ on flammable matter" pattern are exactly the right shape to extend.
 
 ## Phased plan
 
-### Phase 0 — Jar & light cycle (small, do first)
+### Phase 0 — Jar & light cycle (small, do first) ✅ done
 Everything else needs a light source and a hard boundary.
 
 - A `GLASS` material: solid like stone (blocks movement) but tracked
@@ -30,7 +47,7 @@ Everything else needs a light source and a hard boundary.
   *direction*, for phototropism) that everything downstream reads.
 - Payoff even alone: ambient dimming at "night," a visibly enclosed scene.
 
-### Phase 1 — Closed water cycle (medium — the first real "wow")
+### Phase 1 — Closed water cycle (medium — the first real "wow") ✅ done
 
 - Add a 5th gas channel, `WATER_VAPOR`, alongside N2/O2/CO2/smoke.
 - **Evaporation**: exposed liquid water converts a bit into vapor each tick,

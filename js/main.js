@@ -30,8 +30,8 @@ const SAND = 0, CLAY = 1, BIOMASS = 2, WATER = 3;
 const N_COND = 4;
 
 // Gas channels.
-const N2 = 0, O2 = 1, CO2 = 2, SMOKE = 3;
-const N_GAS = 4;
+const N2 = 0, O2 = 1, CO2 = 2, SMOKE = 3, VAPOR = 4;
+const N_GAS = 5;
 
 // Discrete, immovable, non-mixing materials (stored separately — they own
 // the whole cell, not a fraction of it). GLASS behaves exactly like stone
@@ -43,7 +43,9 @@ const SOLID_NONE = 0, SOLID_STONE = 1, SOLID_WOOD = 2, SOLID_GLASS = 3;
 // Arbitrary density units; higher sinks through lower. Biomass floats on
 // water (like leaves/debris), smoke is buoyant (negative — rises through air).
 const COND_DENSITY = [5, 6, 0.7, 1]; // sand, clay, biomass, water
-const GAS_DENSITY = [0.12, 0.13, 0.18, -0.4]; // n2, o2, co2, smoke
+// Water vapour is buoyant like smoke (warm, humid air rises) but a touch
+// less so — it's what carries evaporated water up to the cool glass.
+const GAS_DENSITY = [0.12, 0.13, 0.18, -0.4, -0.3]; // n2, o2, co2, smoke, vapor
 
 // Sand/clay/biomass colors, indexed by their channel constant (0..2).
 const EARTH_COLOR = [
@@ -62,16 +64,32 @@ const GLASS_COLOR = [178, 206, 214]; // pale blue-grey; blended lightly over the
 const GLASS_ALPHA = 0.2;
 const BG_COLOR = [18, 20, 26];
 const SMOKE_COLOR = [130, 130, 130];
+const VAPOR_FOG = [120, 140, 165]; // cool pale haze for humid air
 const CO2_TINT = [150, 140, 110];
 const FIRE_GLOW = [255, 120, 40];
 
 // Default atmosphere: every cell starts full of this, not "nothing".
-const ATMOSPHERE = [0.78, 0.21, 0.01, 0]; // N2, O2, CO2, smoke
+const ATMOSPHERE = [0.78, 0.21, 0.01, 0, 0]; // N2, O2, CO2, smoke, vapor
 
 const DIFFUSE_K = 0.14; // condensed<->condensed / gas<->gas mixing rate per tick
 const GAS_LEAK_K = 0.1; // gas mixing rate across a condensed/air boundary
 const VISCOSITY_SKIP = 0.5; // chance a "wet" (soil-like) cell skips a movement attempt
 const EPS = 0.02;
+
+// ---- Closed water cycle (Phase 1) -----------------------------------
+// Liquid water with open headspace above it turns into VAPOR gas in the same
+// cell (mass just moves cond -> gas, so the cell still sums to 1); the vapour
+// rises on its own via the buoyancy rule. Where vapour touches the cool inner
+// glass it condenses back to liquid in the cell beside the pane, which then
+// runs down the glass and pools using the ordinary gravity code. Evaporation
+// tracks the light/heat of the day; condensation is stronger at night.
+const EVAP_BASE = 0.0001;   // per tick, at full daylight, for fully-exposed water
+const EVAP_NIGHT = 0.25;    // fraction of that rate still running at midnight
+const EVAP_SAT = 0.09;      // local vapour fraction at which the air is "full" and evaporation stops
+const CONDENSE_BASE = 0.06; // per tick fraction of a cell's vapour that condenses on glass
+const CONDENSE_NIGHT_BONUS = 2.5; // condensation multiplier swing from noon->midnight
+const VAPOR_SUPERSAT = 0.02; // vapour fraction above which it also condenses as mid-air mist
+const VAPOR_MIST_K = 0.9;  // how fast that excess mist forms
 
 // ---- Day/night clock -------------------------------------------------
 // A single global clock advances one unit per simulation tick and wraps
@@ -134,8 +152,8 @@ function allocate(newCols, newRows) {
   rows = newRows;
   const n = cols * rows;
 
-  comp = [new Float32Array(n), new Float32Array(n), new Float32Array(n), new Float32Array(n)];
-  gas = [new Float32Array(n), new Float32Array(n), new Float32Array(n), new Float32Array(n)];
+  comp = Array.from({ length: N_COND }, () => new Float32Array(n));
+  gas = Array.from({ length: N_GAS }, () => new Float32Array(n));
   solid = new Uint8Array(n);
   woodHp = new Uint8Array(n);
   burning = new Uint8Array(n);
@@ -143,10 +161,7 @@ function allocate(newCols, newRows) {
   moved = new Uint8Array(n);
 
   for (let i = 0; i < n; i++) {
-    gas[N2][i] = ATMOSPHERE[N2];
-    gas[O2][i] = ATMOSPHERE[O2];
-    gas[CO2][i] = ATMOSPHERE[CO2];
-    gas[SMOKE][i] = ATMOSPHERE[SMOKE];
+    for (let c = 0; c < N_GAS; c++) gas[c][i] = ATMOSPHERE[c];
     variant[i] = (Math.random() * 16) | 0;
   }
 
@@ -198,6 +213,10 @@ function mt(i) {
   return comp[SAND][i] + comp[CLAY][i] + comp[BIOMASS][i] + comp[WATER][i];
 }
 
+function gasTotal(i) {
+  return gas[N2][i] + gas[O2][i] + gas[CO2][i] + gas[SMOKE][i] + gas[VAPOR][i];
+}
+
 function density(i) {
   return (
     comp[SAND][i] * COND_DENSITY[SAND] +
@@ -207,13 +226,14 @@ function density(i) {
     gas[N2][i] * GAS_DENSITY[N2] +
     gas[O2][i] * GAS_DENSITY[O2] +
     gas[CO2][i] * GAS_DENSITY[CO2] +
-    gas[SMOKE][i] * GAS_DENSITY[SMOKE]
+    gas[SMOKE][i] * GAS_DENSITY[SMOKE] +
+    gas[VAPOR][i] * GAS_DENSITY[VAPOR]
   );
 }
 
 function clearCell(i) {
   comp[SAND][i] = 0; comp[CLAY][i] = 0; comp[BIOMASS][i] = 0; comp[WATER][i] = 0;
-  gas[N2][i] = ATMOSPHERE[N2]; gas[O2][i] = ATMOSPHERE[O2]; gas[CO2][i] = ATMOSPHERE[CO2]; gas[SMOKE][i] = ATMOSPHERE[SMOKE];
+  for (let c = 0; c < N_GAS; c++) gas[c][i] = ATMOSPHERE[c];
   solid[i] = SOLID_NONE;
   woodHp[i] = 0;
   burning[i] = 0;
@@ -261,7 +281,7 @@ function setCell(x, y, matName) {
     comp[BIOMASS][i] = info.mix[BIOMASS];
     comp[WATER][i] = info.mix[WATER];
   }
-  gas[N2][i] = 0; gas[O2][i] = 0; gas[CO2][i] = 0; gas[SMOKE][i] = 0;
+  for (let c = 0; c < N_GAS; c++) gas[c][i] = 0;
 }
 
 function stampBrush(cx, cy) {
@@ -531,21 +551,22 @@ function diffusePair(i, j) {
       gas[c][i] += d; gas[c][j] -= d;
     }
   } else {
-    // At least one side is air-dominant. Only the *composition* of each
-    // side's gas headspace mixes (what ratio of N2/O2/CO2/smoke it holds) —
-    // never the absolute amount. A cell's matter/air split is decided by
-    // movement and combustion, never by this pass, so each side's total gas
-    // volume (its headspace, 1 - matter) is fixed going in and holds exactly
-    // going out: condensed matter can't "evaporate" into a neighbor just
-    // because it happens to sit next to open air.
-    const gi = gas[N2][i] + gas[O2][i] + gas[CO2][i] + gas[SMOKE][i];
-    const gj = gas[N2][j] + gas[O2][j] + gas[CO2][j] + gas[SMOKE][j];
+    // At least one side is air-dominant. The two gas headspaces mix toward a
+    // common *composition* (what ratio of N2/O2/CO2/smoke/vapour each holds),
+    // but a cell's matter/air split is never touched here — movement and the
+    // water cycle own that. Exchanging `d` of each species between the cells
+    // (weighted by the smaller headspace, so a nearly-packed cell trades
+    // little) keeps every species mass-exact *and*, because both sides'
+    // concentrations sum to 1, leaves each cell's total gas volume unchanged:
+    // condensed matter can't leak into a neighbour just by bordering open air.
+    let gi = 0, gj = 0;
+    for (let c = 0; c < N_GAS; c++) { gi += gas[c][i]; gj += gas[c][j]; }
     if (gi < 1e-6 || gj < 1e-6) return; // no headspace on one side — nothing to mix
+    const h = (gi < gj ? gi : gj) * GAS_LEAK_K;
     for (let c = 0; c < N_GAS; c++) {
-      const ni = gas[c][i] / gi, nj = gas[c][j] / gj;
-      const d = (nj - ni) * GAS_LEAK_K;
-      gas[c][i] = (ni + d) * gi;
-      gas[c][j] = (nj - d) * gj;
+      const d = (gas[c][j] / gj - gas[c][i] / gi) * h;
+      gas[c][i] += d;
+      gas[c][j] -= d;
     }
   }
 }
@@ -563,6 +584,7 @@ function stepDiffusion() {
 // ---- Simulation step: combustion ----------------------------------------
 
 const NEIGHBORS8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]];
+const NEIGHBORS4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 const BURN_RATE = 0.05;
 const IGNITE_CHANCE = 0.028;
 
@@ -626,12 +648,90 @@ function stepCombustion() {
   }
 }
 
+// ---- Simulation step: the closed water cycle (Phase 1) -----------------
+// Every transfer here moves an exact amount between liquid and vapour and
+// leaves each cell still summing to 1, so `Σ comp[WATER] + Σ gas[VAPOR]` is
+// conserved by construction — the whole-system water total never changes,
+// which is the regression check for this feature (see the headless harness).
+
+let humidityPct = 0; // mean vapour fraction of the free air, as a percentage
+
+function stepWaterCycle() {
+  // Evaporation follows the day's heat; condensation runs cooler-and-stronger
+  // at night. lightLevel is 0 at midnight, 1 at noon.
+  const heat = EVAP_NIGHT + (1 - EVAP_NIGHT) * lightLevel;
+  const evapRate = EVAP_BASE * heat;
+  const condRate = CONDENSE_BASE * (1 + CONDENSE_NIGHT_BONUS * (1 - lightLevel));
+  let airCells = 0, vaporSum = 0;
+
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const i = idx(x, y);
+      if (solid[i] !== SOLID_NONE) continue;
+
+      // Track humidity over the air that actually holds moisture (the jar
+      // interior, in practice) rather than diluting it with the dry room.
+      if (mt(i) < 0.2 && gas[VAPOR][i] > 0.002) { airCells++; vaporSum += gas[VAPOR][i]; }
+
+      // --- Evaporation: a liquid-water surface gives water to the air above
+      // as vapour, and an equal amount of that air moves down to replace it.
+      const w = comp[WATER][i];
+      if (w > 0.05 && y > 0) {
+        const up = idx(x, y - 1);
+        const upGas = gasTotal(up);
+        if (solid[up] === SOLID_NONE && mt(up) < 0.4 && upGas > 0.1) {
+          // Evaporation slows to nothing as the air above approaches
+          // saturation — this is what lets a sealed jar settle into a steady
+          // humidity instead of drying the pool out into the air.
+          const localRH = gas[VAPOR][up] / upGas;
+          const sat = Math.max(0, 1 - localRH / EVAP_SAT);
+          const e = Math.min(evapRate * sat, w - 0.03, upGas - 0.05);
+          if (e > 0) {
+            comp[WATER][i] -= e;
+            for (let c = 0; c < N_GAS; c++) {
+              const share = (gas[c][up] / upGas) * e;
+              gas[c][up] -= share;
+              gas[c][i] += share;
+            }
+            gas[VAPOR][up] += e;
+          }
+        }
+      }
+
+      // --- Condensation: vapour against the cool glass returns to liquid in
+      // the cell touching the pane (it then runs down the glass and pools via
+      // the ordinary gravity code). Very humid mid-air also gives up a little
+      // as mist, which keeps a sealed jar from saturating without limit.
+      const v = gas[VAPOR][i];
+      if (v > 1e-4) {
+        let onGlass = false;
+        for (let k = 0; k < 4; k++) {
+          const nx = x + NEIGHBORS4[k][0], ny = y + NEIGHBORS4[k][1];
+          if (inBounds(nx, ny) && solid[idx(nx, ny)] === SOLID_GLASS) { onGlass = true; break; }
+        }
+        let c = 0;
+        if (onGlass) c = v * condRate;
+        else if (v > VAPOR_SUPERSAT) c = (v - VAPOR_SUPERSAT) * VAPOR_MIST_K;
+        if (c > 0) {
+          gas[VAPOR][i] -= c;
+          comp[WATER][i] += c;
+        }
+      }
+    }
+  }
+
+  // Expressed relative to the saturation point, so ~100% reads as "the air
+  // is full and evaporation has stalled".
+  humidityPct = airCells ? Math.min(100, (vaporSum / airCells / EVAP_SAT) * 100) : 0;
+}
+
 function step() {
   moved.fill(0);
   updateClock();
   stepMovement();
   stepDiffusion();
   stepCombustion();
+  stepWaterCycle();
 }
 
 // ---- Render --------------------------------------------------------------
@@ -683,6 +783,11 @@ function render() {
       let r = BG_COLOR[0] + (SMOKE_COLOR[0] - BG_COLOR[0]) * smoke + (CO2_TINT[0] - BG_COLOR[0]) * co2 * (1 - smoke);
       let g = BG_COLOR[1] + (SMOKE_COLOR[1] - BG_COLOR[1]) * smoke + (CO2_TINT[1] - BG_COLOR[1]) * co2 * (1 - smoke);
       let b = BG_COLOR[2] + (SMOKE_COLOR[2] - BG_COLOR[2]) * smoke + (CO2_TINT[2] - BG_COLOR[2]) * co2 * (1 - smoke);
+      // Humid air reads as a faint cool haze lifting the background.
+      const fog = Math.min(0.5, gas[VAPOR][i] * 6) * (1 - smoke);
+      r += (VAPOR_FOG[0] - r) * fog;
+      g += (VAPOR_FOG[1] - g) * fog;
+      b += (VAPOR_FOG[2] - b) * fog;
       pixels[o] = clamp8(r * ambient); pixels[o + 1] = clamp8(g * ambient); pixels[o + 2] = clamp8(b * ambient); pixels[o + 3] = 255;
       continue;
     }
@@ -759,6 +864,7 @@ function loop(now) {
     const isDay = lightLevel > 0.5;
     document.getElementById("light").textContent = Math.round(lightLevel * 100);
     document.getElementById("daynight").textContent = isDay ? "day" : "night";
+    document.getElementById("humidity").textContent = humidityPct.toFixed(1);
   }
   requestAnimationFrame(loop);
 }
