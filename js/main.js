@@ -34,8 +34,11 @@ const N2 = 0, O2 = 1, CO2 = 2, SMOKE = 3;
 const N_GAS = 4;
 
 // Discrete, immovable, non-mixing materials (stored separately — they own
-// the whole cell, not a fraction of it).
-const SOLID_NONE = 0, SOLID_STONE = 1, SOLID_WOOD = 2;
+// the whole cell, not a fraction of it). GLASS behaves exactly like stone
+// for movement/combustion — it's tracked as its own id purely so render can
+// draw it translucent, and so later phases can treat the inner surface as a
+// condensation site.
+const SOLID_NONE = 0, SOLID_STONE = 1, SOLID_WOOD = 2, SOLID_GLASS = 3;
 
 // Arbitrary density units; higher sinks through lower. Biomass floats on
 // water (like leaves/debris), smoke is buoyant (negative — rises through air).
@@ -55,6 +58,8 @@ const EARTH_COLOR = [
 const WATER_OPEN_COLOR = [58, 160, 255];
 const WATER_MUD_TINT = [45, 50, 45];
 const SOLID_COLOR = { [SOLID_STONE]: [138, 143, 152], [SOLID_WOOD]: [138, 90, 52] };
+const GLASS_COLOR = [178, 206, 214]; // pale blue-grey; blended lightly over the background
+const GLASS_ALPHA = 0.2;
 const BG_COLOR = [18, 20, 26];
 const SMOKE_COLOR = [130, 130, 130];
 const CO2_TINT = [150, 140, 110];
@@ -68,6 +73,21 @@ const GAS_LEAK_K = 0.1; // gas mixing rate across a condensed/air boundary
 const VISCOSITY_SKIP = 0.5; // chance a "wet" (soil-like) cell skips a movement attempt
 const EPS = 0.02;
 
+// ---- Day/night clock -------------------------------------------------
+// A single global clock advances one unit per simulation tick and wraps
+// every `dayTicks`. `lightLevel` (0 at midnight, 1 at noon, smooth in
+// between) is the one value everything downstream reads — render dims the
+// scene by it now; later phases scale evaporation and plant growth by it.
+let dayTicks = 1200;
+let clockTick = dayTicks / 2; // start at high noon, not midnight
+let lightLevel = 1;
+
+function updateClock() {
+  clockTick = (clockTick + 1) % dayTicks;
+  const phase = clockTick / dayTicks; // 0..1 through the day
+  lightLevel = -Math.cos(phase * Math.PI * 2) * 0.5 + 0.5;
+}
+
 const MAT_INFO = {
   sand: { kind: "cond", ch: SAND },
   clay: { kind: "cond", ch: CLAY },
@@ -75,6 +95,7 @@ const MAT_INFO = {
   water: { kind: "cond", ch: WATER },
   soil: { kind: "mix", mix: [0.35, 0.25, 0.15, 0.25] }, // pre-mixed preset, same substances
   stone: { kind: "solid", id: SOLID_STONE },
+  glass: { kind: "solid", id: SOLID_GLASS },
   wood: { kind: "solid", id: SOLID_WOOD },
   fire: { kind: "fire" },
   empty: { kind: "air" },
@@ -314,6 +335,66 @@ canvas.addEventListener(
 );
 window.addEventListener("touchend", handlePointerUp);
 
+// ---- Terrarium jar ----------------------------------------------------
+// A glass enclosure stamped over the scene: two side walls, a floor, and a
+// shouldered top with a neck opening in the middle that "Seal Lid" closes.
+
+let jarNeck = null; // { x0, x1, row, thick } — the gap in the shoulder
+let lidSealed = false;
+
+function setSolidCell(x, y, id) {
+  if (!inBounds(x, y)) return;
+  const i = idx(x, y);
+  clearCell(i);
+  solid[i] = id;
+  variant[i] = (Math.random() * 16) | 0;
+}
+
+function buildJar() {
+  const wallThick = 2;
+  const marginX = Math.max(3, Math.floor(cols * 0.06));
+  const floorTop = rows - Math.max(3, Math.floor(rows * 0.05));
+  const shoulderRow = Math.max(2, Math.floor(rows * 0.08));
+  const neckHalf = Math.max(2, Math.floor(cols * 0.1));
+  const midX = cols >> 1;
+  const rightX = cols - 1 - marginX;
+
+  for (let y = shoulderRow; y < rows; y++) {
+    for (let t = 0; t < wallThick; t++) {
+      setSolidCell(marginX + t, y, SOLID_GLASS);
+      setSolidCell(rightX - t, y, SOLID_GLASS);
+    }
+  }
+  for (let y = floorTop; y < rows; y++) {
+    for (let x = marginX; x <= rightX; x++) setSolidCell(x, y, SOLID_GLASS);
+  }
+  for (let t = 0; t < wallThick; t++) {
+    for (let x = marginX; x <= rightX; x++) {
+      if (Math.abs(x - midX) > neckHalf) setSolidCell(x, shoulderRow + t, SOLID_GLASS);
+    }
+  }
+
+  jarNeck = { x0: midX - neckHalf, x1: midX + neckHalf, row: shoulderRow, thick: wallThick };
+  lidSealed = false;
+}
+
+function toggleLidSeal() {
+  if (!jarNeck) return;
+  lidSealed = !lidSealed;
+  for (let t = 0; t < jarNeck.thick; t++) {
+    for (let x = jarNeck.x0; x <= jarNeck.x1; x++) {
+      if (!inBounds(x, jarNeck.row + t)) continue;
+      const i = idx(x, jarNeck.row + t);
+      if (lidSealed) {
+        clearCell(i);
+        solid[i] = SOLID_GLASS;
+      } else if (solid[i] === SOLID_GLASS) {
+        clearCell(i);
+      }
+    }
+  }
+}
+
 // ---- Simulation step: movement -----------------------------------------
 
 function swapCells(i, j) {
@@ -495,6 +576,7 @@ function stepCombustion() {
 
 function step() {
   moved.fill(0);
+  updateClock();
   stepMovement();
   stepDiffusion();
   stepCombustion();
@@ -506,25 +588,37 @@ function clamp8(v) {
   return v < 0 ? 0 : v > 255 ? 255 : v;
 }
 
+const NIGHT_FLOOR = 0.16; // scene brightness at midnight relative to noon
+
 function render() {
   let count = 0;
   const n = cols * rows;
+  const ambient = NIGHT_FLOOR + (1 - NIGHT_FLOOR) * lightLevel;
   for (let i = 0; i < n; i++) {
     const o = i * 4;
     const jitter = (variant[i] - 8) * 1.5;
 
     if (solid[i] === SOLID_STONE) {
       const c = SOLID_COLOR[SOLID_STONE];
-      pixels[o] = clamp8(c[0] + jitter); pixels[o + 1] = clamp8(c[1] + jitter); pixels[o + 2] = clamp8(c[2] + jitter); pixels[o + 3] = 255;
+      pixels[o] = clamp8((c[0] + jitter) * ambient); pixels[o + 1] = clamp8((c[1] + jitter) * ambient); pixels[o + 2] = clamp8((c[2] + jitter) * ambient); pixels[o + 3] = 255;
+      count++;
+      continue;
+    }
+    if (solid[i] === SOLID_GLASS) {
+      const a = GLASS_ALPHA;
+      const r = BG_COLOR[0] * (1 - a) + GLASS_COLOR[0] * a;
+      const g = BG_COLOR[1] * (1 - a) + GLASS_COLOR[1] * a;
+      const b = BG_COLOR[2] * (1 - a) + GLASS_COLOR[2] * a;
+      pixels[o] = clamp8((r + jitter * 0.3) * ambient); pixels[o + 1] = clamp8((g + jitter * 0.3) * ambient); pixels[o + 2] = clamp8((b + jitter * 0.3) * ambient); pixels[o + 3] = 255;
       count++;
       continue;
     }
     if (solid[i] === SOLID_WOOD) {
       const c = SOLID_COLOR[SOLID_WOOD];
       const glow = burning[i] ? 0.5 + 0.5 * Math.sin(i * 0.7 + performance.now() * 0.02) : 0;
-      const r = c[0] * (1 - glow) + FIRE_GLOW[0] * glow;
-      const g = c[1] * (1 - glow) + FIRE_GLOW[1] * glow;
-      const b = c[2] * (1 - glow) + FIRE_GLOW[2] * glow;
+      const r = c[0] * ambient * (1 - glow) + FIRE_GLOW[0] * glow;
+      const g = c[1] * ambient * (1 - glow) + FIRE_GLOW[1] * glow;
+      const b = c[2] * ambient * (1 - glow) + FIRE_GLOW[2] * glow;
       pixels[o] = clamp8(r + jitter); pixels[o + 1] = clamp8(g + jitter); pixels[o + 2] = clamp8(b + jitter); pixels[o + 3] = 255;
       count++;
       continue;
@@ -537,7 +631,7 @@ function render() {
       let r = BG_COLOR[0] + (SMOKE_COLOR[0] - BG_COLOR[0]) * smoke + (CO2_TINT[0] - BG_COLOR[0]) * co2 * (1 - smoke);
       let g = BG_COLOR[1] + (SMOKE_COLOR[1] - BG_COLOR[1]) * smoke + (CO2_TINT[1] - BG_COLOR[1]) * co2 * (1 - smoke);
       let b = BG_COLOR[2] + (SMOKE_COLOR[2] - BG_COLOR[2]) * smoke + (CO2_TINT[2] - BG_COLOR[2]) * co2 * (1 - smoke);
-      pixels[o] = clamp8(r); pixels[o + 1] = clamp8(g); pixels[o + 2] = clamp8(b); pixels[o + 3] = 255;
+      pixels[o] = clamp8(r * ambient); pixels[o + 1] = clamp8(g * ambient); pixels[o + 2] = clamp8(b * ambient); pixels[o + 3] = 255;
       continue;
     }
 
@@ -560,6 +654,11 @@ function render() {
     r = BG_COLOR[0] + (r - BG_COLOR[0]) * m;
     g = BG_COLOR[1] + (g - BG_COLOR[1]) * m;
     b = BG_COLOR[2] + (b - BG_COLOR[2]) * m;
+
+    // Ambient day/night dimming — applied to lit matter, not to fire glow.
+    r *= ambient;
+    g *= ambient;
+    b *= ambient;
 
     if (burning[i]) {
       const glow = 0.4 + 0.3 * Math.sin(i * 0.9 + performance.now() * 0.03);
@@ -603,6 +702,12 @@ function loop(now) {
     step();
     render();
   }
+
+  if (fpsTimer === 0) {
+    const isDay = lightLevel > 0.5;
+    document.getElementById("light").textContent = Math.round(lightLevel * 100);
+    document.getElementById("daynight").textContent = isDay ? "day" : "night";
+  }
   requestAnimationFrame(loop);
 }
 
@@ -637,6 +742,25 @@ pauseBtn.addEventListener("click", () => {
 
 document.getElementById("clearBtn").addEventListener("click", () => {
   for (let i = 0; i < cols * rows; i++) clearCell(i);
+});
+
+const sealLidBtn = document.getElementById("sealLidBtn");
+document.getElementById("buildJarBtn").addEventListener("click", () => {
+  buildJar();
+  sealLidBtn.textContent = "Seal Lid";
+  sealLidBtn.classList.remove("active");
+});
+sealLidBtn.addEventListener("click", () => {
+  toggleLidSeal();
+  sealLidBtn.textContent = lidSealed ? "Open Lid" : "Seal Lid";
+  sealLidBtn.classList.toggle("active", lidSealed);
+});
+
+const dayLengthSlider = document.getElementById("dayLength");
+const dayLengthVal = document.getElementById("dayLengthVal");
+dayLengthSlider.addEventListener("input", () => {
+  dayTicks = parseInt(dayLengthSlider.value, 10);
+  dayLengthVal.textContent = dayTicks;
 });
 
 window.addEventListener("keydown", (e) => {

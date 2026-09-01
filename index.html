@@ -12,7 +12,8 @@
     <header class="topbar">
       <h1>Falling Sand</h1>
       <div class="stats">
-        <span id="fps">0</span> fps &middot; <span id="count">0</span> particles
+        <span id="fps">0</span> fps &middot; <span id="count">0</span> particles &middot;
+        <span id="daynight">day</span> &middot; light <span id="light">100</span>%
       </div>
     </header>
 
@@ -38,6 +39,9 @@
             </button>
             <button class="mat-btn" data-mat="stone" style="--c:#8a8f98">
               <span class="swatch"></span>Stone
+            </button>
+            <button class="mat-btn" data-mat="glass" style="--c:#b2ced6">
+              <span class="swatch"></span>Glass
             </button>
             <button class="mat-btn" data-mat="wood" style="--c:#8a5a34">
               <span class="swatch"></span>Wood
@@ -68,12 +72,27 @@
           </div>
         </section>
 
+        <section class="panel">
+          <h2>Terrarium</h2>
+          <div class="btn-row">
+            <button id="buildJarBtn" class="action-btn">Build Jar</button>
+            <button id="sealLidBtn" class="action-btn">Seal Lid</button>
+          </div>
+          <label class="slider-row" style="margin-top:10px">
+            <span>Day</span>
+            <input type="range" id="dayLength" min="300" max="4000" step="100" value="1200" />
+            <span id="dayLengthVal">1200</span>
+          </label>
+        </section>
+
         <section class="panel hint">
           <p>
             Click / touch and drag to draw. Every cell is a mixture, not a
             single material — sand, clay, biomass and water blend into soil
             wherever they sit next to each other long enough. Air is made of
             N&#8322;, O&#8322;, CO&#8322; and smoke. Fire needs Wood or Biomass fuel to catch.
+            Build Jar stamps a glass enclosure; Seal Lid closes its neck. A
+            day/night clock dims the scene &mdash; drag Day to change its length.
           </p>
         </section>
       </aside>
