@@ -420,7 +420,31 @@ function tryMove(x, y, dx, dy, dens) {
 
 let frameParity = 0;
 
-function stepCell(x, y, dirs) {
+// Scans along row `y` in direction `dx`, through cells a liquid parcel could
+// actually travel across (open, at the same level), for the nearest column it
+// could then *fall* from — i.e. where the cell one row down is displaceable.
+// Returns that column's step distance (1..FLOW_REACH), or 0 if there's no such
+// spot within reach. Water then moves the whole way there in one tick and
+// drops, which is what lets a pile cross its own flat steps and level out
+// instead of freezing into a staircase — while a genuinely flat pool or a
+// single-cell ripple offers no fall point and simply comes to rest.
+const FLOW_REACH = 48;
+function flowStep(x, y, dx, dens) {
+  for (let step = 1; step <= FLOW_REACH; step++) {
+    const nx = x + dx * step;
+    if (!inBounds(nx, y)) return 0;
+    const head = idx(nx, y);
+    if (moved[head] || solid[head] !== SOLID_NONE || density(head) >= dens - EPS) return 0;
+    const belowY = y + 1;
+    if (belowY < rows) {
+      const b = idx(nx, belowY);
+      if (!moved[b] && solid[b] === SOLID_NONE && density(b) < dens - EPS) return step;
+    }
+  }
+  return 0;
+}
+
+function stepCell(x, y) {
   const i = idx(x, y);
   if (moved[i] || solid[i] !== SOLID_NONE) return;
 
@@ -432,9 +456,37 @@ function stepCell(x, y, dirs) {
 
   const dens = density(i);
 
+  // Straight down first — same rule for everything.
   if (tryMove(x, y, 0, 1, dens)) return;
-  for (const dx of dirs) if (tryMove(x, y, dx, 1, dens)) return;
-  if (isLiquid) for (const dx of dirs) if (tryMove(x, y, dx, 0, dens)) return;
+
+  // Which side to try first is a *stable* checkerboard by position, not a
+  // per-frame flip — flipping the preference every tick is what made falling
+  // streams and settling puddles strobe left/right.
+  const pref = (x + y) & 1 ? 1 : -1;
+
+  if (isLiquid) {
+    // Adjacent diagonal drop first (the common pile-edge case).
+    if (tryMove(x, y, pref, 1, dens)) return;
+    if (tryMove(x, y, -pref, 1, dens)) return;
+    // Otherwise, if this is a surface cell, look out along the surface for a
+    // spot to fall from — nearer side wins — and slide the whole way there.
+    const surface = y === 0 || solid[idx(x, y - 1)] === SOLID_NONE && mt(idx(x, y - 1)) < 0.5;
+    if (surface) {
+      const sl = flowStep(x, y, -1, dens);
+      const sr = flowStep(x, y, 1, dens);
+      let f = 0, dist = 0;
+      if (sl && sr) { f = sl <= sr ? -1 : 1; dist = Math.min(sl, sr); }
+      else if (sl) { f = -1; dist = sl; }
+      else if (sr) { f = 1; dist = sr; }
+      if (f !== 0 && !moved[idx(x + f * dist, y)]) {
+        swapCells(i, idx(x + f * dist, y));
+        return;
+      }
+    }
+  } else {
+    if (tryMove(x, y, pref, 1, dens)) return;
+    if (tryMove(x, y, -pref, 1, dens)) return;
+  }
 
   // Buoyancy: rise past whatever's directly above if this cell is lighter
   // (this is how smoke climbs through air and gas bubbles rise through water).
@@ -442,20 +494,20 @@ function stepCell(x, y, dirs) {
     const up = idx(x, y - 1);
     if (solid[up] === SOLID_NONE && !moved[up] && dens < density(up) - EPS) {
       if (tryMove(x, y, 0, -1, dens)) return;
-      for (const dx of dirs) if (tryMove(x, y, dx, -1, dens)) return;
+      if (tryMove(x, y, pref, -1, dens)) return;
+      if (tryMove(x, y, -pref, -1, dens)) return;
     }
   }
 }
 
 function stepMovement() {
-  const dirsA = [1, -1], dirsB = [-1, 1];
+  // Scan bottom-to-top; alternate the horizontal scan direction per row and
+  // per frame so the sweep order itself doesn't bias the result one way.
   for (let y = rows - 1; y >= 0; y--) {
-    const leftToRight = (y + frameParity) % 2 === 0;
-    const dirs = leftToRight ? dirsA : dirsB;
-    if (leftToRight) {
-      for (let x = 0; x < cols; x++) stepCell(x, y, dirs);
+    if ((y + frameParity) % 2 === 0) {
+      for (let x = 0; x < cols; x++) stepCell(x, y);
     } else {
-      for (let x = cols - 1; x >= 0; x--) stepCell(x, y, dirs);
+      for (let x = cols - 1; x >= 0; x--) stepCell(x, y);
     }
   }
   frameParity ^= 1;
