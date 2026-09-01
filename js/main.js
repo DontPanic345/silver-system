@@ -900,6 +900,11 @@ pauseBtn.addEventListener("click", () => {
 
 document.getElementById("clearBtn").addEventListener("click", () => {
   for (let i = 0; i < cols * rows; i++) clearCell(i);
+  jarNeck = null;
+  lidSealed = false;
+  sealLidBtn.textContent = "Seal Lid";
+  sealLidBtn.classList.remove("active");
+  clearSave();
 });
 
 const sealLidBtn = document.getElementById("sealLidBtn");
@@ -934,8 +939,98 @@ window.addEventListener("resize", () => {
   resizeTimer = setTimeout(resize, 120);
 });
 
+// ---- Save / restore (localStorage snapshot) --------------------------
+// Building a jar and waiting for the water cycle to get going takes real
+// time, so the whole grid is snapshotted to localStorage every few seconds
+// (and on tab-hide / unload) and restored on load. Fractions are quantised
+// to a byte each — plenty for a scene that re-settles on its own — keeping a
+// typical grid well under the storage quota.
+
+const SAVE_KEY = "fallingsand.terrarium.v1";
+const SAVE_EVERY_MS = 4000;
+const SNAP_BYTES_PER_CELL = N_COND + N_GAS + 3; // comp + gas + solid/woodHp/burning
+
+function snapshot() {
+  const n = cols * rows;
+  const q = new Uint8Array(n * SNAP_BYTES_PER_CELL);
+  let p = 0;
+  for (let c = 0; c < N_COND; c++) for (let i = 0; i < n; i++) q[p++] = Math.round(comp[c][i] * 255);
+  for (let c = 0; c < N_GAS; c++) for (let i = 0; i < n; i++) q[p++] = Math.round(gas[c][i] * 255);
+  for (let i = 0; i < n; i++) q[p++] = solid[i];
+  for (let i = 0; i < n; i++) q[p++] = woodHp[i];
+  for (let i = 0; i < n; i++) q[p++] = burning[i];
+  let bin = "";
+  for (let k = 0; k < q.length; k += 8192) bin += String.fromCharCode.apply(null, q.subarray(k, k + 8192));
+  return JSON.stringify({
+    v: 1, cols, rows, clockTick, dayTicks, lidSealed, jarNeck, data: btoa(bin),
+  });
+}
+
+function saveState() {
+  try { localStorage.setItem(SAVE_KEY, snapshot()); } catch (e) { /* quota exceeded or storage disabled */ }
+}
+
+function clearSave() {
+  try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* ignore */ }
+}
+
+function loadState() {
+  let raw;
+  try { raw = localStorage.getItem(SAVE_KEY); } catch (e) { return false; }
+  if (!raw) return false;
+  let s;
+  try { s = JSON.parse(raw); } catch (e) { return false; }
+  if (!s || s.v !== 1 || s.cols !== cols || s.rows !== rows) return false;
+
+  const n = cols * rows;
+  const need = n * SNAP_BYTES_PER_CELL;
+  let bin;
+  try { bin = atob(s.data); } catch (e) { return false; }
+  if (bin.length !== need) return false;
+
+  const q = new Uint8Array(need);
+  for (let k = 0; k < need; k++) q[k] = bin.charCodeAt(k);
+  let p = 0;
+  for (let c = 0; c < N_COND; c++) for (let i = 0; i < n; i++) comp[c][i] = q[p++] / 255;
+  for (let c = 0; c < N_GAS; c++) for (let i = 0; i < n; i++) gas[c][i] = q[p++] / 255;
+  for (let i = 0; i < n; i++) solid[i] = q[p++];
+  for (let i = 0; i < n; i++) woodHp[i] = q[p++];
+  for (let i = 0; i < n; i++) burning[i] = q[p++];
+
+  // Undo the quantisation drift so every cell sums back to exactly 1.
+  for (let i = 0; i < n; i++) {
+    if (solid[i] !== SOLID_NONE) continue;
+    let sum = 0;
+    for (let c = 0; c < N_COND; c++) sum += comp[c][i];
+    for (let c = 0; c < N_GAS; c++) sum += gas[c][i];
+    if (sum > 1e-4) {
+      const inv = 1 / sum;
+      for (let c = 0; c < N_COND; c++) comp[c][i] *= inv;
+      for (let c = 0; c < N_GAS; c++) gas[c][i] *= inv;
+    }
+  }
+
+  clockTick = (s.clockTick | 0) % (s.dayTicks || dayTicks);
+  dayTicks = s.dayTicks || dayTicks;
+  lidSealed = !!s.lidSealed;
+  jarNeck = s.jarNeck || null;
+  return true;
+}
+
+setInterval(() => { if (running) saveState(); }, SAVE_EVERY_MS);
+window.addEventListener("beforeunload", saveState);
+document.addEventListener("visibilitychange", () => { if (document.hidden) saveState(); });
+
 // ---- Boot --------------------------------------------------------------
 
 resize();
+
+if (loadState()) {
+  dayLengthSlider.value = dayTicks;
+  dayLengthVal.textContent = dayTicks;
+  sealLidBtn.textContent = lidSealed ? "Open Lid" : "Seal Lid";
+  sealLidBtn.classList.toggle("active", lidSealed);
+}
+
 setActiveMaterialButton();
 requestAnimationFrame(loop);

@@ -103,6 +103,10 @@ and a rough per-step performance budget.
   down and pools on the ordinary gravity rule. Every transfer moves an exact
   amount between the liquid and vapour channels, so `Σ water + Σ vapour` over
   the whole grid is invariant — that's the regression test for the feature.
+- **Persistence.** The whole grid (every fraction quantised to a byte, plus
+  the clock and jar state) is snapshotted to `localStorage` every few seconds
+  and on tab-hide, and restored on load — so a jar you've been growing
+  survives a refresh. `Clear` wipes both the grid and the snapshot.
 - **Rendering** writes directly into a `Canvas ImageData` buffer sized to the
   grid (one pixel per cell): solids render their base color; matter-bearing
   cells render a weighted blend of sand/clay/biomass colors, with water's

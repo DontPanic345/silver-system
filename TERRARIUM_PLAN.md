@@ -16,6 +16,9 @@ sealed — not just a prettier sandbox.
   glass and as mid-air mist; dew runs down and re-pools on the existing
   gravity code. `Σ water + Σ vapour` is conserved by construction and checked
   in `test/sim-invariants.js`. Humidity readout in the header.
+- **Save/restore (was a cross-cutting "pull forward"): done.** Byte-quantised
+  localStorage snapshot of the grid + clock + jar, autosaved every few
+  seconds and on tab-hide, restored on load. `Clear` wipes it too.
 - **Next: Phase 2 — plants.**
 
 Also fixed along the way: water now finds its level (long-range surface flow

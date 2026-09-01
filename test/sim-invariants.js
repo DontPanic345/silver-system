@@ -43,6 +43,15 @@ global.document = {
 };
 global.window = { addEventListener() {} };
 global.performance = { now: () => Date.now() };
+// Minimal localStorage so the save/restore path is exercisable.
+global.localStorage = (() => {
+  const m = new Map();
+  return {
+    getItem: (k) => (m.has(k) ? m.get(k) : null),
+    setItem: (k, v) => m.set(k, String(v)),
+    removeItem: (k) => m.delete(k),
+  };
+})();
 global.requestAnimationFrame = () => 0;
 // Deterministic PRNG so runs are reproducible.
 global.Math.random = (() => {
@@ -185,7 +194,43 @@ const CHECKS = String.raw`
     ok("dew collects on the glass", onGlass > 0.3, onGlass.toFixed(2));
   }
 
-  // --- 4. rough perf budget ----------------------------------------------
+  // --- 4. save / restore round-trips the scene ---------------------------
+  console.log("save / restore");
+  fresh();
+  {
+    const F = rows - 3;
+    paintRect(0, F, cols - 1, rows - 1, "stone");
+    paintRect(10, F - 12, cols - 10, F - 1, "water");
+    buildJar();
+    if (!lidSealed) toggleLidSeal();
+    for (let t = 0; t < 200; t++) step();
+
+    const before = [];
+    for (let c = 0; c < N_COND; c++) before.push(Float32Array.from(comp[c]));
+    for (let c = 0; c < N_GAS; c++) before.push(Float32Array.from(gas[c]));
+    const solidBefore = Uint8Array.from(solid);
+    const clockBefore = clockTick, sealBefore = lidSealed;
+
+    saveState();
+    fresh();                 // wipe to a blank grid
+    const restored = loadState();
+
+    let maxDiff = 0, solidMismatch = 0;
+    const chans = [];
+    for (let c = 0; c < N_COND; c++) chans.push(comp[c]);
+    for (let c = 0; c < N_GAS; c++) chans.push(gas[c]);
+    for (let ch = 0; ch < chans.length; ch++)
+      for (let i = 0; i < cols * rows; i++) maxDiff = Math.max(maxDiff, Math.abs(chans[ch][i] - before[ch][i]));
+    for (let i = 0; i < cols * rows; i++) if (solid[i] !== solidBefore[i]) solidMismatch++;
+
+    ok("loadState restores the snapshot", restored, restored ? "" : "returned false");
+    ok("solids come back exactly", solidMismatch === 0, solidMismatch + " cells differ");
+    ok("fractions come back within quantisation error", maxDiff < 0.01, "max diff " + maxDiff.toFixed(4));
+    ok("clock + lid state come back", clockTick === clockBefore && lidSealed === sealBefore,
+       "clock " + clockTick + "/" + clockBefore + " lid " + lidSealed + "/" + sealBefore);
+  }
+
+  // --- 5. rough perf budget --------------------------------------------
   console.log("performance");
   fresh();
   {
@@ -199,7 +244,9 @@ const CHECKS = String.raw`
 
   console.log("");
   console.log(failed === 0 ? "ALL CHECKS PASSED" : failed + " CHECK(S) FAILED");
-  if (typeof process !== "undefined") process.exitCode = failed === 0 ? 0 : 1;
+  // main.js starts a setInterval autosave timer that would otherwise keep the
+  // process alive, so exit explicitly.
+  if (typeof process !== "undefined") process.exit(failed === 0 ? 0 : 1);
 }
 `;
 
