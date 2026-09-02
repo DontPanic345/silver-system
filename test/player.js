@@ -299,6 +299,70 @@ const firstId = sharedScenarios[0].id;
   check('sandbox mode is retained after reset', c.mode === 'sandbox', String(c.mode));
 }
 
+// --- carry-forward (round 5 -> 6): total-water readout once water channels exist -
+// AC 14 says the page shows "total water once that channel exists". The readout
+// set is data-driven (READOUT_SPECS keyed by channel), so once liquid/vapour are
+// on the sim, readouts() must include a total-water entry = interiorSum(liquid) +
+// interiorSum(vapour). RED until the water channels + the READOUT_SPECS entry land.
+{
+  console.log('readouts() includes a total-water entry once the liquid/vapour channels exist (AC 14, carry-forward)');
+  const c = createController();
+  c.load(firstId);
+  const chans = c.channels();
+  check('the sim exposes liquid and vapour channels',
+    chans.includes('liquid') && chans.includes('vapour'), chans.join(','));
+
+  const r = c.readouts();
+  const water = Array.isArray(r) ? r.find((e) => /water/i.test(e.key) || /water/i.test(e.label)) : null;
+  check('there is a total-water readout for the loaded scenario', water != null,
+    Array.isArray(r) ? JSON.stringify(r) : String(r));
+
+  if (water != null && c.sim && c.sim.liquid && c.sim.vapour) {
+    const expected = interiorSum(c.sim, c.sim.liquid) + interiorSum(c.sim, c.sim.vapour);
+    check('the total-water readout equals interiorSum(liquid) + interiorSum(vapour)',
+      Math.abs(water.value - expected) <= 1e-6 * (Math.abs(expected) + 1),
+      `readout ${water.value} vs ${expected}`);
+  } else {
+    check('the total-water readout equals interiorSum(liquid) + interiorSum(vapour)', false,
+      'no water readout / channels to compare');
+  }
+}
+
+// --- carry-forward (round 5 -> 6): every reported channel has a renderer -------
+// AC 16: adding a channel changes the RENDERER, not the page structure. Pin that
+// js/main.js's CHANNEL_RENDERERS map stays in sync with controller.channels() —
+// specifically that the new liquid/vapour channels each get an entry. RED until
+// Green adds them.
+{
+  console.log('every channel controller.channels() reports has a matching CHANNEL_RENDERERS entry in js/main.js (AC 16, carry-forward)');
+  const mainPath = join(here, '..', 'js', 'main.js');
+  let src = null;
+  try { src = readFileSync(mainPath, 'utf8'); } catch { /* handled below */ }
+
+  const c = createController();
+  c.load(firstId);
+  const chans = c.channels();
+
+  if (src == null) {
+    check('js/main.js is readable', false, 'source unreadable');
+  } else {
+    const m = src.match(/CHANNEL_RENDERERS\s*=\s*\{([\s\S]*?)\n\};/);
+    const block = m ? m[1] : '';
+    const hasKey = (ch) => new RegExp(`(^|[^\\w.])${ch}\\s*:`).test(block);
+
+    const missingNamed = ['liquid', 'vapour'].filter((ch) => !hasKey(ch));
+    check('CHANNEL_RENDERERS has entries for the new liquid and vapour channels',
+      block.length > 0 && missingNamed.length === 0,
+      block.length === 0 ? 'CHANNEL_RENDERERS block not found'
+        : (missingNamed.length ? `missing renderer(s): ${missingNamed.join(', ')}` : ''));
+
+    const missing = chans.filter((ch) => !hasKey(ch));
+    check('CHANNEL_RENDERERS covers every channel controller.channels() reports',
+      block.length > 0 && missing.length === 0,
+      missing.length ? `no renderer for: ${missing.join(', ')}` : '');
+  }
+}
+
 // bit-identical Float32Array compare (reads back the exact stored bits)
 function eq(a, b) {
   if (!a || !b || a.length !== b.length) return false;
