@@ -24,6 +24,7 @@ export const createFluid = (N, opts = {}) => {
     diff: opts.diff ?? 0,
     kappa: opts.kappa ?? 0, // thermal diffusivity for conduction (temp channel)
     fade: opts.fade ?? 0, // fraction of dye removed each step (0 = conserve)
+    buoyancy: opts.buoyancy ?? 0, // thermal buoyancy coefficient (0 = off)
     u: cell(), v: cell(), uPrev: cell(), vPrev: cell(),
     dens: cell(), densPrev: cell(),
     temp: cell(), tempPrev: cell(), // temperature field + in-place-swapped scratch
@@ -301,7 +302,30 @@ const tempStep = (f) => {
   }
 };
 
+// Thermal buoyancy: a body force on the shared vertical velocity field. Warmer-
+// than-average fluid is pushed toward -v (up / smaller j), colder toward +v.
+// The force is proportional to the local deviation from the mean interior
+// temperature, so a spatially uniform field produces exactly zero force in every
+// cell. Injected before velStep so the pressure solve keeps the field
+// divergence-free, exactly as the other forces are handled.
+const buoyancyStep = (f) => {
+  const { N, SIZE, buoyancy, dt, temp, v } = f;
+  let sum = 0;
+  for (let j = 1; j <= N; j++) {
+    for (let i = 1; i <= N; i++) sum += temp[ix(SIZE, i, j)];
+  }
+  const mean = sum / (N * N);
+  for (let j = 1; j <= N; j++) {
+    for (let i = 1; i <= N; i++) {
+      const k = ix(SIZE, i, j);
+      v[k] += buoyancy * (temp[k] - mean) * dt;
+    }
+  }
+  setBnd(f, 2, v);
+};
+
 export const step = (f) => {
+  if (f.buoyancy !== 0) buoyancyStep(f);
   velStep(f);
   densStep(f);
   tempStep(f);
