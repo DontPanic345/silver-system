@@ -108,6 +108,62 @@ const SHIPPED_N = 180;
   check('field stays finite throughout', !hasNonFinite(f));
 }
 
+// --- Carry-forward guard: force a Godunov overshoot --------------------------
+// The conservative advection has a clamp-and-redistribute branch for the
+// sub-milli overshoot that dimensional splitting can leave behind the 1D
+// limiter. No other test drives a field sharp/fast enough to exercise it.
+// A hard step discontinuity in the scalar plus a high-Courant velocity field
+// (large dt, strong kick) is what triggers it — and it must still come out
+// conservative and monotone (no value outside the pre-step range).
+{
+  console.log('Godunov overshoot stays conservative + monotone (carry-forward)');
+  const f = createFluid(64, { dt: 0.6, fade: 0 });
+  // A sharp slab: half the interior at 1, half at 0 — a one-cell-wide gradient.
+  for (let j = 1; j <= 64; j++) {
+    for (let i = 1; i <= 64; i++) f.dens[IX(f.SIZE, i, j)] = i <= 32 ? 1 : 0;
+  }
+  // Strong, sheared momentum so the Courant number across the step is well
+  // above 1 and the split axes disagree.
+  splat(f, 30, 24, 6, 0, 0.18, 0.05);
+  splat(f, 34, 44, 6, 0, 0.14, -0.07);
+
+  const start = totalDensity(f);
+  let worstOver = 0, worstUnder = 0, worstDrift = 0;
+  for (let s = 0; s < 60; s++) {
+    const before = scalarRange(f);
+    step(f);
+    const after = scalarRange(f);
+    worstOver = Math.max(worstOver, after.hi - before.hi);
+    worstUnder = Math.max(worstUnder, before.lo - after.lo, -after.lo);
+    worstDrift = Math.max(worstDrift, Math.abs(totalDensity(f) - start) / start);
+  }
+  const EPS = 1e-6;
+  check('sharp-gradient / high-Courant run stays conservative', worstDrift < 0.005,
+    `worst drift ${(worstDrift * 100).toFixed(3)}%`);
+  check('sharp-gradient / high-Courant run invents no new extrema',
+    worstOver <= EPS && worstUnder <= EPS,
+    `over ${worstOver.toExponential(2)}  under ${worstUnder.toExponential(2)}`);
+  check('field stays finite through the overshoot scenario', !hasNonFinite(f));
+}
+
+// --- Carry-forward guard: sub-cycling path conserves the scalar total -------
+// At large dt the scalar advection sub-cycles (Courant > 1 -> multiple inner
+// sweeps per step). Nothing pinned that the interior total survives that path.
+{
+  console.log('sub-cycled advection conserves scalar total (carry-forward)');
+  const f = createFluid(64, { dt: 0.9, fade: 0 }); // deliberately large dt
+  splat(f, 24, 32, 5, 1.0, 0.12, 0.06);
+  splat(f, 44, 28, 4, 0.6, -0.09, 0.04);
+  const start = totalDensity(f);
+  let worst = 0;
+  for (let s = 0; s < 200; s++) {
+    step(f);
+    worst = Math.max(worst, Math.abs(totalDensity(f) - start) / start);
+  }
+  check('scalar total drifts < 0.5% over 200 sub-cycled steps', Number.isFinite(worst) && worst < 0.005,
+    `worst drift ${(worst * 100).toFixed(3)}%`);
+}
+
 // --- AC 33: determinism — same scenario twice, bit-identical state ----------
 {
   console.log('determinism (AC 33)');
