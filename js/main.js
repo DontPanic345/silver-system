@@ -4,7 +4,7 @@
 import { createFluid, step, splat, IX } from './fluid.js';
 
 const N = 180;
-const f = createFluid(N, { fade: 0.008 });
+const f = createFluid(N, { fade: 0.004 });
 
 // Mouse motion is measured in grid cells per frame; the solver wants velocity
 // in grid-widths per unit time (advection backtrace is dt·N·velocity), so a
@@ -23,12 +23,13 @@ ctx.imageSmoothingEnabled = true;
 
 let showVectors = false;
 
-// warm dye palette: dark -> ember -> pale gold
+// warm dye palette: black -> deep orange -> gold -> white. `t` saturates so
+// thin dye still glows and dense dye tops out white rather than clipping.
 function palette(d, out, o) {
-  const t = d > 1 ? 1 : d;
-  out[o]     = 255 * Math.min(1, t * 1.6);
-  out[o + 1] = 255 * Math.min(1, Math.max(0, t * 1.4 - 0.25));
-  out[o + 2] = 255 * Math.min(1, Math.max(0, t * 2.2 - 1.1));
+  const t = 1 - Math.exp(-d * 3.0);
+  out[o]     = 255 * Math.min(1, t * 2.4);
+  out[o + 1] = 255 * Math.min(1, Math.max(0, (t - 0.15) * 1.7));
+  out[o + 2] = 255 * Math.min(1, Math.max(0, (t - 0.6) * 2.4));
   out[o + 3] = 255;
 }
 
