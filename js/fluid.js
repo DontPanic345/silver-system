@@ -10,6 +10,8 @@
 // Pure module: no DOM, no rendering. `js/main.js` drives it on screen;
 // `test/fluid-probe.js` drives it headless.
 
+const ix = (SIZE, i, j) => i + SIZE * j;
+
 export const createFluid = (N, opts = {}) => {
   const SIZE = N + 2; // interior N×N plus a one-cell boundary ring
   const cell = () => new Float32Array(SIZE * SIZE);
@@ -38,8 +40,6 @@ export const createFluid = (N, opts = {}) => {
   }
   return f;
 };
-
-const ix = (SIZE, i, j) => i + SIZE * j;
 
 // b: which field we're bounding — 1 = horizontal velocity (flips sign at the
 // left/right walls), 2 = vertical velocity (flips at top/bottom), 0 = scalar.
@@ -182,7 +182,7 @@ const advectScalar = (f, d, d0, velU, velV) => {
   const h = dt0 / sub;
 
   const cur = d;          // running field (output buffer)
-  const nxt = f.tmp;      // Jacobi scratch — free during densStep
+  const nxt = f.tmp;      // Jacobi scratch — no linear solve runs during a scalar advect
   cur.set(d0);
   for (let s = 0; s < sub; s++) {
     muscl1D(f, nxt, cur, velU, 1, h);

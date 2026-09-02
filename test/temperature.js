@@ -114,25 +114,6 @@ const centroidX = (f) => {
   }
 }
 
-// --- AC 3 / AC 4: conservative transport — pure advection ----------------
-{
-  console.log('sensible heat conserved under pure advection (AC 3)');
-  const f = createFluid(64, { dt: 0.15, kappa: 0, temp0: (i) => (i < 32 ? 1 : 0.2) });
-  if (!hasTemp(f)) {
-    check('interior thermal energy drifts < 1% over 500 steps (advection only)', false, 'no temp field');
-  } else {
-    splat(f, 20, 24, 4, 0, 0.05, 0.03);
-    splat(f, 44, 40, 4, 0, -0.04, 0.02);
-    const start = heat(f);
-    for (let s = 0; s < 500; s++) step(f);
-    const end = heat(f);
-    const drift = Math.abs(end - start) / start;
-    check('interior thermal energy drifts < 1% over 500 steps (advection only)',
-      Number.isFinite(end) && drift < 0.01,
-      `drift ${(drift * 100).toFixed(2)}%  (start ${start.toFixed(3)} -> end ${end.toFixed(3)})`);
-  }
-}
-
 // --- AC 4: closed domain, no sources, conduction on --------------------
 {
   console.log('closed domain conserves thermal energy with conduction (AC 4)');

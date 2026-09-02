@@ -168,14 +168,19 @@ const SHIPPED_N = 180;
 {
   console.log('determinism (AC 33)');
   const run = () => {
-    const f = createFluid(72, { dt: 0.18, fade: 0 });
+    // kappa + a temperature gradient so the advect-and-conduct temp path does
+    // real work and its determinism is actually exercised, not just u/v/dens.
+    const f = createFluid(72, {
+      dt: 0.18, fade: 0, kappa: 0.0002,
+      temp0: (i) => (i < 36 ? 1 : 0),
+    });
     splat(f, 18, 36, 3, 0.7, 0.05, 0.02);
     splat(f, 50, 20, 2, 0.4, -0.03, 0.05);
     for (let s = 0; s < 150; s++) step(f);
     return f;
   };
   const a = run(), b = run();
-  const fields = ['u', 'v', 'dens'];
+  const fields = ['u', 'v', 'dens', 'temp'];
   let identical = true;
   let firstDiff = '';
   for (const key of fields) {
@@ -188,7 +193,7 @@ const SHIPPED_N = 180;
       }
     }
   }
-  check('two identical runs produce bit-identical u/v/dens', identical, firstDiff);
+  check('two identical runs produce bit-identical u/v/dens/temp', identical, firstDiff);
 }
 
 // --- AC 34: a step stays under 16 ms at the shipped grid size ---------------
