@@ -1,4 +1,4 @@
-// Round 3 — Buoyancy (groundwork).
+// Round 3 — Buoyancy DIRECTION (corrective).
 //
 //   node test/buoyancy.js   (run via: npm test)
 //
@@ -8,49 +8,59 @@
 // rise. Both liquid and gas move by the single shared, solved velocity field;
 // buoyancy is a force added into THAT field, not a second momentum field.
 //
-// This round only proves the groundwork:
-//
-//   * AC 6 — a warm blob released into an otherwise uniform domain has its
-//     centre of mass move UP; a cold blob's centre of mass moves DOWN.
-//   * AC 7 — with uniform temperature and density everywhere, NO bulk motion
-//     develops from buoyancy alone (a flat field stays still, to floating point).
-//
-// Load-bearing here: the SIGN of the centre-of-mass movement (warm up, cold
-// down) and the near-zero velocity bound for a flat field. NOT load-bearing:
-// the exact buoyancy coefficient, the blob size/shape, or how far/fast the
-// blob actually moves. Assertions below are on direction and near-zero bounds.
+// Load-bearing here: warm rises, cold sinks, and a spatially uniform field
+// develops no motion at all. NOT load-bearing: the exact buoyancy coefficient,
+// the blob size/shape, the step count, or how far the blob travels. Assertions
+// below are on direction/sign and near-zero bounds.
 //
 // ------------------------------------------------------------------------
 // Grid orientation (how "up" was determined):
 //
 //   js/main.js render() writes interior row j (1..N) straight into image row
 //   (j-1) via putImageData, and canvas y increases DOWNWARD. So a larger j is
-//   lower on screen and a smaller j is higher. "Up" is the -j / -v direction.
-//   A warm blob rising therefore moves its centroid toward SMALLER j.
+//   lower on screen and a smaller j is higher. "Up" is the -j direction.
+//
+//   The solver's advect/advectScalar backtrace along +v toward LARGER j: a
+//   positive v transports fluid DOWNWARD on screen. So for warm fluid to RISE,
+//   the buoyancy force must push warm (temp > mean) cells toward NEGATIVE v.
+//
+// ------------------------------------------------------------------------
+// Why this is measured in the early-time regime:
+//
+//   The domain is a closed box. Once the plume reaches a wall the flow is
+//   dominated by the reflected return circulation, and the temperature-weighted
+//   centroid can sit on either side of its start depending on where in that
+//   sloshing cycle you sample — the net displacement after many steps is NOT a
+//   clean probe of force direction. In the first handful of steps, before the
+//   blob gets anywhere near a wall (verified: velocity in the rows adjacent to
+//   the top/bottom walls stays ~1e-3 through step 8, versus ~0.17 inside the
+//   blob), the only thing moving the blob is the buoyancy force, and its
+//   direction is unambiguous.
 //
 // ------------------------------------------------------------------------
 // Assumed API for the Green phase to implement to:
 //
 //   createFluid(N, { buoyancy, ... })
 //     * opts.buoyancy : scalar coefficient for the thermal buoyancy body
-//       force. Defaults to 0 (no buoyancy — current behaviour, all other
-//       tests unaffected).
+//       force. Defaults to 0 (no buoyancy — all other tests unaffected).
 //
 //   step(f), when buoyancy != 0, adds a vertical velocity contribution to the
 //   shared field f.v proportional to the LOCAL temperature deviation from the
-//   domain's mean interior temperature (equivalently a reference temp such
-//   that a uniform field has zero deviation everywhere):
+//   domain's mean interior temperature:
 //
-//       f.v[cell] += -buoyancy * (f.temp[cell] - meanInteriorTemp) * dt
+//       f.v[cell] -= buoyancy * (f.temp[cell] - meanInteriorTemp) * dt
 //
-//   with the sign such that WARMER-than-average fluid is pushed toward -v
-//   (up / smaller j) and COLDER-than-average toward +v (down / larger j).
-//   Because the force is a deviation, a spatially uniform temperature field
-//   produces exactly zero force in every cell -> zero bulk motion (AC 7).
+//   i.e. WARMER-than-average fluid is pushed toward -v (up / smaller j) and
+//   COLDER-than-average toward +v (down / larger j). Because the force is a
+//   deviation from the mean, a spatially uniform temperature field produces
+//   exactly zero force in every cell -> zero bulk motion (AC 7).
 //
-// These tests currently fail because no buoyancy force exists: opts.buoyancy
-// is ignored, so the warm/cold blobs never move and AC 6 fails on a centroid
-// that does not shift. (AC 7 passes trivially today and is a guard for Green.)
+// These tests currently FAIL because the sign in js/fluid.js buoyancyStep is
+// inverted (`v[k] += ...`): warm fluid is pushed down and cold fluid up. The
+// existing centroid checks happened to pass only by sampling net displacement
+// after the plume had bounced off a wall. Flipping the sign to `-=` makes the
+// early-time direction correct and turns these green. AC 7 is sign-independent
+// and guards against the force leaking in on a flat field.
 // ------------------------------------------------------------------------
 
 import { createFluid, step, hasNonFinite, IX } from '../js/fluid.js';
@@ -61,7 +71,7 @@ const check = (name, ok, detail = '') => {
   if (!ok) failures++;
 };
 
-// Weighted centroid row (j) of the interior, weight = w(temp).
+// Temperature-weighted centroid row (j) of the interior, weight = w(temp).
 const centroidY = (f, w) => {
   const { N, SIZE } = f;
   let m = 0, my = 0;
@@ -86,52 +96,89 @@ const maxSpeed = (f) => {
   return m;
 };
 
-const setBlob = (f, lo, hi, value) => {
-  for (let j = lo; j <= hi; j++) {
-    for (let i = lo; i <= hi; i++) f.temp[IX(f.SIZE, i, j)] = value;
+const LO = 25, HI = 39; // interior square blob on a 64-wide grid, centred (j = 32)
+
+const setBlob = (f, value) => {
+  for (let j = LO; j <= HI; j++) {
+    for (let i = LO; i <= HI; i++) f.temp[IX(f.SIZE, i, j)] = value;
   }
 };
 
-// --- AC 6: warm blob rises, cold blob sinks ------------------------------
-{
-  console.log('a warm blob\'s centre of mass moves up (AC 6)');
+// Mean vertical velocity over the blob's cells — the most direct probe of which
+// way the buoyancy body force points.
+const meanBlobV = (f) => {
+  let s = 0, n = 0;
+  for (let j = LO; j <= HI; j++) {
+    for (let i = LO; i <= HI; i++) { s += f.v[IX(f.SIZE, i, j)]; n++; }
+  }
+  return s / n;
+};
+
+// Max |v| in the two rows adjacent to each of the top/bottom walls — a guard
+// that we are still in the pre-reflection regime when we sample.
+const wallV = (f) => {
+  const { N, SIZE } = f;
+  let m = 0;
+  for (const j of [1, 2, N - 1, N]) {
+    for (let i = 1; i <= N; i++) m = Math.max(m, Math.abs(f.v[IX(SIZE, i, j)]));
+  }
+  return m;
+};
+
+// One buoyancy run: warm blob (background 0) or cold blob (background 1),
+// stepped STEPS times, returning start/end centroid and the blob velocity.
+const STEPS = 5; // verified pre-wall-reflection for the LO..HI blob: wallV ~6e-3 here
+const runBlob = ({ temp0, blob, weight }) => {
   const N = 64;
-  const f = createFluid(N, { dt: 0.15, kappa: 0, buoyancy: 0.6, temp0: 0 });
-  // Warm square on a cold (0) background, centred in the domain so it is free
-  // to move either way; only buoyancy can break the up/down symmetry.
-  setBlob(f, 25, 39, 1);
-  const startY = centroidY(f, (t) => t); // warm-weighted
-  for (let s = 0; s < 120; s++) step(f);
-  const endY = centroidY(f, (t) => t);
-  check('warm-weighted centroid moves up (smaller j)',
-    Number.isFinite(endY) && startY - endY > 0.5,
-    `centroid j ${startY.toFixed(2)} -> ${endY.toFixed(2)}`);
-  check('field stays finite', !hasNonFinite(f));
+  const f = createFluid(N, { dt: 0.15, kappa: 0, buoyancy: 0.6, temp0 });
+  setBlob(f, blob);
+  const startY = centroidY(f, weight);
+  for (let s = 0; s < STEPS; s++) step(f);
+  return {
+    f,
+    startY,
+    endY: centroidY(f, weight),
+    blobV: meanBlobV(f),
+    wallV: wallV(f),
+    finite: !hasNonFinite(f),
+  };
+};
+
+// --- AC 6: warm blob rises (early-time, pre-reflection) -----------------
+{
+  console.log('a warm blob rises before it reaches a wall (AC 6)');
+  const r = runBlob({ temp0: 0, blob: 1, weight: (t) => t });
+  check('still pre-wall-reflection at the sample point',
+    r.wallV < 0.02, `max |v| next to a wall = ${r.wallV.toExponential(2)}`);
+  check('warm-weighted centroid has moved UP (smaller j)',
+    r.finite && r.startY - r.endY > 0.5,
+    `centroid j ${r.startY.toFixed(2)} -> ${r.endY.toFixed(2)}`);
+  check('mean vertical velocity over the warm blob is negative (upward force)',
+    r.finite && r.blobV < -1e-3, `mean v over blob = ${r.blobV.toExponential(3)}`);
+  check('field stays finite', r.finite);
 }
 
+// --- AC 6: cold blob sinks (early-time, pre-reflection) ----------------
 {
-  console.log('a cold blob\'s centre of mass moves down (AC 6)');
-  const N = 64;
-  const f = createFluid(N, { dt: 0.15, kappa: 0, buoyancy: 0.6, temp0: 1 });
-  // Cold square on a warm (1) background.
-  setBlob(f, 25, 39, 0);
-  const coldWeight = (t) => 1 - t; // coldness-weighted centroid
-  const startY = centroidY(f, coldWeight);
-  for (let s = 0; s < 120; s++) step(f);
-  const endY = centroidY(f, coldWeight);
-  check('cold-weighted centroid moves down (larger j)',
-    Number.isFinite(endY) && endY - startY > 0.5,
-    `centroid j ${startY.toFixed(2)} -> ${endY.toFixed(2)}`);
-  check('field stays finite', !hasNonFinite(f));
+  console.log('a cold blob sinks before it reaches a wall (AC 6)');
+  const r = runBlob({ temp0: 1, blob: 0, weight: (t) => 1 - t });
+  check('still pre-wall-reflection at the sample point',
+    r.wallV < 0.02, `max |v| next to a wall = ${r.wallV.toExponential(2)}`);
+  check('cold-weighted centroid has moved DOWN (larger j)',
+    r.finite && r.endY - r.startY > 0.5,
+    `centroid j ${r.startY.toFixed(2)} -> ${r.endY.toFixed(2)}`);
+  check('mean vertical velocity over the cold blob is positive (downward force)',
+    r.finite && r.blobV > 1e-3, `mean v over blob = ${r.blobV.toExponential(3)}`);
+  check('field stays finite', r.finite);
 }
 
-// --- AC 7: flat field -> no bulk motion from buoyancy --------------------
+// --- AC 7: flat field -> no bulk motion from buoyancy ------------------
 {
   console.log('uniform temperature and density -> no bulk motion (AC 7)');
   const N = 48;
   const f = createFluid(N, { dt: 0.15, kappa: 0, buoyancy: 0.6, temp0: 0.7 });
-  // Uniform temperature everywhere, no density gradient, no kick. Buoyancy is
-  // a deviation force, so every cell's force must be exactly zero.
+  // Uniform temperature everywhere, no density gradient, no kick. Buoyancy is a
+  // deviation force, so every cell's force must be exactly zero.
   for (let s = 0; s < 200; s++) step(f);
   check('no velocity develops from a flat field',
     !hasNonFinite(f) && maxSpeed(f) < 1e-9,
