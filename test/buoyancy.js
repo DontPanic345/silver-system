@@ -55,12 +55,11 @@
 //   deviation from the mean, a spatially uniform temperature field produces
 //   exactly zero force in every cell -> zero bulk motion (AC 7).
 //
-// These tests currently FAIL because the sign in js/fluid.js buoyancyStep is
-// inverted (`v[k] += ...`): warm fluid is pushed down and cold fluid up. The
-// existing centroid checks happened to pass only by sampling net displacement
-// after the plume had bounced off a wall. Flipping the sign to `-=` makes the
-// early-time direction correct and turns these green. AC 7 is sign-independent
-// and guards against the force leaking in on a flat field.
+// History: buoyancyStep once had this sign inverted (`v[k] += ...`), pushing warm
+// fluid down. A net-displacement test after 120 steps missed it — it passed off a
+// wall-bounce rebound. These early-time direction checks are the guard against a
+// re-inversion; AC 7 is sign-independent and guards against the force leaking in
+// on a flat field.
 // ------------------------------------------------------------------------
 
 import { createFluid, step, hasNonFinite, IX } from '../js/fluid.js';
@@ -144,33 +143,32 @@ const runBlob = ({ temp0, blob, weight }) => {
   };
 };
 
-// --- AC 6: warm blob rises (early-time, pre-reflection) -----------------
-{
-  console.log('a warm blob rises before it reaches a wall (AC 6)');
-  const r = runBlob({ temp0: 0, blob: 1, weight: (t) => t });
+// --- AC 6: warm rises / cold sinks (early-time, pre-reflection) ---------
+// One directional case. `dir` is the sign of "the way this blob should travel"
+// in j (down = +1, up = -1): a warm blob in cold background should go up, a cold
+// blob in warm background down. Both the centroid transport and the mean blob
+// velocity must carry that sign.
+const directionCase = ({ title, temp0, blob, weight, dir }) => {
+  console.log(title);
+  const r = runBlob({ temp0, blob, weight });
   check('still pre-wall-reflection at the sample point',
     r.wallV < 0.02, `max |v| next to a wall = ${r.wallV.toExponential(2)}`);
-  check('warm-weighted centroid has moved UP (smaller j)',
-    r.finite && r.startY - r.endY > 0.5,
+  check(`temperature-weighted centroid moved ${dir > 0 ? 'DOWN (larger j)' : 'UP (smaller j)'}`,
+    r.finite && dir * (r.endY - r.startY) > 0.5,
     `centroid j ${r.startY.toFixed(2)} -> ${r.endY.toFixed(2)}`);
-  check('mean vertical velocity over the warm blob is negative (upward force)',
-    r.finite && r.blobV < -1e-3, `mean v over blob = ${r.blobV.toExponential(3)}`);
+  check(`mean vertical velocity over the blob is ${dir > 0 ? 'positive (downward force)' : 'negative (upward force)'}`,
+    r.finite && dir * r.blobV > 1e-3, `mean v over blob = ${r.blobV.toExponential(3)}`);
   check('field stays finite', r.finite);
-}
+};
 
-// --- AC 6: cold blob sinks (early-time, pre-reflection) ----------------
-{
-  console.log('a cold blob sinks before it reaches a wall (AC 6)');
-  const r = runBlob({ temp0: 1, blob: 0, weight: (t) => 1 - t });
-  check('still pre-wall-reflection at the sample point',
-    r.wallV < 0.02, `max |v| next to a wall = ${r.wallV.toExponential(2)}`);
-  check('cold-weighted centroid has moved DOWN (larger j)',
-    r.finite && r.endY - r.startY > 0.5,
-    `centroid j ${r.startY.toFixed(2)} -> ${r.endY.toFixed(2)}`);
-  check('mean vertical velocity over the cold blob is positive (downward force)',
-    r.finite && r.blobV > 1e-3, `mean v over blob = ${r.blobV.toExponential(3)}`);
-  check('field stays finite', r.finite);
-}
+directionCase({
+  title: 'a warm blob rises before it reaches a wall (AC 6)',
+  temp0: 0, blob: 1, weight: (t) => t, dir: -1,
+});
+directionCase({
+  title: 'a cold blob sinks before it reaches a wall (AC 6)',
+  temp0: 1, blob: 0, weight: (t) => 1 - t, dir: +1,
+});
 
 // --- AC 7: flat field -> no bulk motion from buoyancy ------------------
 {

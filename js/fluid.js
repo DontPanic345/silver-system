@@ -318,6 +318,12 @@ const buoyancyStep = (f) => {
   for (let j = 1; j <= N; j++) {
     for (let i = 1; i <= N; i++) {
       const k = ix(SIZE, i, j);
+      // `-=`, not `+=`: advect() backtraces along +v toward LARGER j, and larger
+      // j renders LOWER on screen (js/main.js maps interior row j to canvas row
+      // j-1, canvas y down). So warm fluid (temp > mean) must be driven to
+      // negative v to rise. Getting this sign backwards once passed the old
+      // net-displacement test by a wall-bounce fluke — hence the direct
+      // early-time direction checks in test/buoyancy.js.
       v[k] -= buoyancy * (temp[k] - mean) * dt;
     }
   }
