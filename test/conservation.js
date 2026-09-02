@@ -180,6 +180,8 @@ const SHIPPED_N = 96;
       dt: 0.18, fade: 0, kappa: 0.0002,
       temp0: (i) => (i < 36 ? 120 : 0),
       // round 6: the water mixture + phase change must be deterministic too.
+      // round 7: the composition body forces (gravity + vapourBuoyancy) too.
+      gravity: 0.5, vapourBuoyancy: 0.5,
       boilTemp: 100, condenseTemp: 100, latentHeat: 3,
       water0: (i, j) => (j > 40 ? { liquid: 1, vapour: 0 } : { liquid: 0, vapour: 0 }),
     });
@@ -215,6 +217,7 @@ const SHIPPED_N = 96;
   const N = SHIPPED_N;
   const f = createFluid(N, {
     dt: 0.12, fade: 0, kappa: 0.05, buoyancy: 0.15,
+    gravity: 0.6, vapourBuoyancy: 0.6,
     boilTemp: 100, condenseTemp: 100, latentHeat: 3,
     temp0: (i, j) => (j > N * 0.6 ? 150 : 30),
     water0: (i, j) => (j > N * 0.6 ? { liquid: 1, vapour: 0 } : { liquid: 0, vapour: 0 }),

@@ -25,6 +25,8 @@ export const createFluid = (N, opts = {}) => {
     kappa: opts.kappa ?? 0, // thermal diffusivity for conduction (temp channel)
     fade: opts.fade ?? 0, // fraction of dye removed each step (0 = conserve)
     buoyancy: opts.buoyancy ?? 0, // thermal buoyancy coefficient (0 = off)
+    gravity: opts.gravity ?? 0, // liquid-fraction body force, deviation-form (0 = off)
+    vapourBuoyancy: opts.vapourBuoyancy ?? 0, // vapour-fraction body force, deviation-form (0 = off)
     u: cell(), v: cell(), uPrev: cell(), vPrev: cell(),
     dens: cell(), densPrev: cell(),
     temp: cell(), tempPrev: cell(), // temperature field + in-place-swapped scratch
@@ -492,8 +494,43 @@ const buoyancyStep = (f) => {
   setBnd(f, 2, v);
 };
 
+// Composition body forces on the shared vertical velocity field, deviation-form
+// exactly like buoyancyStep so a spatially uniform mixture produces zero net
+// force in every cell (AC 7). Injected before velStep so the pressure solve
+// keeps the field divergence-free.
+//
+//   gravity        : a cell with more LIQUID than the interior mean is pushed
+//                    toward +v (down on screen).  v[k] += gravity*(liquid-mean)*dt
+//   vapourBuoyancy : a cell with more VAPOUR than the interior mean is pushed
+//                    toward -v (up).  v[k] -= vapourBuoyancy*(vapour-mean)*dt
+//
+// vapourBuoyancy keys off the vapour fraction ONLY — vapour rises because it is
+// vapour, not because it is warm.
+const settleStep = (f) => {
+  const { N, SIZE, gravity, vapourBuoyancy, dt, liquid, vapour, v } = f;
+  let sumL = 0, sumV = 0;
+  for (let j = 1; j <= N; j++) {
+    for (let i = 1; i <= N; i++) {
+      const k = ix(SIZE, i, j);
+      sumL += liquid[k];
+      sumV += vapour[k];
+    }
+  }
+  const meanL = sumL / (N * N);
+  const meanV = sumV / (N * N);
+  for (let j = 1; j <= N; j++) {
+    for (let i = 1; i <= N; i++) {
+      const k = ix(SIZE, i, j);
+      v[k] += gravity * (liquid[k] - meanL) * dt
+            - vapourBuoyancy * (vapour[k] - meanV) * dt;
+    }
+  }
+  setBnd(f, 2, v);
+};
+
 export const step = (f) => {
   if (f.buoyancy !== 0) buoyancyStep(f);
+  if (f.gravity !== 0 || f.vapourBuoyancy !== 0) settleStep(f);
   velStep(f);
   densStep(f);
   tempStep(f);

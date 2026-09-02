@@ -66,6 +66,21 @@ export function runAllScenarios() {
 const tempComJ = (f, background) =>
   weightedCentroid(f, f.temp, { axis: 'j', weight: (t) => Math.max(0, t - background) });
 
+// vertical centre of mass of a phase fraction (interior, 1-indexed rows).
+const phaseComJ = (f, arr) => weightedCentroid(f, arr, { axis: 'j' });
+
+// peak flow speed over the interior.
+const peakSpeed = (f) => {
+  const { N, SIZE } = f;
+  let m = 0;
+  for (let j = 1; j <= N; j++) for (let i = 1; i <= N; i++) {
+    const k = IX(SIZE, i, j);
+    const s = Math.hypot(f.u[k], f.v[k]);
+    if (s > m) m = s;
+  }
+  return m;
+};
+
 // --- scenarios ---------------------------------------------------------------
 
 const PLUME_BG = 0;
@@ -231,6 +246,170 @@ export const scenarios = [
         check({ history, sim }) {
           const ok = history.every((h) => h.finite) && !hasNonFinite(sim);
           return { pass: ok, detail: ok ? '' : 'non-finite value appeared' };
+        },
+      },
+    ],
+  },
+
+  {
+    id: 'rain-falls',
+    name: 'Rain falls',
+    description: 'A slab of liquid water suspended high in a gas box falls under gravity and collects below.',
+    gridSize: 56,
+    steps: 160,
+    opts: {
+      dt: 0.12,
+      buoyancy: 0,
+      gravity: 0.6,
+      vapourBuoyancy: 0,
+      phaseChange: false,
+      capacity: 1,
+      temp0: 20,
+      water0: (i, j) => (j >= 5 && j <= 12 ? { liquid: 1, vapour: 0 } : { liquid: 0, vapour: 0 }),
+    },
+    entities: [],
+    record(f) {
+      return {
+        comJ: phaseComJ(f, f.liquid),
+        water: interiorSum(f, f.liquid) + interiorSum(f, f.vapour),
+        finite: !hasNonFinite(f),
+      };
+    },
+    assertions: [
+      {
+        name: 'liquid centre of mass moves downward (larger j) over the run',
+        check({ history }) {
+          const start = history[0].comJ;
+          const end = history[history.length - 1].comJ;
+          return { pass: end > start + 3, detail: `comJ ${start.toFixed(2)} -> ${end.toFixed(2)}` };
+        },
+      },
+      {
+        name: 'total water is conserved within 1% as it falls',
+        check({ history }) {
+          const w0 = history[0].water;
+          const worst = Math.max(...history.map((h) => Math.abs(h.water - w0) / Math.abs(w0)));
+          return { pass: worst < 0.01, detail: `worst water drift ${(worst * 100).toFixed(3)}%` };
+        },
+      },
+      {
+        name: 'field stays finite throughout the fall',
+        check({ history, sim }) {
+          const ok = history.every((h) => h.finite) && !hasNonFinite(sim);
+          return { pass: ok, detail: ok ? '' : 'non-finite value appeared' };
+        },
+      },
+    ],
+  },
+
+  {
+    id: 'vapour-rises',
+    name: 'Vapour rises',
+    description: 'A pocket of vapour low in an air box rises on the composition buoyancy force alone — no heat.',
+    gridSize: 56,
+    steps: 160,
+    opts: {
+      dt: 0.12,
+      buoyancy: 0,
+      vapourBuoyancy: 0.6,
+      gravity: 0.6,
+      phaseChange: false,
+      capacity: 1,
+      temp0: 20,
+      water0: (i, j) => (j >= 44 && j <= 51 ? { liquid: 0, vapour: 0.4 } : { liquid: 0, vapour: 0 }),
+    },
+    entities: [],
+    record(f) {
+      const r = interiorRange(f, f.temp);
+      return {
+        comJ: phaseComJ(f, f.vapour),
+        vapour: interiorSum(f, f.vapour),
+        tempSpread: r.hi - r.lo,
+        finite: !hasNonFinite(f),
+      };
+    },
+    assertions: [
+      {
+        name: 'vapour centre of mass moves upward (smaller j) over the run',
+        check({ history }) {
+          const start = history[0].comJ;
+          const end = history[history.length - 1].comJ;
+          return { pass: end < start - 3, detail: `comJ ${start.toFixed(2)} -> ${end.toFixed(2)}` };
+        },
+      },
+      {
+        name: 'no heat is applied — interior temperature stays uniform (rise is composition-driven)',
+        check({ history, scenario }) {
+          const worst = Math.max(...history.map((h) => h.tempSpread));
+          const noHeat = !scenario.opts.heat && !scenario.opts.buoyancy;
+          return { pass: noHeat && worst < 1e-6, detail: `worst temp spread ${worst.toExponential(2)}` };
+        },
+      },
+      {
+        name: 'total vapour is conserved within 0.5% while it rises',
+        check({ history }) {
+          const v0 = history[0].vapour;
+          const worst = Math.max(...history.map((h) => Math.abs(h.vapour - v0) / Math.abs(v0)));
+          return { pass: worst < 0.005, detail: `worst vapour drift ${(worst * 100).toFixed(3)}%` };
+        },
+      },
+    ],
+  },
+
+  {
+    id: 'still-pool',
+    name: 'Still pool',
+    description: 'A flat-bottomed pool of liquid at rest under gravity stays flat and still over a long run.',
+    gridSize: 56,
+    steps: 500,
+    opts: {
+      dt: 0.12,
+      buoyancy: 0,
+      gravity: 0.6,
+      vapourBuoyancy: 0.6,
+      phaseChange: false,
+      capacity: 1,
+      temp0: 20,
+      water0: (i, j) => (j >= 38 ? { liquid: 1, vapour: 0 } : { liquid: 0, vapour: 0 }),
+    },
+    entities: [],
+    record(f) {
+      return {
+        liquid: interiorSum(f, f.liquid),
+        comJ: phaseComJ(f, f.liquid),
+        speed: peakSpeed(f),
+        finite: !hasNonFinite(f),
+      };
+    },
+    assertions: [
+      {
+        name: 'total liquid stays constant within 0.5% over 500 steps (no creep)',
+        check({ history }) {
+          const l0 = history[0].liquid;
+          const worst = Math.max(...history.map((h) => Math.abs(h.liquid - l0) / Math.abs(l0)));
+          const finite = history.every((h) => h.finite);
+          return { pass: finite && worst < 0.005, detail: `worst liquid drift ${(worst * 100).toFixed(3)}%` };
+        },
+      },
+      {
+        name: 'liquid centre of mass stays stationary within one cell',
+        check({ history }) {
+          const c0 = history[0].comJ;
+          const worst = Math.max(...history.map((h) => Math.abs(h.comJ - c0)));
+          return { pass: worst < 1.0, detail: `worst centroid shift ${worst.toFixed(3)} cells` };
+        },
+      },
+      {
+        name: 'peak speed stays bounded and does not grow over the run',
+        check({ history }) {
+          const speeds = history.map((h) => h.speed);
+          const peak = Math.max(...speeds);
+          const early = Math.max(...speeds.slice(20, 120));
+          const late = Math.max(...speeds.slice(400));
+          return {
+            pass: Number.isFinite(peak) && peak < 0.05 && late <= early * 1.2 + 1e-6,
+            detail: `peak ${peak.toExponential(2)}  early ${early.toExponential(2)} -> late ${late.toExponential(2)}`,
+          };
         },
       },
     ],
