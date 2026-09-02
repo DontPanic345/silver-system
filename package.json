@@ -1,0 +1,9 @@
+{
+  "name": "silver-system",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node test/fluid-probe.js",
+    "shot": "node scripts/shot.js"
+  }
+}
