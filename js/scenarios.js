@@ -14,6 +14,7 @@
 // then evaluates every assertion. ctx = { sim, history, scenario }.
 
 import { createFluid, step, IX, hasNonFinite } from './fluid.js';
+import { interiorSum, interiorRange, weightedCentroid } from './measure.js';
 
 // --- shared runner -------------------------------------------------------------
 
@@ -60,36 +61,10 @@ export function runAllScenarios() {
 
 // --- helpers ------------------------------------------------------------------
 
-const interiorSum = (f, arr) => {
-  const { N, SIZE } = f;
-  let s = 0;
-  for (let j = 1; j <= N; j++) for (let i = 1; i <= N; i++) s += arr[IX(SIZE, i, j)];
-  return s;
-};
-
-const interiorRange = (f, arr) => {
-  const { N, SIZE } = f;
-  let lo = Infinity, hi = -Infinity;
-  for (let j = 1; j <= N; j++) for (let i = 1; i <= N; i++) {
-    const v = arr[IX(SIZE, i, j)];
-    if (v < lo) lo = v;
-    if (v > hi) hi = v;
-  }
-  return { lo, hi };
-};
-
 // temperature-weighted vertical centre of mass (interior, 1-indexed rows).
 // Weight is (temp - background) so a uniform field contributes nothing.
-const tempComJ = (f, background) => {
-  const { N, SIZE } = f;
-  let wsum = 0, jsum = 0;
-  for (let j = 1; j <= N; j++) for (let i = 1; i <= N; i++) {
-    const w = Math.max(0, f.temp[IX(SIZE, i, j)] - background);
-    wsum += w;
-    jsum += w * j;
-  }
-  return wsum > 0 ? jsum / wsum : (N + 1) / 2;
-};
+const tempComJ = (f, background) =>
+  weightedCentroid(f, f.temp, { axis: 'j', weight: (t) => Math.max(0, t - background) });
 
 // --- scenarios ---------------------------------------------------------------
 
@@ -153,6 +128,17 @@ export const scenarios = [
     steps: 40,
     opts: {
       kappa: 0.1,
+      // iter: Jacobi sweeps per implicit solve (solver default 24). Bumped to 100
+      // here purely for CONVERGENCE QUALITY, not to change the physics. The
+      // implicit conduction path (diffuse -> linSolve, Jacobi) conserves the
+      // interior sum exactly only at convergence; truncated early it leaks, and
+      // at this round's strong kappa (0.1) over a one-cell hot/cold step the
+      // energy-drift assertion below sits at ~2.3% at iter 24 vs ~0.1% at iter
+      // 100. This is a scenario working around a solver limitation. FORWARD NOTE:
+      // the Jacobi conduction solve should be made conservative BY CONSTRUCTION
+      // in a later round (flux-form update, or solve-then-rescale) so scenarios
+      // need not crank iter. See test/temperature.js AC 4 for the same latent
+      // brittleness at a gentler kappa.
       iter: 100,
       buoyancy: 0,
       temp0: (i) => (i <= HC_SPLIT ? HC_HOT : HC_COLD),

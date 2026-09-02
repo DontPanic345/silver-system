@@ -63,6 +63,7 @@
 // ------------------------------------------------------------------------
 
 import { createFluid, step, hasNonFinite, IX } from '../js/fluid.js';
+import { weightedCentroid } from '../js/measure.js';
 
 let failures = 0;
 const check = (name, ok, detail = '') => {
@@ -71,17 +72,7 @@ const check = (name, ok, detail = '') => {
 };
 
 // Temperature-weighted centroid row (j) of the interior, weight = w(temp).
-const centroidY = (f, w) => {
-  const { N, SIZE } = f;
-  let m = 0, my = 0;
-  for (let j = 1; j <= N; j++) {
-    for (let i = 1; i <= N; i++) {
-      const wt = w(f.temp[IX(SIZE, i, j)]);
-      m += wt; my += wt * j;
-    }
-  }
-  return my / m;
-};
+const centroidY = (f, w) => weightedCentroid(f, f.temp, { axis: 'j', weight: w });
 
 const maxSpeed = (f) => {
   const { N, SIZE } = f;

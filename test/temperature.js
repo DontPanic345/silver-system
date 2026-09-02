@@ -44,6 +44,7 @@
 // ------------------------------------------------------------------------
 
 import { createFluid, step, splat, hasNonFinite, IX } from '../js/fluid.js';
+import { interiorSum, interiorRange, weightedCentroid } from '../js/measure.js';
 
 let failures = 0;
 const check = (name, ok, detail = '') => {
@@ -53,41 +54,11 @@ const check = (name, ok, detail = '') => {
 
 const hasTemp = (f) => f.temp instanceof Float32Array && f.temp.length === f.SIZE * f.SIZE;
 
-// --- interior reductions over f.temp --------------------------------------
-const heat = (f) => {
-  const { N, SIZE } = f;
-  let sum = 0;
-  for (let j = 1; j <= N; j++) {
-    for (let i = 1; i <= N; i++) sum += f.temp[IX(SIZE, i, j)];
-  }
-  return sum;
-};
-
-const tempRange = (f) => {
-  const { N, SIZE } = f;
-  let lo = Infinity, hi = -Infinity;
-  for (let j = 1; j <= N; j++) {
-    for (let i = 1; i <= N; i++) {
-      const v = f.temp[IX(SIZE, i, j)];
-      if (v < lo) lo = v;
-      if (v > hi) hi = v;
-    }
-  }
-  return { lo, hi };
-};
-
+// --- interior reductions over f.temp (shared metrics, see js/measure.js) ----
+const heat = (f) => interiorSum(f, f.temp);
+const tempRange = (f) => interiorRange(f, f.temp);
 // Temperature-weighted centroid column of the interior (for "rides the flow").
-const centroidX = (f) => {
-  const { N, SIZE } = f;
-  let m = 0, mx = 0;
-  for (let j = 1; j <= N; j++) {
-    for (let i = 1; i <= N; i++) {
-      const w = f.temp[IX(SIZE, i, j)];
-      m += w; mx += w * i;
-    }
-  }
-  return mx / m;
-};
+const centroidX = (f) => weightedCentroid(f, f.temp, { axis: 'i' });
 
 // --- AC 3: temperature is carried by the flow -----------------------------
 {

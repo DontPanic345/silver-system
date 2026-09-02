@@ -106,16 +106,25 @@ check('js/scenarios.js exists and imports under plain node',
 // AC 9 — DOM-free / import-safe. Importing above already ran with no window or
 // document defined (this is plain node); a scenario module that reached for the
 // DOM at import time would have thrown. Also scan the source for DOM globals so
-// a lazily-referenced `document`/`window` can't slip through.
+// a lazily-referenced `document`/`window` can't slip through — across the whole
+// non-solver dependency chain the round-5 page pulls in via scenarios.js
+// (scenarios.js + js/measure.js; js/fluid.js is separately covered).
 {
-  let src = null;
-  try { src = readFileSync(modPath, 'utf8'); } catch { /* covered above */ }
-  if (src == null) {
-    check('js/scenarios.js source is DOM-free (no window/document/localStorage)', false, 'source unreadable');
-  } else {
-    const domHit = src.match(/\b(document|window|localStorage|navigator|HTMLElement|requestAnimationFrame)\b/);
-    check('js/scenarios.js source is DOM-free (no window/document/localStorage)',
-      domHit == null, domHit ? `references ${domHit[1]}` : '');
+  const domRe = /\b(document|window|localStorage|navigator|HTMLElement|requestAnimationFrame)\b/;
+  const domFreeSources = [
+    ['js/scenarios.js', modPath],
+    ['js/measure.js', join(here, '..', 'js', 'measure.js')],
+  ];
+  for (const [label, path] of domFreeSources) {
+    let src = null;
+    try { src = readFileSync(path, 'utf8'); } catch { /* missing file covered elsewhere */ }
+    if (src == null) {
+      check(`${label} source is DOM-free (no window/document/localStorage)`, false, 'source unreadable');
+    } else {
+      const domHit = src.match(domRe);
+      check(`${label} source is DOM-free (no window/document/localStorage)`,
+        domHit == null, domHit ? `references ${domHit[1]}` : '');
+    }
   }
   check('importing js/scenarios.js does not require a DOM', loadErr == null);
 }
