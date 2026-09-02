@@ -28,11 +28,12 @@ export const createFluid = (N, opts = {}) => {
     u: cell(), v: cell(), uPrev: cell(), vPrev: cell(),
     dens: cell(), densPrev: cell(),
     temp: cell(), tempPrev: cell(), // temperature field + in-place-swapped scratch
-    // Water mixture: three phase fractions per cell that sum to `capacity`. All
-    // three ride the shared (u, v) flow with the same conservative MUSCL scheme
-    // as dens/temp; `air` is explicit so vapour displaces it rather than
-    // appearing from nowhere. There is ONE velocity field — no momentum or
-    // settling fields this round.
+    // Water mixture: three phase fractions per cell that sum to `capacity`.
+    // liquid and vapour ride the shared (u, v) flow with the same conservative
+    // MUSCL scheme as dens/temp; `air` is the tracked slack phase (capacity
+    // minus the water), so vapour displaces it rather than appearing from
+    // nowhere. There is ONE velocity field — no momentum or settling fields this
+    // round. (`airPrev` is kept for symmetry / a future round that advects air.)
     liquid: cell(), liquidPrev: cell(),
     vapour: cell(), vapourPrev: cell(),
     air: cell(), airPrev: cell(),
@@ -277,6 +278,16 @@ const advectScalar = (f, d, d0, velU, velV) => {
   setBnd(f, 0, d);
 };
 
+// Swap a scalar field with its in-place `*Prev` scratch, then advect it through
+// the shared (u, v) flow with the conservative MUSCL scheme. This is the shape
+// every rideable scalar shares — temp and the water fractions use it directly;
+// dens runs a diffuse pass first and then calls in here.
+const advectField = (f, name) => {
+  const prev = name + 'Prev';
+  [f[name], f[prev]] = [f[prev], f[name]];
+  advectScalar(f, f[name], f[prev], f.u, f.v);
+};
+
 const project = (f, velU, velV, p, divg) => {
   const { N, SIZE } = f;
   const h = 1 / N;
@@ -319,26 +330,21 @@ const velStep = (f) => {
 const densStep = (f) => {
   [f.dens, f.densPrev] = [f.densPrev, f.dens];
   diffuse(f, 0, f.dens, f.densPrev, f.diff);
-  [f.dens, f.densPrev] = [f.densPrev, f.dens];
-  advectScalar(f, f.dens, f.densPrev, f.u, f.v);
+  advectField(f, 'dens');
   if (f.fade > 0) {
     const keep = 1 - f.fade;
     for (let i = 0; i < f.dens.length; i++) f.dens[i] *= keep;
   }
 };
 
-// Temperature rides the flow with the same conservative MUSCL scheme as the dye
-// (closed box conserves the interior sum to ~machine precision), then conducts
-// between neighbours via the implicit Jacobi solve. Walls are insulating:
-// setBnd with b = 0 is zero-gradient, so no heat flux crosses the boundary.
-// Flux-form explicit conduction: each step is a convex combination of a cell and
-// its four neighbours (sub-stepped so the mixing weight stays <= 1/4), with
-// insulating zero-gradient walls carrying no flux. Conservative AND monotone BY
+// Flux-form explicit conduction between neighbours. Each sub-step is a convex
+// combination of a cell and its four neighbours (sub-stepped so the mixing
+// weight `as` stays <= 1/4), with insulating zero-gradient walls (setBnd b = 0)
+// carrying no heat flux across the boundary. Conservative AND monotone BY
 // CONSTRUCTION — the interior thermal-energy sum is preserved to machine
-// precision at any iteration count, and no cell ever leaves the local data
-// range. This replaces the truncated implicit Jacobi solve, which only
-// conserved at convergence (~2% drift at the default iter) and forced scenarios
-// to crank `iter`.
+// precision at any `iter`, and no cell ever leaves the local data range. This
+// replaced a truncated implicit Jacobi solve that only conserved at convergence
+// (~2% drift at the default iter) and forced scenarios to crank `iter`.
 const conduct = (f) => {
   const { N, SIZE, kappa, dt, temp, tmp } = f;
   const a = kappa * dt * N * N;
@@ -362,8 +368,7 @@ const conduct = (f) => {
 };
 
 const tempStep = (f) => {
-  [f.temp, f.tempPrev] = [f.tempPrev, f.temp];
-  advectScalar(f, f.temp, f.tempPrev, f.u, f.v);
+  advectField(f, 'temp');
   conduct(f);
   if (f.heat) {
     const { N, SIZE } = f;
@@ -374,11 +379,10 @@ const tempStep = (f) => {
   }
 };
 
-// Advect the three phase fractions through the shared flow, then renormalise
-// each interior cell back to `capacity`. Skipped entirely when there is no water
-// anywhere (keeps the dry-air fast path cheap). Air is advected like the others
-// so a uniform mixture stays uniform; the renormalise only mops up the sub-milli
-// splitting error.
+// Advect the conserved water fractions (liquid, vapour) through the shared flow,
+// then set air as the slack phase so every interior cell sums back to
+// `capacity`. Skipped entirely when there is no water anywhere (keeps the
+// dry-air fast path cheap).
 const waterStep = (f) => {
   const { N, SIZE, capacity } = f;
   let anyWater = false;
@@ -390,21 +394,21 @@ const waterStep = (f) => {
   }
   if (!anyWater) return;
 
-  [f.liquid, f.liquidPrev] = [f.liquidPrev, f.liquid];
-  advectScalar(f, f.liquid, f.liquidPrev, f.u, f.v);
-  [f.vapour, f.vapourPrev] = [f.vapourPrev, f.vapour];
-  advectScalar(f, f.vapour, f.vapourPrev, f.u, f.v);
-  [f.air, f.airPrev] = [f.airPrev, f.air];
-  advectScalar(f, f.air, f.airPrev, f.u, f.v);
+  advectField(f, 'liquid');
+  advectField(f, 'vapour');
 
-  // Renormalise each interior cell back to `capacity` by making AIR the slack
-  // phase: air = capacity - (liquid + vapour). This keeps liquid + vapour — the
-  // conserved water total — EXACTLY as the conservative advection produced it,
-  // and l + v + air == capacity holds by construction. With one shared
-  // incompressible velocity field and no boiling divergence source (round 7),
-  // a cell can transiently pack in more water than fits during vigorous boiling;
-  // air then goes slightly negative rather than water being invented or
-  // destroyed. It is a tracked, unrendered field — the visible water is right.
+  // Air is the SLACK phase: air = capacity - (liquid + vapour) in every interior
+  // cell. This keeps liquid + vapour — the conserved water total — EXACTLY as the
+  // conservative advection produced it, and l + v + air == capacity holds by
+  // construction. Air is never advected in its own right: its value is a pure
+  // function of the water fractions, so advecting it would be dead work that the
+  // slack assignment immediately overwrites.
+  //
+  // With one shared incompressible velocity field and no boiling divergence
+  // source (round 7), a cell can transiently pack in more water than fits during
+  // vigorous boiling; air then goes slightly negative rather than water being
+  // invented or destroyed. It is a tracked, unrendered field — the visible water
+  // is right.
   for (let j = 1; j <= N; j++) {
     for (let i = 1; i <= N; i++) {
       const k = ix(SIZE, i, j);

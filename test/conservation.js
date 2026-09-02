@@ -51,12 +51,12 @@ const scalarRange = (f) => {
 };
 
 // The grid size the sim ships at, kept honest by AC 34's probe below. Dropped
-// from 180 -> 112 in round 6: the water mixture adds three more conservatively-
-// advected fields (liquid / vapour / air), each sub-cycled and range-limited
-// like the dye, roughly tripling scalar-transport cost. At 112² a vigorously
-// boiling, buoyancy-driven step measures ~8-9 ms with comfortable margin;
-// 104² already runs ~13 ms and 128² pushes well past 16. Matches the sandbox
-// grid in js/main.js.
+// from 180 -> 96 in round 6: the water mixture adds two more conservatively-
+// advected fields (liquid / vapour), each sub-cycled and range-limited like the
+// dye, so a vigorously boiling, buoyancy-driven step does ~3x the scalar-
+// transport work of a dry one. At 96² that step measures well under 16 ms with
+// comfortable margin; larger grids push past the budget. Matches the sandbox
+// grid (SANDBOX_GRID) in js/main.js.
 const SHIPPED_N = 96;
 
 // --- AC 1: closed box, no sources/sinks, scalar total barely drifts ---------
@@ -210,8 +210,8 @@ const SHIPPED_N = 96;
   console.log('performance (AC 34)');
   console.log(`  shipped grid size: N = ${SHIPPED_N}`);
   // Exercise the full round-6 cost: a boiling, buoyancy-driven water mixture, so
-  // the three extra advected phase fields and the phase-change pass are all in
-  // the measured step (a dry step is ~40% of this).
+  // the two extra advected phase fields (liquid, vapour) and the phase-change
+  // pass are all in the measured step (a dry step is ~40% of this).
   const N = SHIPPED_N;
   const f = createFluid(N, {
     dt: 0.12, fade: 0, kappa: 0.05, buoyancy: 0.15,
