@@ -3,23 +3,31 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Stable Fluids</title>
+  <title>Stable Fluids — Scenarios</title>
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
   <main>
-    <h1>Stable Fluids</h1>
-    <p class="hint">Click and drag on the canvas to push dye through the fluid.</p>
+    <h1>Stable Fluids — Scenarios</h1>
+    <p class="hint">Pick a scenario and press Play. Switch to Sandbox to paint fields freely.</p>
     <canvas id="sim" width="720" height="720"></canvas>
     <div class="controls">
-      <button id="pause">Pause</button>
-      <button id="clear">Clear</button>
-      <label>Viscosity <input id="visc" type="range" min="0" max="100" value="0"></label>
-      <label>Diffusion <input id="diff" type="range" min="0" max="100" value="0"></label>
-      <label>Fade <input id="fade" type="range" min="0" max="100" value="8"></label>
-      <label><input id="vectors" type="checkbox"> velocity field</label>
+      <label>Scenario
+        <select id="scenario-select"></select>
+      </label>
+      <button id="play">Play</button>
+      <button id="step">Step</button>
+      <button id="reset">Reset</button>
+      <label><input id="sandbox" type="checkbox"> sandbox</label>
     </div>
-    <p class="stats"><span id="fps">–</span> fps · <span id="grid">–</span> grid · <span id="step">–</span> ms/step</p>
+    <div class="controls" id="sandbox-panel" hidden>
+      <label>Paint
+        <select id="paint-channel"></select>
+      </label>
+      <span class="hint">click / drag on the canvas</span>
+    </div>
+    <div class="controls" id="readouts"></div>
+    <p class="stats"><span id="fps">–</span> fps · <span id="grid">–</span> grid · <span id="step-ms">–</span> ms/step</p>
   </main>
   <script type="module" src="js/main.js"></script>
 </body>

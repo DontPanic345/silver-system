@@ -1,140 +1,233 @@
-// On-screen driver for the stable-fluids solver in fluid.js: canvas rendering,
-// pointer input, and the controls. The physics all lives in the module.
+// On-screen driver for the scenario player. All simulation logic lives in
+// js/player.js (the DOM-free controller) and js/fluid.js (the solver); this file
+// is DOM glue only — it builds the controls, runs the animation frame loop, and
+// renders whatever channels the controller reports (AC 16).
 
-import { createFluid, step, splat, IX } from './fluid.js';
+import { createController } from './player.js';
+import { IX } from './fluid.js';
 
-const N = 180;
-const f = createFluid(N, { fade: 0.004 });
-
-// Mouse motion is measured in grid cells per frame; the solver wants velocity
-// in grid-widths per unit time (advection backtrace is dt·N·velocity), so a
-// cell of drag maps to a small velocity.
-const DRAG_TO_VEL = 0.015;
-
-// --- rendering -------------------------------------------------------------
+const controller = createController();
+// Exposed for the headless page check (scripts/shot-scenarios.js).
+window.controller = controller;
 
 const canvas = document.getElementById('sim');
 const ctx = canvas.getContext('2d');
-const field = document.createElement('canvas');
-field.width = field.height = N;
-const fctx = field.getContext('2d');
-const img = fctx.createImageData(N, N);
-ctx.imageSmoothingEnabled = true;
+let field = document.createElement('canvas');
+let fctx = field.getContext('2d');
+let img = null;
 
-let showVectors = false;
-
-// warm dye palette: black -> deep orange -> gold -> white. `t` saturates so
-// thin dye still glows and dense dye tops out white rather than clipping.
-function palette(d, out, o) {
-  const t = 1 - Math.exp(-d * 3.0);
-  out[o]     = 255 * Math.min(1, t * 2.4);
-  out[o + 1] = 255 * Math.min(1, Math.max(0, (t - 0.15) * 1.7));
-  out[o + 2] = 255 * Math.min(1, Math.max(0, (t - 0.6) * 2.4));
-  out[o + 3] = 255;
+function ensureField() {
+  const n = controller.sim ? controller.sim.N : 1;
+  if (field.width !== n) {
+    field.width = field.height = n;
+    fctx = field.getContext('2d');
+    img = fctx.createImageData(n, n);
+  }
 }
+
+// --- rendering ------------------------------------------------------------
+
+// warm dye palette: black -> deep orange -> gold -> white.
+function densPixel(d, out, o) {
+  const t = 1 - Math.exp(-d * 3.0);
+  out[o]     += 255 * Math.min(1, t * 2.4);
+  out[o + 1] += 255 * Math.min(1, Math.max(0, (t - 0.15) * 1.7));
+  out[o + 2] += 255 * Math.min(1, Math.max(0, (t - 0.6) * 2.4));
+}
+
+// temperature tint: cold -> blue, warm -> red, relative to the current frame's
+// interior magnitude so any scenario's scale is visible.
+function tempPixel(value, scale, out, o) {
+  const t = Math.max(-1, Math.min(1, value * scale));
+  if (t >= 0) {
+    out[o]     += 220 * t;
+    out[o + 2] += 40 * t;
+  } else {
+    out[o + 2] += 220 * -t;
+    out[o]     += 40 * -t;
+  }
+}
+
+const CHANNEL_RENDERERS = {
+  dens: (sim, data, n, chanScale) => {
+    for (let j = 0; j < n; j++)
+      for (let i = 0; i < n; i++)
+        densPixel(sim.dens[IX(sim.SIZE, i + 1, j + 1)], data, 4 * (i + j * n));
+  },
+  temp: (sim, data, n) => {
+    let mag = 0;
+    for (let j = 1; j <= n; j++)
+      for (let i = 1; i <= n; i++)
+        mag = Math.max(mag, Math.abs(sim.temp[IX(sim.SIZE, i, j)]));
+    const scale = mag > 1e-9 ? 1 / mag : 0;
+    for (let j = 0; j < n; j++)
+      for (let i = 0; i < n; i++)
+        tempPixel(sim.temp[IX(sim.SIZE, i + 1, j + 1)], scale, data, 4 * (i + j * n));
+  },
+};
 
 function render() {
+  const sim = controller.sim;
+  if (!sim) return;
+  ensureField();
+  const n = sim.N;
   const data = img.data;
-  for (let j = 0; j < N; j++) {
-    for (let i = 0; i < N; i++) {
-      palette(f.dens[IX(f.SIZE, i + 1, j + 1)], data, 4 * (i + j * N));
-    }
+  for (let p = 0; p < data.length; p += 4) {
+    data[p] = data[p + 1] = data[p + 2] = 0;
+    data[p + 3] = 255;
+  }
+  for (const ch of controller.channels()) {
+    const draw = CHANNEL_RENDERERS[ch];
+    if (draw) draw(sim, data, n);
   }
   fctx.putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = true;
   ctx.drawImage(field, 0, 0, canvas.width, canvas.height);
+}
 
-  if (showVectors) {
-    const s = canvas.width / N;
-    ctx.strokeStyle = 'rgba(120,200,255,0.35)';
-    ctx.beginPath();
-    for (let j = 1; j <= N; j += 7) {
-      for (let i = 1; i <= N; i += 7) {
-        const x = (i - 0.5) * s, y = (j - 0.5) * s;
-        ctx.moveTo(x, y);
-        ctx.lineTo(x + f.u[IX(f.SIZE, i, j)] * s * 40, y + f.v[IX(f.SIZE, i, j)] * s * 40);
-      }
-    }
-    ctx.stroke();
+function renderReadouts() {
+  const panel = document.getElementById('readouts');
+  panel.textContent = '';
+  for (const r of controller.readouts()) {
+    const row = document.createElement('span');
+    row.className = 'readout';
+    const v = Math.abs(r.value) >= 1000 ? r.value.toFixed(0) : r.value.toFixed(3);
+    row.textContent = `${r.label}: ${v}`;
+    panel.appendChild(row);
+  }
+  const steps = document.createElement('span');
+  steps.className = 'readout';
+  steps.textContent = `steps: ${controller.stepCount}`;
+  panel.appendChild(steps);
+}
+
+// --- controls ------------------------------------------------------------
+
+const select = document.getElementById('scenario-select');
+for (const s of controller.listScenarios()) {
+  const opt = document.createElement('option');
+  opt.value = s.id;
+  opt.textContent = `${s.name} — ${s.description}`;
+  select.appendChild(opt);
+}
+
+const playBtn = document.getElementById('play');
+const sandboxToggle = document.getElementById('sandbox');
+const sandboxPanel = document.getElementById('sandbox-panel');
+const paintChannelSel = document.getElementById('paint-channel');
+const SANDBOX_GRID = 96;
+
+function syncPlayBtn() {
+  playBtn.textContent = controller.playing ? 'Pause' : 'Play';
+}
+
+function refreshPaintChannels() {
+  paintChannelSel.textContent = '';
+  for (const ch of controller.channels()) {
+    const opt = document.createElement('option');
+    opt.value = ch;
+    opt.textContent = ch;
+    paintChannelSel.appendChild(opt);
   }
 }
 
-// --- interaction ---------------------------------------------------------
+function loadCurrentScenario() {
+  controller.load(select.value);
+  syncPlayBtn();
+  renderReadouts();
+}
 
-let pointer = null; // {i, j, di, dj}
+function enterSandbox() {
+  controller.loadSandbox(SANDBOX_GRID);
+  sandboxPanel.hidden = false;
+  refreshPaintChannels();
+  syncPlayBtn();
+  renderReadouts();
+}
 
-function eventCell(e) {
+select.addEventListener('change', () => {
+  if (controller.mode === 'scenario') loadCurrentScenario();
+});
+
+playBtn.addEventListener('click', () => {
+  if (controller.playing) controller.pause();
+  else controller.play();
+  syncPlayBtn();
+});
+
+document.getElementById('step').addEventListener('click', () => {
+  controller.singleStep();
+  syncPlayBtn();
+  renderReadouts();
+});
+
+document.getElementById('reset').addEventListener('click', () => {
+  controller.reset();
+  syncPlayBtn();
+  renderReadouts();
+});
+
+sandboxToggle.addEventListener('change', () => {
+  if (sandboxToggle.checked) {
+    enterSandbox();
+  } else {
+    sandboxPanel.hidden = true;
+    loadCurrentScenario();
+  }
+});
+
+// --- sandbox painting ---------------------------------------------------
+
+let painting = false;
+
+function paintAt(e) {
+  const sim = controller.sim;
+  if (!sim || controller.mode !== 'sandbox') return;
   const r = canvas.getBoundingClientRect();
-  const i = Math.floor(((e.clientX - r.left) / r.width) * N) + 1;
-  const j = Math.floor(((e.clientY - r.top) / r.height) * N) + 1;
-  return { i: Math.max(1, Math.min(N, i)), j: Math.max(1, Math.min(N, j)) };
+  const i = Math.floor(((e.clientX - r.left) / r.width) * sim.N) + 1;
+  const j = Math.floor(((e.clientY - r.top) / r.height) * sim.N) + 1;
+  controller.paint({ channel: paintChannelSel.value || 'dens', i, j, radius: 2, amount: 1 });
+  renderReadouts();
 }
 
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
-  pointer = { ...eventCell(e), di: 0, dj: 0 };
+  painting = true;
+  paintAt(e);
 });
-canvas.addEventListener('pointermove', (e) => {
-  if (!pointer) return;
-  const c = eventCell(e);
-  pointer.di = c.i - pointer.i;
-  pointer.dj = c.j - pointer.j;
-  pointer.i = c.i;
-  pointer.j = c.j;
-});
-const endPointer = () => { pointer = null; };
-canvas.addEventListener('pointerup', endPointer);
-canvas.addEventListener('pointercancel', endPointer);
+canvas.addEventListener('pointermove', (e) => { if (painting) paintAt(e); });
+const stopPaint = () => { painting = false; };
+canvas.addEventListener('pointerup', stopPaint);
+canvas.addEventListener('pointercancel', stopPaint);
 
-function applyPointer() {
-  if (!pointer) return;
-  splat(f, pointer.i, pointer.j, 2, 0.6,
-    pointer.di * DRAG_TO_VEL, pointer.dj * DRAG_TO_VEL);
-}
+// --- loop -------------------------------------------------------------
 
-// --- controls & loop ----------------------------------------------------
-
-let paused = false;
-document.getElementById('pause').addEventListener('click', (e) => {
-  paused = !paused;
-  e.target.textContent = paused ? 'Resume' : 'Pause';
-});
-document.getElementById('clear').addEventListener('click', () => {
-  f.u.fill(0); f.v.fill(0); f.dens.fill(0);
-});
-document.getElementById('visc').addEventListener('input', (e) => {
-  f.visc = (e.target.value / 100) * 0.0005;
-});
-document.getElementById('diff').addEventListener('input', (e) => {
-  f.diff = (e.target.value / 100) * 0.0002;
-});
-document.getElementById('fade').addEventListener('input', (e) => {
-  f.fade = (e.target.value / 100) * 0.05;
-});
-document.getElementById('vectors').addEventListener('change', (e) => {
-  showVectors = e.target.checked;
-});
-document.getElementById('grid').textContent = `${N}×${N}`;
-
-let frames = 0, fpsClock = performance.now(), stepMs = 0;
+let frames = 0, fpsClock = performance.now(), stepMs = 0, readoutClock = 0;
 
 function frame() {
-  if (!paused) {
-    applyPointer();
-    const t = performance.now();
-    step(f);
-    stepMs = stepMs * 0.9 + (performance.now() - t) * 0.1;
-  }
+  const wasStep = controller.playing;
+  const t = performance.now();
+  controller.tick();
+  if (wasStep) stepMs = stepMs * 0.9 + (performance.now() - t) * 0.1;
   render();
 
   frames++;
   const now = performance.now();
   if (now - fpsClock >= 500) {
     document.getElementById('fps').textContent = Math.round((frames * 1000) / (now - fpsClock));
-    document.getElementById('step').textContent = stepMs.toFixed(1);
+    document.getElementById('step-ms').textContent = stepMs.toFixed(2);
+    document.getElementById('grid').textContent =
+      controller.sim ? `${controller.sim.N}×${controller.sim.N}` : '–';
     frames = 0;
     fpsClock = now;
+  }
+  if (now - readoutClock >= 200) {
+    renderReadouts();
+    readoutClock = now;
   }
   requestAnimationFrame(frame);
 }
 
+loadCurrentScenario();
+render();
 requestAnimationFrame(frame);

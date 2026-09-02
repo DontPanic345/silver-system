@@ -66,7 +66,7 @@ await page.locator('#sim').screenshot({ path: outfile });
 
 const stats = await page.evaluate(() => ({
   fps: document.getElementById('fps').textContent,
-  step: document.getElementById('step').textContent,
+  step: document.getElementById('step-ms').textContent,
 }));
 
 await browser.close();

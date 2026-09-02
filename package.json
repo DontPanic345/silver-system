@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "node test/run.js",
-    "shot": "node scripts/shot.js"
+    "shot": "node scripts/shot.js",
+    "shot:scenarios": "node scripts/shot-scenarios.js"
   }
 }
