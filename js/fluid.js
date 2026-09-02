@@ -318,7 +318,7 @@ const buoyancyStep = (f) => {
   for (let j = 1; j <= N; j++) {
     for (let i = 1; i <= N; i++) {
       const k = ix(SIZE, i, j);
-      v[k] += buoyancy * (temp[k] - mean) * dt;
+      v[k] -= buoyancy * (temp[k] - mean) * dt;
     }
   }
   setBnd(f, 2, v);
