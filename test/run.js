@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const files = ['fluid-probe.js', 'conservation.js', 'temperature.js', 'buoyancy.js'];
+const files = ['fluid-probe.js', 'conservation.js', 'temperature.js', 'buoyancy.js', 'scenarios.js'];
 
 let failed = 0;
 for (const file of files) {
