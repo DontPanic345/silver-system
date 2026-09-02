@@ -163,7 +163,7 @@ const centroidX = (f) => {
   const N = 48;
   const f = createFluid(N, {
     dt: 0.15,
-    kappa: 0.0002,
+    kappa: 0.001,
     temp0: (i) => (i <= N / 2 ? 1 : 0), // left half hot, right half cold; no flow
   });
   if (!hasTemp(f)) {
@@ -177,7 +177,7 @@ const centroidX = (f) => {
     const startMean = heat(f) / (N * N);
     let prevGap = start.hi - start.lo;
     let hottestRose = 0, coldestFell = 0, gapEverGrew = 0;
-    for (let s = 0; s < 600; s++) {
+    for (let s = 0; s < 2400; s++) {
       step(f);
       const r = tempRange(f);
       hottestRose = Math.max(hottestRose, r.hi - start.hi);

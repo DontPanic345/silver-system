@@ -13,19 +13,30 @@
 export const createFluid = (N, opts = {}) => {
   const SIZE = N + 2; // interior N×N plus a one-cell boundary ring
   const cell = () => new Float32Array(SIZE * SIZE);
-  return {
+  const f = {
     N,
     SIZE,
     dt: opts.dt ?? 0.12,
     iter: opts.iter ?? 24, // Jacobi sweeps per linear solve
     visc: opts.visc ?? 0,
     diff: opts.diff ?? 0,
+    kappa: opts.kappa ?? 0, // thermal diffusivity for conduction (temp channel)
     fade: opts.fade ?? 0, // fraction of dye removed each step (0 = conserve)
     u: cell(), v: cell(), uPrev: cell(), vPrev: cell(),
     dens: cell(), densPrev: cell(),
+    temp: cell(), tempPrev: cell(), // temperature field + in-place-swapped scratch
     tmp: cell(),  // grid-sized scratch: Jacobi sweeps, and the advected-scalar working buffer
     flux: cell(), // grid-sized scratch: per-face flux buffer for conservative scalar advection
   };
+  // Seed the temperature interior. temp0 is a uniform Number or an (i, j) => value
+  // callback over 1-indexed interior cells; the boundary ring stays zero and is
+  // refreshed as a zero-gradient copy by setBnd on the first step.
+  const temp0 = opts.temp0 ?? 0;
+  const t0 = typeof temp0 === 'function' ? temp0 : () => temp0;
+  for (let j = 1; j <= N; j++) {
+    for (let i = 1; i <= N; i++) f.temp[ix(SIZE, i, j)] = t0(i, j);
+  }
+  return f;
 };
 
 const ix = (SIZE, i, j) => i + SIZE * j;
@@ -277,9 +288,23 @@ const densStep = (f) => {
   }
 };
 
+// Temperature rides the flow with the same conservative MUSCL scheme as the dye
+// (closed box conserves the interior sum to ~machine precision), then conducts
+// between neighbours via the implicit Jacobi solve. Walls are insulating:
+// setBnd with b = 0 is zero-gradient, so no heat flux crosses the boundary.
+const tempStep = (f) => {
+  [f.temp, f.tempPrev] = [f.tempPrev, f.temp];
+  advectScalar(f, f.temp, f.tempPrev, f.u, f.v);
+  if (f.kappa > 0) {
+    [f.temp, f.tempPrev] = [f.tempPrev, f.temp];
+    diffuse(f, 0, f.temp, f.tempPrev, f.kappa);
+  }
+};
+
 export const step = (f) => {
   velStep(f);
   densStep(f);
+  tempStep(f);
 };
 
 // Stamp dye and momentum into a square of half-width `r` around interior cell
@@ -344,7 +369,7 @@ export const rmsDivergence = (f) => {
 };
 
 export const hasNonFinite = (f) => {
-  for (const arr of [f.u, f.v, f.dens]) {
+  for (const arr of [f.u, f.v, f.dens, f.temp]) {
     for (let i = 0; i < arr.length; i++) if (!Number.isFinite(arr[i])) return true;
   }
   return false;
