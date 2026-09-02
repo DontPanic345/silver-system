@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node test/fluid-probe.js",
+    "test": "node test/fluid-probe.js && node test/conservation.js",
     "shot": "node scripts/shot.js"
   }
 }
