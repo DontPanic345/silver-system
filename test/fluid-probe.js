@@ -2,18 +2,17 @@
 //
 //   node test/fluid-probe.js   (or: npm test)
 //
-// No browser, no rendering — drive step() and check the things that are hard
-// to eyeball: stability at large dt, dye behaving sanely in a closed box, the
-// velocity field staying near-divergence-free, no motion from nowhere,
-// mirror symmetry (the Jacobi solver should give this exactly), determinism,
-// and per-step cost at the on-screen grid size.
+// No browser, no rendering — this file probes the velocity solver: stability at
+// large dt, the field staying near-divergence-free, no motion from nowhere, and
+// mirror symmetry (the Jacobi solver should give this exactly). Scalar-transport
+// conservation, determinism and per-step cost live in test/conservation.js.
 //
 // Velocities are quoted in grid-widths per unit time; the advection backtrace
 // is dt·N·velocity, so values here are deliberately small (~0.05).
 
 import {
   createFluid, step, splat,
-  totalDensity, maxDivergence, rmsDivergence, hasNonFinite, IX,
+  maxDivergence, rmsDivergence, hasNonFinite, IX,
 } from '../js/fluid.js';
 
 let failures = 0;
@@ -37,20 +36,6 @@ const maxSpeed = (f) => {
   }
   check('no NaN/Inf after 300 steps at dt=1.0', !hasNonFinite(f));
   check('velocity stays bounded', maxSpeed(f) < 10, `max speed ${maxSpeed(f).toFixed(2)}`);
-}
-
-// --- dye in a closed box: dissipates slowly, never grows ---------------
-{
-  console.log('dye mass');
-  const f = createFluid(96, { dt: 0.15, fade: 0 });
-  splat(f, 30, 48, 4, 1, 0.05, 0); // inject once, let it advect around
-  const start = totalDensity(f);
-  for (let s = 0; s < 200; s++) step(f);
-  const end = totalDensity(f);
-  // semi-Lagrangian advection is dissipative — it loses a little each step and
-  // must never manufacture dye.
-  check('never gains dye', end <= start * 1.001, `end/start ${(end / start).toFixed(3)}`);
-  check('loses < 20% over 200 steps', end > start * 0.8, `end/start ${(end / start).toFixed(3)}`);
 }
 
 // --- projection keeps the field near-incompressible -------------------
@@ -97,35 +82,6 @@ const maxSpeed = (f) => {
     }
   }
   check('dye + flow stay mirror-symmetric', worst < 1e-9, `worst ${worst.toExponential(1)} (peak ${peak.toFixed(1)})`);
-}
-
-// --- determinism: same inputs -> identical buffers --------------------
-{
-  console.log('determinism');
-  const run = () => {
-    const f = createFluid(72, { dt: 0.18, fade: 0.01 });
-    for (let s = 0; s < 120; s++) {
-      splat(f, 18, 36, 3, 0.7, 0.05, 0.02);
-      step(f);
-    }
-    return f.dens;
-  };
-  const a = run(), b = run();
-  let identical = a.length === b.length;
-  for (let i = 0; identical && i < a.length; i++) identical = a[i] === b[i];
-  check('two identical runs produce bit-identical dye', identical);
-}
-
-// --- per-step cost at the on-screen grid size ------------------------
-{
-  console.log('performance');
-  const f = createFluid(180, { dt: 0.12, fade: 0.008 });
-  for (let s = 0; s < 10; s++) { splat(f, 40, 90, 3, 0.6, 0.03, 0); step(f); } // warm up
-  const iters = 40;
-  const t0 = performance.now();
-  for (let s = 0; s < iters; s++) { splat(f, 40, 90, 3, 0.6, 0.03, 0); step(f); }
-  const ms = (performance.now() - t0) / iters;
-  check('step() under 16ms at 180×180', ms < 16, `${ms.toFixed(1)} ms/step`);
 }
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);

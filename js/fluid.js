@@ -1,10 +1,11 @@
 // Stable Fluids — Jos Stam, "Real-Time Fluid Dynamics for Games" (2003).
 //
 // A grid-based (Eulerian) solver. Velocity and a passive dye ("density") live
-// on a grid; each step advects them along the flow (semi-Lagrangian) and then
-// projects the velocity field back to divergence-free with a Gauss-Seidel
-// pressure solve. That projection is what makes it unconditionally stable —
-// it never blows up regardless of timestep.
+// on a grid; each step advects them along the flow and then projects the
+// velocity field back to divergence-free with a Jacobi pressure solve. That
+// projection is what makes it unconditionally stable — it never blows up
+// regardless of timestep. Velocity is advected semi-Lagrangian; the passive
+// scalar uses the conservative MUSCL flux scheme in `advectScalar`.
 //
 // Pure module: no DOM, no rendering. `js/main.js` drives it on screen;
 // `test/fluid-probe.js` drives it headless.
@@ -22,8 +23,8 @@ export const createFluid = (N, opts = {}) => {
     fade: opts.fade ?? 0, // fraction of dye removed each step (0 = conserve)
     u: cell(), v: cell(), uPrev: cell(), vPrev: cell(),
     dens: cell(), densPrev: cell(),
-    tmp: cell(),  // scratch for the Jacobi solver
-    tmp2: cell(), // scratch for conservative scalar advection (flux buffer)
+    tmp: cell(),  // grid-sized scratch: Jacobi sweeps, and the advected-scalar working buffer
+    flux: cell(), // grid-sized scratch: per-face flux buffer for conservative scalar advection
   };
 };
 
@@ -111,7 +112,7 @@ const minmod = (a, c) => (a * c <= 0 ? 0 : (Math.abs(a) < Math.abs(c) ? a : c));
 // zero), so the interior total is exactly preserved — whatever leaves one cell
 // enters its neighbour.
 const muscl1D = (f, out, cur, vel, stride, h) => {
-  const { N, SIZE, tmp2: fbuf } = f;
+  const { N, SIZE, flux: fbuf } = f;
   // Pass 1: the h-scaled flux through every interior face, stored at the index
   // of the cell on its low side. Wall faces (a = 0, a = N) stay zero.
   for (let p = 1; p <= N; p++) {
