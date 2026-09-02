@@ -59,6 +59,30 @@ const CHANNEL_RENDERERS = {
       for (let i = 0; i < n; i++)
         densPixel(sim.dens[IX(sim.SIZE, i + 1, j + 1)], data, 4 * (i + j * n));
   },
+  // liquid water: a blue fill that deepens with the liquid fraction.
+  liquid: (sim, data, n) => {
+    for (let j = 0; j < n; j++)
+      for (let i = 0; i < n; i++) {
+        const v = sim.liquid[IX(sim.SIZE, i + 1, j + 1)];
+        const t = 1 - Math.exp(-Math.max(0, v) * 3.0);
+        const o = 4 * (i + j * n);
+        data[o]     += 20 * t;
+        data[o + 1] += 90 * t;
+        data[o + 2] += 235 * t;
+      }
+  },
+  // water vapour: a pale, low-contrast haze.
+  vapour: (sim, data, n) => {
+    for (let j = 0; j < n; j++)
+      for (let i = 0; i < n; i++) {
+        const v = sim.vapour[IX(sim.SIZE, i + 1, j + 1)];
+        const t = 1 - Math.exp(-Math.max(0, v) * 2.5);
+        const o = 4 * (i + j * n);
+        data[o]     += 180 * t;
+        data[o + 1] += 200 * t;
+        data[o + 2] += 210 * t;
+      }
+  },
   temp: (sim, data, n) => {
     let mag = 0;
     for (let j = 1; j <= n; j++)

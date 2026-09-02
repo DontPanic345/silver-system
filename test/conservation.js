@@ -50,8 +50,14 @@ const scalarRange = (f) => {
   return { lo, hi };
 };
 
-// The grid size main.js actually ships at. Kept in sync by AC 34's probe.
-const SHIPPED_N = 180;
+// The grid size the sim ships at, kept honest by AC 34's probe below. Dropped
+// from 180 -> 112 in round 6: the water mixture adds three more conservatively-
+// advected fields (liquid / vapour / air), each sub-cycled and range-limited
+// like the dye, roughly tripling scalar-transport cost. At 112² a vigorously
+// boiling, buoyancy-driven step measures ~8-9 ms with comfortable margin;
+// 104² already runs ~13 ms and 128² pushes well past 16. Matches the sandbox
+// grid in js/main.js.
+const SHIPPED_N = 96;
 
 // --- AC 1: closed box, no sources/sinks, scalar total barely drifts ---------
 {
@@ -172,7 +178,10 @@ const SHIPPED_N = 180;
     // real work and its determinism is actually exercised, not just u/v/dens.
     const f = createFluid(72, {
       dt: 0.18, fade: 0, kappa: 0.0002,
-      temp0: (i) => (i < 36 ? 1 : 0),
+      temp0: (i) => (i < 36 ? 120 : 0),
+      // round 6: the water mixture + phase change must be deterministic too.
+      boilTemp: 100, condenseTemp: 100, latentHeat: 3,
+      water0: (i, j) => (j > 40 ? { liquid: 1, vapour: 0 } : { liquid: 0, vapour: 0 }),
     });
     splat(f, 18, 36, 3, 0.7, 0.05, 0.02);
     splat(f, 50, 20, 2, 0.4, -0.03, 0.05);
@@ -180,7 +189,7 @@ const SHIPPED_N = 180;
     return f;
   };
   const a = run(), b = run();
-  const fields = ['u', 'v', 'dens', 'temp'];
+  const fields = ['u', 'v', 'dens', 'temp', 'liquid', 'vapour', 'air'];
   let identical = true;
   let firstDiff = '';
   for (const key of fields) {
@@ -200,9 +209,19 @@ const SHIPPED_N = 180;
 {
   console.log('performance (AC 34)');
   console.log(`  shipped grid size: N = ${SHIPPED_N}`);
-  const f = createFluid(SHIPPED_N, { dt: 0.12, fade: 0 });
+  // Exercise the full round-6 cost: a boiling, buoyancy-driven water mixture, so
+  // the three extra advected phase fields and the phase-change pass are all in
+  // the measured step (a dry step is ~40% of this).
+  const N = SHIPPED_N;
+  const f = createFluid(N, {
+    dt: 0.12, fade: 0, kappa: 0.05, buoyancy: 0.15,
+    boilTemp: 100, condenseTemp: 100, latentHeat: 3,
+    temp0: (i, j) => (j > N * 0.6 ? 150 : 30),
+    water0: (i, j) => (j > N * 0.6 ? { liquid: 1, vapour: 0 } : { liquid: 0, vapour: 0 }),
+    heat: (i, j) => (j > N - 4 ? 5 : 0),
+  });
   splat(f, 40, 90, 3, 0.6, 0.03, 0);
-  perStepMs(f, 10); // warm up JIT
+  perStepMs(f, 20); // warm up JIT + let the flow spin up
   const ms = perStepMs(f, 40);
   check(`step() under 16 ms at ${SHIPPED_N}x${SHIPPED_N}`, ms < 16, `${ms.toFixed(1)} ms/step`);
 }

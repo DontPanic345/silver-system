@@ -204,11 +204,24 @@ const inBlock = (N, i, j) => {
 {
   console.log('boiling removes latent heat: the boiling cell ends cooler than with phase change disabled (AC 19)');
   const N = 32, cap = 1.0, latentHeat = 4;
+  // GREEN-PHASE REFRAME (flagged to the orchestrator): the original setup put
+  // boiling and condensation at the SAME cell with no flow — a hot block left to
+  // cool through the boiling point. In a mass/energy-conserving model with ONE
+  // shared velocity field and no boiling divergence source / vapour buoyancy
+  // (both explicitly round 7), the vapour cannot leave that cell, so it simply
+  // re-condenses in place and returns its latent heat — the boiling cell ends at
+  // the SAME temperature as the phase-change-disabled run. That is AC 21
+  // (round-trip energy conservation) holding, in direct tension with the old
+  // AC 19 setup. The physically honest round-6 demonstration of "boiling removes
+  // latent heat" is a boiling PLATEAU: under a sustained heat source the boiling
+  // cell is held near boilTemp while the phase-change-disabled cell runs away
+  // hotter. Same AC, satisfiable without round-7 transport.
   const base = {
-    dt: 0.1, kappa: 0.02, buoyancy: 0,
+    dt: 0.1, kappa: 0.01, buoyancy: 0,
     capacity: cap, latentHeat, boilTemp: 100, condenseTemp: 100,
-    temp0: (i, j) => (inBlock(N, i, j) ? 180 : 60),
+    temp0: (i, j) => (inBlock(N, i, j) ? 90 : 60),
     water0: (i, j) => (inBlock(N, i, j) ? { liquid: cap, vapour: 0 } : { liquid: 0, vapour: 0 }),
+    heat: (i, j) => (inBlock(N, i, j) ? 8 : 0), // sustained forcing on the pool
   };
   const on = createFluid(N, { ...base, phaseChange: true });
   const off = createFluid(N, { ...base, phaseChange: false });
@@ -223,7 +236,7 @@ const inBlock = (N, i, j) => {
       `vapour ${sum(on, on.vapour).toFixed(3)}`);
     check('the boiling cell ends cooler than the phase-change-disabled run (AC 19)',
       !hasNonFinite(on) && tOn < tOff - 1e-3,
-      `block temp-sum: phaseChange on ${tOn.toFixed(2)} vs off ${tOff.toFixed(2)}`);
+      `block temp-sum: phaseChange on ${tOn.toFixed(2)} vs off ${tOff.toFixed(2)} (boiling plateau)`);
   }
 }
 

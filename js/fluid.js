@@ -28,14 +28,31 @@ export const createFluid = (N, opts = {}) => {
     u: cell(), v: cell(), uPrev: cell(), vPrev: cell(),
     dens: cell(), densPrev: cell(),
     temp: cell(), tempPrev: cell(), // temperature field + in-place-swapped scratch
+    // Water mixture: three phase fractions per cell that sum to `capacity`. All
+    // three ride the shared (u, v) flow with the same conservative MUSCL scheme
+    // as dens/temp; `air` is explicit so vapour displaces it rather than
+    // appearing from nowhere. There is ONE velocity field — no momentum or
+    // settling fields this round.
+    liquid: cell(), liquidPrev: cell(),
+    vapour: cell(), vapourPrev: cell(),
+    air: cell(), airPrev: cell(),
     tmp: cell(),  // grid-sized scratch: Jacobi sweeps, and the advected-scalar working buffer
     flux: cell(), // grid-sized scratch: per-face flux buffer for conservative scalar advection
   };
+  f.capacity = opts.capacity ?? 1.0;
+  f.phaseChange = opts.phaseChange ?? true;
+  f.latentHeat = opts.latentHeat ?? 0;
+  f.boilTemp = opts.boilTemp ?? Infinity;
+  f.condenseTemp = opts.condenseTemp ?? -Infinity;
+  const heatOpt = opts.heat ?? 0;
+  f.heat = typeof heatOpt === 'function'
+    ? heatOpt
+    : (heatOpt === 0 ? null : () => heatOpt);
   // Displayable scalar field channels, in render order. This is the explicit
   // registry the page iterates (AC 16): adding a scalar field to the solver means
   // adding its name here and a renderer in js/main.js — nothing downstream guesses
   // from buffer shapes, so scratch/vector buffers can never leak into the view.
-  f.channels = ['dens', 'temp'];
+  f.channels = ['dens', 'temp', 'liquid', 'vapour'];
   // Seed the temperature interior. temp0 is a uniform Number or an (i, j) => value
   // callback over 1-indexed interior cells; the boundary ring stays zero and is
   // refreshed as a zero-gradient copy by setBnd on the first step.
@@ -44,6 +61,22 @@ export const createFluid = (N, opts = {}) => {
   for (let j = 1; j <= N; j++) {
     for (let i = 1; i <= N; i++) f.temp[ix(SIZE, i, j)] = t0(i, j);
   }
+  // Seed the water mixture. water0 returns { liquid, vapour } for a 1-indexed
+  // interior cell; air fills the rest of the capacity. Default: all air.
+  const w0 = typeof opts.water0 === 'function' ? opts.water0 : null;
+  for (let j = 1; j <= N; j++) {
+    for (let i = 1; i <= N; i++) {
+      const k = ix(SIZE, i, j);
+      let L = 0, V = 0;
+      if (w0) { const r = w0(i, j) || {}; L = r.liquid || 0; V = r.vapour || 0; }
+      f.liquid[k] = L;
+      f.vapour[k] = V;
+      f.air[k] = f.capacity - L - V;
+    }
+  }
+  setBnd(f, 0, f.liquid);
+  setBnd(f, 0, f.vapour);
+  setBnd(f, 0, f.air);
   return f;
 };
 
@@ -298,13 +331,133 @@ const densStep = (f) => {
 // (closed box conserves the interior sum to ~machine precision), then conducts
 // between neighbours via the implicit Jacobi solve. Walls are insulating:
 // setBnd with b = 0 is zero-gradient, so no heat flux crosses the boundary.
+// Flux-form explicit conduction: each step is a convex combination of a cell and
+// its four neighbours (sub-stepped so the mixing weight stays <= 1/4), with
+// insulating zero-gradient walls carrying no flux. Conservative AND monotone BY
+// CONSTRUCTION — the interior thermal-energy sum is preserved to machine
+// precision at any iteration count, and no cell ever leaves the local data
+// range. This replaces the truncated implicit Jacobi solve, which only
+// conserved at convergence (~2% drift at the default iter) and forced scenarios
+// to crank `iter`.
+const conduct = (f) => {
+  const { N, SIZE, kappa, dt, temp, tmp } = f;
+  const a = kappa * dt * N * N;
+  if (a <= 0) return;
+  const sub = Math.max(1, Math.ceil(a / 0.25));
+  const as = a / sub;
+  for (let s = 0; s < sub; s++) {
+    for (let j = 1; j <= N; j++) {
+      for (let i = 1; i <= N; i++) {
+        const k = ix(SIZE, i, j);
+        tmp[k] = temp[k] + as * (
+          temp[k - 1] + temp[k + 1] + temp[k - SIZE] + temp[k + SIZE] - 4 * temp[k]
+        );
+      }
+    }
+    for (let j = 1; j <= N; j++) {
+      for (let i = 1; i <= N; i++) temp[ix(SIZE, i, j)] = tmp[ix(SIZE, i, j)];
+    }
+    setBnd(f, 0, temp);
+  }
+};
+
 const tempStep = (f) => {
   [f.temp, f.tempPrev] = [f.tempPrev, f.temp];
   advectScalar(f, f.temp, f.tempPrev, f.u, f.v);
-  if (f.kappa > 0) {
-    [f.temp, f.tempPrev] = [f.tempPrev, f.temp];
-    diffuse(f, 0, f.temp, f.tempPrev, f.kappa);
+  conduct(f);
+  if (f.heat) {
+    const { N, SIZE } = f;
+    for (let j = 1; j <= N; j++) {
+      for (let i = 1; i <= N; i++) f.temp[ix(SIZE, i, j)] += f.heat(i, j);
+    }
+    setBnd(f, 0, f.temp);
   }
+};
+
+// Advect the three phase fractions through the shared flow, then renormalise
+// each interior cell back to `capacity`. Skipped entirely when there is no water
+// anywhere (keeps the dry-air fast path cheap). Air is advected like the others
+// so a uniform mixture stays uniform; the renormalise only mops up the sub-milli
+// splitting error.
+const waterStep = (f) => {
+  const { N, SIZE, capacity } = f;
+  let anyWater = false;
+  for (let j = 1; j <= N && !anyWater; j++) {
+    for (let i = 1; i <= N; i++) {
+      const k = ix(SIZE, i, j);
+      if (f.liquid[k] !== 0 || f.vapour[k] !== 0) { anyWater = true; break; }
+    }
+  }
+  if (!anyWater) return;
+
+  [f.liquid, f.liquidPrev] = [f.liquidPrev, f.liquid];
+  advectScalar(f, f.liquid, f.liquidPrev, f.u, f.v);
+  [f.vapour, f.vapourPrev] = [f.vapourPrev, f.vapour];
+  advectScalar(f, f.vapour, f.vapourPrev, f.u, f.v);
+  [f.air, f.airPrev] = [f.airPrev, f.air];
+  advectScalar(f, f.air, f.airPrev, f.u, f.v);
+
+  // Renormalise each interior cell back to `capacity` by making AIR the slack
+  // phase: air = capacity - (liquid + vapour). This keeps liquid + vapour — the
+  // conserved water total — EXACTLY as the conservative advection produced it,
+  // and l + v + air == capacity holds by construction. With one shared
+  // incompressible velocity field and no boiling divergence source (round 7),
+  // a cell can transiently pack in more water than fits during vigorous boiling;
+  // air then goes slightly negative rather than water being invented or
+  // destroyed. It is a tracked, unrendered field — the visible water is right.
+  for (let j = 1; j <= N; j++) {
+    for (let i = 1; i <= N; i++) {
+      const k = ix(SIZE, i, j);
+      f.air[k] = capacity - f.liquid[k] - f.vapour[k];
+    }
+  }
+  setBnd(f, 0, f.liquid);
+  setBnd(f, 0, f.vapour);
+  setBnd(f, 0, f.air);
+};
+
+// Phase change: 1:1 by mass between liquid and vapour at cells past the
+// threshold, bounded per step for stability. Latent heat leaves f.temp on
+// boiling and returns to it on condensation — so sensible + latent energy is
+// conserved by construction, and air is never touched (AC 22).
+const phaseChangeStep = (f) => {
+  if (!f.phaseChange) return;
+  const { N, SIZE, capacity, latentHeat, boilTemp, condenseTemp } = f;
+  const maxRate = 0.25 * capacity;
+  for (let j = 1; j <= N; j++) {
+    for (let i = 1; i <= N; i++) {
+      const k = ix(SIZE, i, j);
+      const T = f.temp[k];
+      if (T >= boilTemp && f.liquid[k] > 0) {
+        // Convert at most enough to bring the cell back to boilTemp — a boiling
+        // plateau. Latent heat leaves f.temp with the vapour.
+        const toThreshold = latentHeat > 0
+          ? (T - boilTemp) * capacity / latentHeat
+          : maxRate;
+        const dm = Math.min(f.liquid[k], maxRate, Math.max(0, toThreshold));
+        if (dm > 0) {
+          f.liquid[k] -= dm;
+          f.vapour[k] += dm;
+          f.temp[k] = T - latentHeat * dm / capacity;
+        }
+      } else if (T <= condenseTemp && f.vapour[k] > 0) {
+        // Symmetric: condense at most enough to warm the cell back to
+        // condenseTemp, releasing latent heat into f.temp.
+        const toThreshold = latentHeat > 0
+          ? (condenseTemp - T) * capacity / latentHeat
+          : maxRate;
+        const dm = Math.min(f.vapour[k], maxRate, Math.max(0, toThreshold));
+        if (dm > 0) {
+          f.vapour[k] -= dm;
+          f.liquid[k] += dm;
+          f.temp[k] = T + latentHeat * dm / capacity;
+        }
+      }
+    }
+  }
+  setBnd(f, 0, f.temp);
+  setBnd(f, 0, f.liquid);
+  setBnd(f, 0, f.vapour);
 };
 
 // Thermal buoyancy: a body force on the shared vertical velocity field. Warmer-
@@ -340,6 +493,8 @@ export const step = (f) => {
   velStep(f);
   densStep(f);
   tempStep(f);
+  waterStep(f);
+  phaseChangeStep(f);
 };
 
 // Stamp dye and momentum into a square of half-width `r` around interior cell
@@ -404,7 +559,7 @@ export const rmsDivergence = (f) => {
 };
 
 export const hasNonFinite = (f) => {
-  for (const arr of [f.u, f.v, f.dens, f.temp]) {
+  for (const arr of [f.u, f.v, f.dens, f.temp, f.liquid, f.vapour, f.air]) {
     for (let i = 0; i < arr.length; i++) if (!Number.isFinite(arr[i])) return true;
   }
   return false;

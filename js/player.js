@@ -15,6 +15,12 @@ import { scenarios } from './scenarios.js';
 // change, not a structural one (AC 14).
 const READOUT_SPECS = [
   { channel: 'temp', key: 'energy', label: 'Total energy', field: 'temp' },
+  {
+    channel: 'vapour',
+    key: 'water',
+    label: 'Total water',
+    compute: (sim) => interiorSum(sim, sim.liquid) + interiorSum(sim, sim.vapour),
+  },
 ];
 
 // Displayable channels come straight off the solver's explicit registry
@@ -127,7 +133,7 @@ export function createController(opts = {}) {
         .map((spec) => ({
           key: spec.key,
           label: spec.label,
-          value: interiorSum(sim, sim[spec.field]),
+          value: spec.compute ? spec.compute(sim) : interiorSum(sim, sim[spec.field]),
         }));
     },
 

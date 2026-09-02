@@ -128,18 +128,9 @@ export const scenarios = [
     steps: 40,
     opts: {
       kappa: 0.1,
-      // iter: Jacobi sweeps per implicit solve (solver default 24). Bumped to 100
-      // here purely for CONVERGENCE QUALITY, not to change the physics. The
-      // implicit conduction path (diffuse -> linSolve, Jacobi) conserves the
-      // interior sum exactly only at convergence; truncated early it leaks, and
-      // at this round's strong kappa (0.1) over a one-cell hot/cold step the
-      // energy-drift assertion below sits at ~2.3% at iter 24 vs ~0.1% at iter
-      // 100. This is a scenario working around a solver limitation. FORWARD NOTE:
-      // the Jacobi conduction solve should be made conservative BY CONSTRUCTION
-      // in a later round (flux-form update, or solve-then-rescale) so scenarios
-      // need not crank iter. See test/temperature.js AC 4 for the same latent
-      // brittleness at a gentler kappa.
-      iter: 100,
+      // Conduction is now conservative by construction (flux-form explicit
+      // update in js/fluid.js `conduct`), so this scenario no longer needs to
+      // crank `iter` for the energy-drift assertion — the solver default is fine.
       buoyancy: 0,
       temp0: (i) => (i <= HC_SPLIT ? HC_HOT : HC_COLD),
     },
@@ -178,6 +169,68 @@ export const scenarios = [
           const end = history[history.length - 1].energy;
           const drift = Math.abs(end - start) / Math.abs(start);
           return { pass: drift < 0.01, detail: `drift ${(drift * 100).toFixed(3)}%` };
+        },
+      },
+    ],
+  },
+
+  {
+    id: 'boil-a-pool',
+    name: 'Boil a pool',
+    description: 'A pool of liquid water along the floor is heated until it boils and vapour fills the box.',
+    gridSize: 44,
+    steps: 260,
+    opts: {
+      dt: 0.1,
+      kappa: 0.08,
+      buoyancy: 0.08,
+      capacity: 1,
+      phaseChange: true,
+      latentHeat: 3,
+      boilTemp: 100,
+      condenseTemp: 100,
+      // a pool along the floor, near boiling; cooler air above.
+      temp0: (i, j) => (j >= 36 ? 95 : 55),
+      water0: (i, j) => (j >= 36 ? { liquid: 1, vapour: 0 } : { liquid: 0, vapour: 0 }),
+      // crude pre-round-8 forcing: sustained heat into the floor cells. The
+      // closed box warms until it holds vapour rather than raining it straight
+      // back out — the water cycle's "kettle with the lid on".
+      heat: (i, j) => (j >= 41 ? 5 : 0),
+    },
+    entities: [],
+    record(f) {
+      return {
+        vapour: interiorSum(f, f.vapour),
+        water: interiorSum(f, f.liquid) + interiorSum(f, f.vapour),
+        finite: !hasNonFinite(f),
+      };
+    },
+    assertions: [
+      {
+        name: 'total vapour rises measurably while heat is applied',
+        check({ history }) {
+          const start = history[0].vapour;
+          const mid = history[Math.floor(history.length / 2)].vapour;
+          const end = history[history.length - 1].vapour;
+          return {
+            pass: mid > start && end > start + 0.5,
+            detail: `vapour ${start.toFixed(2)} -> mid ${mid.toFixed(2)} -> end ${end.toFixed(2)}`,
+          };
+        },
+      },
+      {
+        name: 'total water (liquid + vapour) stays within 1% across the boil',
+        check({ history }) {
+          const w0 = history[0].water;
+          const worst = Math.max(...history.map((h) => Math.abs(h.water - w0) / Math.abs(w0)));
+          return { pass: worst < 0.01, detail: `worst water drift ${(worst * 100).toFixed(2)}%` };
+        },
+      },
+      {
+        name: 'the field stays finite throughout the boil',
+        check({ history, sim }) {
+          const ok = history.every((h) => h.finite) && !hasNonFinite(sim);
+          return { pass: ok, detail: ok ? '' : 'non-finite value appeared' };
         },
       },
     ],
