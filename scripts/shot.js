@@ -4,8 +4,10 @@
 //   node scripts/shot.js [outfile] [--seconds N] [--strokes N]
 //
 // Serves the repo on an ephemeral port, loads index.html in headless Chromium,
-// drags a few strokes across the canvas, lets the flow develop, then writes a
-// screenshot of #sim. Prints the output path.
+// switches the page into Sandbox mode, drags a few dye strokes across the
+// canvas, presses Play, lets the flow develop, then writes a screenshot of #sim.
+// Prints the output path. (shot:scenarios covers the scenario-player path;
+// this is the general free-paint screenshot.)
 
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -46,6 +48,12 @@ const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 900, height: 1000 } });
 await page.goto(`http://localhost:${port}/index.html`);
 await page.waitForSelector('#sim');
+await page.waitForFunction(() => window.controller && window.controller.sim);
+
+// Free-paint mode: the page defaults to a scenario, so enter Sandbox first or
+// the canvas drags below are ignored.
+await page.check('#sandbox');
+await page.waitForFunction(() => window.controller.mode === 'sandbox');
 
 const box = await page.locator('#sim').boundingBox();
 const rnd = (() => { let s = 12345; return () => (s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff; })();
@@ -61,6 +69,7 @@ for (let n = 0; n < strokes; n++) {
   await page.waitForTimeout(120);
 }
 
+await page.click('#play');
 await page.waitForTimeout(seconds * 1000);
 await page.locator('#sim').screenshot({ path: outfile });
 

@@ -31,6 +31,11 @@ export const createFluid = (N, opts = {}) => {
     tmp: cell(),  // grid-sized scratch: Jacobi sweeps, and the advected-scalar working buffer
     flux: cell(), // grid-sized scratch: per-face flux buffer for conservative scalar advection
   };
+  // Displayable scalar field channels, in render order. This is the explicit
+  // registry the page iterates (AC 16): adding a scalar field to the solver means
+  // adding its name here and a renderer in js/main.js — nothing downstream guesses
+  // from buffer shapes, so scratch/vector buffers can never leak into the view.
+  f.channels = ['dens', 'temp'];
   // Seed the temperature interior. temp0 is a uniform Number or an (i, j) => value
   // callback over 1-indexed interior cells; the boundary ring stays zero and is
   // refreshed as a zero-gradient copy by setBnd on the first step.

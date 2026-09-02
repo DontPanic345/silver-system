@@ -204,6 +204,17 @@ const firstId = sharedScenarios[0].id;
   check('channels() lists more than just density (derived from the sim, AC 16)',
     Array.isArray(chans) && chans.includes('dens') && chans.includes('temp'),
     Array.isArray(chans) ? chans.join(',') : String(chans));
+  // AC 16 — every reported channel is a real interior scalar field, and none of
+  // the solver's scratch / velocity / swap buffers leak into the view list. This
+  // fails loudly if a later round adds a channel-shaped buffer that isn't meant
+  // to be drawn (or forgets to register one that is).
+  const want = c.sim.SIZE * c.sim.SIZE;
+  check('every channel is a full-size Float32Array field on the sim',
+    chans.every((ch) => c.sim[ch] instanceof Float32Array && c.sim[ch].length === want),
+    chans.map((ch) => `${ch}:${c.sim[ch] && c.sim[ch].length}`).join(' '));
+  check('no scratch / velocity / *Prev buffer leaks into channels()',
+    !chans.some((ch) => ['u', 'v', 'tmp', 'flux'].includes(ch) || ch.endsWith('Prev')),
+    chans.join(','));
 
   const snap0 = {};
   for (const ch of chans) snap0[ch] = Float32Array.from(c.sim[ch]);

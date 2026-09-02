@@ -48,8 +48,13 @@ function tempPixel(value, scale, out, o) {
   }
 }
 
+// Each renderer ADDITIVELY blends its channel's contribution into the shared
+// RGBA buffer (channels layer: dye glow + temperature tint). `data` is a
+// Uint8ClampedArray, so per-component sums saturate at 255 rather than wrapping.
+// If a future round needs true compositing (alpha, ordering), this map is where
+// it goes — page structure and scenario format stay put (AC 16).
 const CHANNEL_RENDERERS = {
-  dens: (sim, data, n, chanScale) => {
+  dens: (sim, data, n) => {
     for (let j = 0; j < n; j++)
       for (let i = 0; i < n; i++)
         densPixel(sim.dens[IX(sim.SIZE, i + 1, j + 1)], data, 4 * (i + j * n));

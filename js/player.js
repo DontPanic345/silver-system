@@ -10,13 +10,6 @@ import { createFluid, step } from './fluid.js';
 import { interiorSum } from './measure.js';
 import { scenarios } from './scenarios.js';
 
-// Names on the fluid object that are grid-sized Float32Array scratch/vector
-// buffers rather than displayable scalar field channels. Everything else that is
-// a full-size Float32Array and is not a `*Prev` swap buffer counts as a channel,
-// so adding a scalar field to the solver surfaces it here (and in the renderer,
-// AC 16) with no change to this list's consumers.
-const NON_CHANNEL = new Set(['u', 'v', 'uPrev', 'vPrev', 'tmp', 'flux']);
-
 // Readout descriptors, keyed by the channel that must be present for them to
 // apply. Adding "total water" in a later round is another entry here — a data
 // change, not a structural one (AC 14).
@@ -24,13 +17,11 @@ const READOUT_SPECS = [
   { channel: 'temp', key: 'energy', label: 'Total energy', field: 'temp' },
 ];
 
+// Displayable channels come straight off the solver's explicit registry
+// (js/fluid.js `f.channels`) — no shape-guessing denylist to rot as later rounds
+// add liquid/vapour/air plus their scratch buffers (AC 16).
 function deriveChannels(sim) {
-  const want = sim.SIZE * sim.SIZE;
-  return Object.keys(sim).filter((k) => {
-    if (NON_CHANNEL.has(k) || k.endsWith('Prev')) return false;
-    const v = sim[k];
-    return v instanceof Float32Array && v.length === want;
-  });
+  return Array.isArray(sim.channels) ? sim.channels.slice() : [];
 }
 
 export function createController(opts = {}) {
