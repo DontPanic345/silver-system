@@ -4,5 +4,17 @@
   "effortLevel": "medium",
   "env": {
     "NODE_PATH": "/usr/local/lib/node_modules"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ \"$CLAUDE_CODE_REMOTE\" = \"true\" ] && ! NODE_PATH=/usr/local/lib/node_modules node -e \"require('playwright')\" 2>/dev/null; then npm install -g playwright@1.62 && NODE_PATH=/usr/local/lib/node_modules npx playwright install --with-deps chromium; fi"
+          }
+        ]
+      }
+    ]
   }
 }
