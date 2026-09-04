@@ -1,14 +1,26 @@
 // Scenario (durable): "A person opens the built M0.1 page in a real browser
-// and sees a coloured rectangle painted onto the canvas."
+// tab and watches the rectangle actually change over time, once per fixed
+// tick — proof this is a running program, not a single paint call."
 //
 // This is the round's headless stand-in for a human looking at a screenshot,
 // per project preference (see memory: verify sims with headless numbers, not
 // screenshots). It serves the built www/ directory over plain HTTP, drives a
 // real headless Chromium via Playwright, and reads back actual canvas pixel
-// data with getImageData — it does not look at a PNG.
+// data with getImageData at two distinct points in time (tick 0, then a
+// later tick) and asserts they differ — it does not look at a PNG, and it is
+// not a single static-frame check.
+//
+// Round 2 fixes forward the duplication round 1's Refactor flagged: the
+// expected colour/coordinate/tick-interval values are no longer hardcoded
+// here. They are read at runtime from the already-loaded wasm module via
+// `window.__wasm` (see www/index.html), which exposes the same
+// `rect_x`/`rect_y`/`rect_w`/`rect_h`/`rect_color_rgb`/`rect_color_rgb_alt`/
+// `tick_interval_ms` getters defined once in src/lib.rs. This file no longer
+// declares a single RECT_* literal.
 //
 // Prerequisite (not done by this script): the wasm build must already exist
-// at www/pkg/viewer.js + www/pkg/viewer_bg.wasm. Build it first with:
+// at www/pkg/viewer.js + www/pkg/viewer_bg.wasm. Build it with
+// scripts/build-wasm.sh, or by hand:
 //
 //   cargo build --release --target wasm32-unknown-unknown
 //   ~/.cargo/bin/wasm-bindgen --target web --out-dir www/pkg \
@@ -27,7 +39,7 @@ import { createRequire } from 'node:module';
 
 // Playwright is installed globally under NODE_PATH=/usr/local/lib/node_modules
 // (see .claude/settings.json). Node's ESM loader does NOT consult NODE_PATH
-// for `import`/dynamic `import()` (confirmed this round — it resolves fine
+// for `import`/dynamic `import()` (confirmed round 1 — it resolves fine
 // under CommonJS `require` but throws ERR_MODULE_NOT_FOUND under `import()`
 // with the identical NODE_PATH set). `createRequire` gives us the CJS
 // resolver, which does honour NODE_PATH, without switching this whole file
@@ -38,18 +50,12 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..');
 const wwwDir = path.join(repoRoot, 'www');
 
-// Kept in sync BY HAND with the RECT_* / RECT_COLOR_RGB constants in
-// src/lib.rs — see round-01 log, "Compromises I made", for why this
-// duplication exists and what would remove it.
-const EXPECTED = {
-  color: [200, 60, 60], // RECT_COLOR_RGB
-  // A point safely inside the rectangle (RECT_X=20, RECT_Y=20, RECT_W=60, RECT_H=40).
-  sampleX: 40,
-  sampleY: 40,
-};
-// A point safely outside the rectangle, expected to stay untouched
-// (transparent black canvas backing, i.e. alpha 0) both before and after a
-// correct draw.
+// A point safely outside the rectangle regardless of which tick painted it
+// (rectangle geometry doesn't move this round, only colour does), expected
+// to stay untouched (transparent black canvas backing, i.e. alpha 0) at
+// every sample. This is a canvas-dimension choice (200x150, see
+// www/index.html), not one of the duplicated RECT_* values, so it stays a
+// literal here.
 const OUTSIDE = { x: 150, y: 120 };
 
 function serveDir(dir) {
@@ -85,7 +91,8 @@ async function main() {
   } catch {
     fail(
       `FAIL canvas_rectangle: build artifacts missing at ${wasmPath} / ${jsPath}. ` +
-        `Run the two build commands documented at the top of this file first.`
+        `Run scripts/build-wasm.sh (or the two build commands documented at the ` +
+        `top of this file) first.`
     );
     return;
   }
@@ -111,61 +118,135 @@ async function main() {
       { timeout: 5000 }
     ).catch(() => {
       // Neither flag got set within the timeout — fall through and let the
-      // pixel check below report the failure with real data instead of a
-      // bare timeout message.
+      // checks below report the failure with real data instead of a bare
+      // timeout message.
     });
 
     const viewerError = await page.evaluate(() => window.__viewerError);
     const viewerReady = await page.evaluate(() => window.__viewerReady);
 
-    const pixels = await page.evaluate(
-      ({ sampleX, sampleY, outsideX, outsideY }) => {
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
-        const inside = ctx.getImageData(sampleX, sampleY, 1, 1).data;
-        const outside = ctx.getImageData(outsideX, outsideY, 1, 1).data;
-        return { inside: Array.from(inside), outside: Array.from(outside) };
-      },
-      { sampleX: EXPECTED.sampleX, sampleY: EXPECTED.sampleY, outsideX: OUTSIDE.x, outsideY: OUTSIDE.y }
-    );
-
-    const [r, g, b, a] = pixels.inside;
-    const colorMatches =
-      r === EXPECTED.color[0] && g === EXPECTED.color[1] && b === EXPECTED.color[2] && a === 255;
-    const outsideUntouched = pixels.outside[3] === 0;
-
     if (!viewerReady) {
       fail(
         `FAIL canvas_rectangle: wasm module did not report ready ` +
           `(__viewerError=${viewerError}, pageerror=${JSON.stringify(pageErrors)}). ` +
-          `Expected once Green implements draw(): __viewerReady === true.`
+          `Expected once Green implements the tick stubs: __viewerReady === true.`
       );
       return;
     }
 
-    if (!colorMatches) {
+    // Read the round's shared constants straight from the loaded wasm
+    // module — the single source of truth (round 2, goal 2) — rather than
+    // hardcoding them here.
+    const constants = await page.evaluate(() => {
+      const wasm = window.__wasm;
+      return {
+        rectX: wasm.rect_x(),
+        rectY: wasm.rect_y(),
+        color: Array.from(wasm.rect_color_rgb()),
+        colorAlt: Array.from(wasm.rect_color_rgb_alt()),
+        intervalMs: wasm.tick_interval_ms(),
+      };
+    });
+
+    // A point safely inside the rectangle, regardless of which colour is
+    // currently painted there.
+    const sampleX = constants.rectX + 5;
+    const sampleY = constants.rectY + 5;
+
+    // --- Sample 1: tick 0, immediately after the module reports ready and
+    // before any interval has had a chance to fire. ---
+    const tick0 = await samplePixels(page, sampleX, sampleY);
+
+    if (!colorsEqual(tick0.inside, constants.color)) {
       fail(
-        `FAIL canvas_rectangle: pixel at (${EXPECTED.sampleX},${EXPECTED.sampleY}) is ` +
-          `rgba(${r},${g},${b},${a}), expected rgba(${EXPECTED.color.join(',')},255). ` +
-          `(__viewerError=${viewerError})`
+        `FAIL canvas_rectangle: tick-0 pixel at (${sampleX},${sampleY}) is ` +
+          `rgba(${tick0.inside.join(',')}), expected rgba(${constants.color.join(',')},255) ` +
+          `(the tick-0 / even-tick colour, per rect_color_rgb()).`
       );
       return;
     }
-
-    if (!outsideUntouched) {
+    if (tick0.outside[3] !== 0) {
       fail(
-        `FAIL canvas_rectangle: pixel at (${OUTSIDE.x},${OUTSIDE.y}), which should be ` +
-          `outside the rectangle, is not transparent (alpha=${pixels.outside[3]}). ` +
+        `FAIL canvas_rectangle: tick-0 pixel at (${OUTSIDE.x},${OUTSIDE.y}), which should be ` +
+          `outside the rectangle, is not transparent (alpha=${tick0.outside[3]}). ` +
           `The rectangle may be drawn too large or in the wrong place.`
       );
       return;
     }
 
-    pass('PASS canvas_rectangle: rectangle pixel matches expected colour, outside pixel untouched.');
+    // --- Sample 2: wait for at least one real tick to have fired (real
+    // wall-clock interval, not a bypassed/pure-function call — this proves
+    // the actual running loop works end to end, per the milestone intent),
+    // then sample the same point again. ---
+    const waitTimeoutMs = Math.max(5000, constants.intervalMs * 20);
+    let sawTick = true;
+    await page.waitForFunction(() => window.__tickCount >= 1, { timeout: waitTimeoutMs }).catch(() => {
+      sawTick = false;
+    });
+
+    if (!sawTick) {
+      fail(
+        `FAIL canvas_rectangle: window.__tickCount never reached 1 within ` +
+          `${waitTimeoutMs}ms (tick_interval_ms()=${constants.intervalMs}). Expected ` +
+          `tick_and_draw() to be called on a ${constants.intervalMs}ms setInterval ` +
+          `and return an incrementing count.`
+      );
+      return;
+    }
+
+    const tick1 = await samplePixels(page, sampleX, sampleY);
+
+    if (colorsEqual(tick1.inside, tick0.inside)) {
+      fail(
+        `FAIL canvas_rectangle: pixel at (${sampleX},${sampleY}) is identical at tick 0 and ` +
+          `after tick advanced (both rgba(${tick0.inside.join(',')})). Expected the rectangle ` +
+          `to visibly change once per tick — color_for_tick() should alternate between ` +
+          `rect_color_rgb() and rect_color_rgb_alt().`
+      );
+      return;
+    }
+    if (!colorsEqual(tick1.inside, constants.colorAlt)) {
+      fail(
+        `FAIL canvas_rectangle: post-tick pixel at (${sampleX},${sampleY}) is ` +
+          `rgba(${tick1.inside.join(',')}), expected rgba(${constants.colorAlt.join(',')},255) ` +
+          `(the odd-tick colour, per rect_color_rgb_alt()).`
+      );
+      return;
+    }
+    if (tick1.outside[3] !== 0) {
+      fail(
+        `FAIL canvas_rectangle: post-tick pixel at (${OUTSIDE.x},${OUTSIDE.y}), which should be ` +
+          `outside the rectangle, is not transparent (alpha=${tick1.outside[3]}).`
+      );
+      return;
+    }
+
+    pass(
+      'PASS canvas_rectangle: rectangle pixel at tick 0 matches rect_color_rgb(), differs after ' +
+        'a real tick and matches rect_color_rgb_alt(), outside pixel untouched throughout.'
+    );
   } finally {
     await browser.close();
     server.close();
   }
+}
+
+async function samplePixels(page, sampleX, sampleY) {
+  const pixels = await page.evaluate(
+    ({ sampleX, sampleY, outsideX, outsideY }) => {
+      const canvas = document.getElementById('canvas');
+      const ctx = canvas.getContext('2d');
+      const inside = ctx.getImageData(sampleX, sampleY, 1, 1).data;
+      const outside = ctx.getImageData(outsideX, outsideY, 1, 1).data;
+      return { inside: Array.from(inside), outside: Array.from(outside) };
+    },
+    { sampleX, sampleY, outsideX: OUTSIDE.x, outsideY: OUTSIDE.y }
+  );
+  return pixels;
+}
+
+function colorsEqual(rgba, rgb) {
+  return rgba[0] === rgb[0] && rgba[1] === rgb[1] && rgba[2] === rgb[2] && rgba[3] === 255;
 }
 
 function pass(msg) {

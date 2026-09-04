@@ -11,17 +11,38 @@
   -->
   <canvas id="canvas" width="200" height="150"></canvas>
   <script type="module">
-    import init from './pkg/viewer.js';
+    import init, * as wasm from './pkg/viewer.js';
 
-    // #[wasm_bindgen(start)] in src/lib.rs runs `main()` (which calls
-    // `draw("canvas")`) automatically as part of `init()`. If `draw` panics
-    // (e.g. on Green's not-yet-implemented stub), `init()` rejects and we
-    // record that on `window` so the headless test can see it rather than
-    // just hanging or reporting an opaque timeout.
+    // #[wasm_bindgen(start)] in src/lib.rs runs `main()` (which paints tick
+    // 0) automatically as part of `init()`. If it panics (e.g. on Green's
+    // not-yet-implemented stub), `init()` rejects and we record that on
+    // `window` so the headless test can see it rather than just hanging or
+    // reporting an opaque timeout.
     window.__viewerReady = false;
     window.__viewerError = null;
+    window.__tickCount = 0;
+
     init()
-      .then(() => { window.__viewerReady = true; })
+      .then(() => {
+        window.__viewerReady = true;
+
+        // Exposed so the headless test can read round 2's shared constants
+        // (colour, geometry, tick interval) straight off the loaded wasm
+        // module instead of re-declaring them as JS literals — the single
+        // source of truth for round 2's goal 2 (see
+        // cycle-log/tranche-0/m0.1/round-02.md).
+        window.__wasm = wasm;
+
+        // Round 2's tick mechanism: this page owns the wall-clock timer,
+        // Rust owns the tick counter and the colour decision it drives.
+        // tick_and_draw() increments the crate-local counter, redraws, and
+        // returns the new count so window.__tickCount visibly advances —
+        // that's what the headless test polls to know a tick happened.
+        const intervalMs = wasm.tick_interval_ms();
+        setInterval(() => {
+          window.__tickCount = wasm.tick_and_draw('canvas');
+        }, intervalMs);
+      })
       .catch((e) => { window.__viewerError = String(e); });
   </script>
 </body>

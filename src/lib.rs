@@ -1,29 +1,61 @@
 //! M0.1 toolchain proving ground.
 //!
-//! Round goal: prove the chain from `cargo build --target wasm32-unknown-unknown`
-//! through `wasm-bindgen` to a real browser canvas actually works on this
-//! machine. This crate's only job, for this round, is to draw a single
-//! coloured rectangle onto an HTML `<canvas>` element.
+//! Round 1 proved the chain from `cargo build --target wasm32-unknown-unknown`
+//! through `wasm-bindgen` to a real browser canvas: a single static coloured
+//! rectangle. Round 2's job is to prove the chain also carries a *running*
+//! program — the rectangle must visibly change once per fixed tick — and to
+//! remove the hand-duplicated constants Round 1's Refactor flagged forward.
 //!
-//! Rendering approach: canvas 2D via `wasm-bindgen`/`web-sys`, chosen over a
-//! WebGL/WebGPU crate because it needs no GPU context negotiation and the
-//! plain toolchain (rustup wasm32 target, crates.io access, `wasm-bindgen-cli`
-//! matching the `wasm-bindgen` crate version) was confirmed to work end to end
-//! during this round — see `cycle-log/tranche-0/m0.1/round-01.md` for the
-//! exact commands and their output. If a later round needs the extra power of
-//! WebGL/WebGPU, that is a fresh decision against what actually builds then,
-//! not a revision of this one.
+//! Rendering approach unchanged from round 1: canvas 2D via
+//! `wasm-bindgen`/`web-sys`. See `cycle-log/tranche-0/m0.1/round-01.md` for
+//! why.
+//!
+//! ## Round 2 tick mechanism (decided in Red; Green fills in the marked stubs)
+//!
+//! JS owns the wall-clock timer (a plain `setInterval` in `www/index.html`);
+//! Rust owns the tick counter and the decision of what the rectangle should
+//! look like at a given tick. Every timer fire calls the exported
+//! [`tick_and_draw`], which is expected to advance a crate-local counter,
+//! decide the colour for the new tick via [`color_for_tick`], repaint via
+//! [`paint_rect`], and return the new count so JS (and the headless test) can
+//! observe it advancing. This is explicitly NOT the shared M0.4
+//! fixed-timestep harness — that harness doesn't exist yet and will retrofit
+//! this crate later; this is a small, local, throwaway-if-need-be counter.
+//!
+//! ## Single source of truth for shared constants (round 2, goal 2)
+//!
+//! Round 1 left the expected colour/coordinate values hand-duplicated as
+//! literals in both this file and `tests/e2e/canvas_rectangle.test.mjs`. Fixed
+//! here by exporting plain `#[wasm_bindgen]` getter functions for every value
+//! the JS test needs (`rect_x`, `rect_y`, `rect_w`, `rect_h`,
+//! `rect_color_rgb`, `rect_color_rgb_alt`, `tick_interval_ms`). The JS test
+//! calls these on the already-loaded wasm module at runtime instead of
+//! re-declaring the numbers — there is exactly one place these values are
+//! written down. The getters are plumbing (a return statement, no decision to
+//! make), so they are implemented for real here rather than stubbed; the
+//! genuinely new *logic* (which colour a given tick gets, how the counter
+//! advances) is left as `todo!()` for Green.
 
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::CanvasRenderingContext2d;
 
-/// The colour Green's implementation must paint the rectangle, as 8-bit sRGB.
-/// Pinned here so Red's test and Green's implementation agree on what
-/// "success" looks like without either having to guess at the other's
-/// number. Kept in sync by hand with `tests/e2e/canvas_rectangle.test.mjs`
-/// until there is a shared source of truth (see round log, "Compromises").
+/// The colour painted on even ticks (including tick 0), as 8-bit sRGB.
 pub const RECT_COLOR_RGB: (u8, u8, u8) = (200, 60, 60);
+
+/// The colour painted on odd ticks, as 8-bit sRGB. New this round: this is
+/// what makes the tick visible as a colour change. Chosen far enough from
+/// `RECT_COLOR_RGB` in every channel that no compression/rounding step
+/// between here and a browser's canvas backing store could plausibly make
+/// them compare equal by accident.
+pub const RECT_COLOR_RGB_ALT: (u8, u8, u8) = (60, 120, 200);
+
+/// How often, in milliseconds, the rectangle is expected to advance one
+/// tick. Read by `www/index.html` via [`tick_interval_ms`] to drive its
+/// `setInterval`, and by the Playwright test to size its wait timeout — so
+/// changing this one constant changes both the running page and the test
+/// that watches it.
+pub const TICK_INTERVAL_MS: u32 = 150;
 
 /// Rectangle geometry, in canvas pixel coordinates.
 ///
@@ -40,15 +72,13 @@ pub const RECT_H: u32 = 40;
 
 /// Looks up the canvas element by `canvas_id`, gets its 2D rendering context,
 /// and fills a `RECT_W` x `RECT_H` rectangle at `(RECT_X, RECT_Y)` in
-/// `RECT_COLOR_RGB`.
+/// `color`.
 ///
-/// This is the function the host page (`www/index.html`) calls once the wasm
-/// module has loaded. Green fills in the actual `web_sys` calls; this stub
-/// only proves the crate compiles for `wasm32-unknown-unknown` and the
-/// `wasm-bindgen` export shape (name, signature, visibility) is right for the
-/// JS glue that `wasm-bindgen-cli` generates.
-#[wasm_bindgen]
-pub fn draw(canvas_id: &str) {
+/// This is round 1's proven `draw` body, unchanged apart from taking the
+/// colour as a parameter instead of always using `RECT_COLOR_RGB` — it is
+/// existing, already-verified plumbing (see round-01 log), not new logic, so
+/// it is implemented here rather than stubbed.
+fn paint_rect(canvas_id: &str, color: (u8, u8, u8)) {
     let window = web_sys::window().expect("no global `window` exists");
     let document = window.document().expect("window has no document");
     let canvas = document
@@ -63,22 +93,103 @@ pub fn draw(canvas_id: &str) {
         .dyn_into::<CanvasRenderingContext2d>()
         .expect("context is not a CanvasRenderingContext2d");
 
-    let (r, g, b) = RECT_COLOR_RGB;
+    let (r, g, b) = color;
     ctx.set_fill_style_str(&format!("rgb({r}, {g}, {b})"));
-    ctx.fill_rect(
-        RECT_X as f64,
-        RECT_Y as f64,
-        RECT_W as f64,
-        RECT_H as f64,
-    );
+    ctx.fill_rect(RECT_X as f64, RECT_Y as f64, RECT_W as f64, RECT_H as f64);
+}
+
+/// Decides which colour the rectangle should be painted at a given tick:
+/// `RECT_COLOR_RGB` on even ticks (including tick 0), `RECT_COLOR_RGB_ALT` on
+/// odd ticks. Pure — no drawing, no shared state — so it can be unit tested
+/// directly without a DOM.
+///
+/// This is the round's new *decision*, not plumbing: left as a stub for
+/// Green.
+fn color_for_tick(tick: u32) -> (u8, u8, u8) {
+    let _ = tick;
+    todo!("alternate RECT_COLOR_RGB / RECT_COLOR_RGB_ALT by tick parity (see color_for_tick_alternates_by_parity)")
+}
+
+/// Paints the rectangle at tick 0. Called once, synchronously, when the wasm
+/// module starts (see [`main`]).
+#[wasm_bindgen]
+pub fn draw(canvas_id: &str) {
+    paint_rect(canvas_id, color_for_tick(0));
+}
+
+/// Advances the crate-local tick counter by one, repaints the rectangle for
+/// the new tick via [`color_for_tick`] and [`paint_rect`], and returns the
+/// new tick count.
+///
+/// Called by `www/index.html` on a fixed `setInterval` (period
+/// [`TICK_INTERVAL_MS`], read via [`tick_interval_ms`]) — this function is
+/// what turns the artifact into proof of a *running* program rather than a
+/// single paint call. The tick counter itself (its storage — a `Cell`,
+/// `AtomicU32`, or similar — is Green's choice) is crate-local state, not the
+/// shared M0.4 fixed-timestep harness.
+///
+/// Left as a stub for Green: both the counter's storage and the
+/// increment-then-paint sequence are new logic this round, not existing
+/// plumbing.
+#[wasm_bindgen]
+pub fn tick_and_draw(canvas_id: &str) -> u32 {
+    let _ = canvas_id;
+    todo!("increment a crate-local tick counter, paint_rect(canvas_id, color_for_tick(new_tick)), return new_tick")
 }
 
 /// Runs automatically when the wasm module is instantiated in the browser
-/// (see the `#[wasm_bindgen(start)]` attribute). Calls [`draw`] against the
-/// host page's well-known canvas element id, `"canvas"`.
+/// (see the `#[wasm_bindgen(start)]` attribute). Paints tick 0; the running
+/// page (`www/index.html`) is responsible for calling [`tick_and_draw`] on
+/// its own timer thereafter.
 #[wasm_bindgen(start)]
 pub fn main() {
     draw("canvas");
+}
+
+// --- Getters: the single source of truth for tests/e2e/canvas_rectangle.test.mjs ---
+//
+// Plain accessors, no decision-making — implemented for real (not stubbed).
+// The JS test calls these on the loaded wasm module instead of re-declaring
+// the numbers, which is round 2's fix for the duplication round 1's
+// Refactor flagged forward.
+
+#[wasm_bindgen]
+pub fn rect_x() -> u32 {
+    RECT_X
+}
+
+#[wasm_bindgen]
+pub fn rect_y() -> u32 {
+    RECT_Y
+}
+
+#[wasm_bindgen]
+pub fn rect_w() -> u32 {
+    RECT_W
+}
+
+#[wasm_bindgen]
+pub fn rect_h() -> u32 {
+    RECT_H
+}
+
+#[wasm_bindgen]
+pub fn rect_color_rgb() -> Vec<u8> {
+    vec![RECT_COLOR_RGB.0, RECT_COLOR_RGB.1, RECT_COLOR_RGB.2]
+}
+
+#[wasm_bindgen]
+pub fn rect_color_rgb_alt() -> Vec<u8> {
+    vec![
+        RECT_COLOR_RGB_ALT.0,
+        RECT_COLOR_RGB_ALT.1,
+        RECT_COLOR_RGB_ALT.2,
+    ]
+}
+
+#[wasm_bindgen]
+pub fn tick_interval_ms() -> u32 {
+    TICK_INTERVAL_MS
 }
 
 #[cfg(test)]
@@ -103,5 +214,42 @@ mod tests {
             "rectangle bottom edge ({}) exceeds canvas height ({CANVAS_H})",
             RECT_Y + RECT_H
         );
+    }
+
+    /// Green guard test (already green, pins it so a later round can't
+    /// quietly break it): the getters round 2 adds to remove the
+    /// Rust/JS constant duplication actually expose the same values the
+    /// constants hold, not stale or miscopied ones.
+    #[test]
+    fn getters_expose_the_same_constants_js_reads() {
+        assert_eq!(rect_x(), RECT_X);
+        assert_eq!(rect_y(), RECT_Y);
+        assert_eq!(rect_w(), RECT_W);
+        assert_eq!(rect_h(), RECT_H);
+        assert_eq!(
+            rect_color_rgb(),
+            vec![RECT_COLOR_RGB.0, RECT_COLOR_RGB.1, RECT_COLOR_RGB.2]
+        );
+        assert_eq!(
+            rect_color_rgb_alt(),
+            vec![
+                RECT_COLOR_RGB_ALT.0,
+                RECT_COLOR_RGB_ALT.1,
+                RECT_COLOR_RGB_ALT.2
+            ]
+        );
+        assert_eq!(tick_interval_ms(), TICK_INTERVAL_MS);
+    }
+
+    /// Disposable unit test (not a scenario): pins the tick-to-colour rule
+    /// that makes the rectangle's change visible — even ticks (including
+    /// tick 0) get `RECT_COLOR_RGB`, odd ticks get `RECT_COLOR_RGB_ALT`.
+    /// Currently red: `color_for_tick` is a stub.
+    #[test]
+    fn color_for_tick_alternates_by_parity() {
+        assert_eq!(color_for_tick(0), RECT_COLOR_RGB, "tick 0 should be the base colour");
+        assert_eq!(color_for_tick(1), RECT_COLOR_RGB_ALT, "tick 1 should be the alt colour");
+        assert_eq!(color_for_tick(2), RECT_COLOR_RGB, "tick 2 should be back to the base colour");
+        assert_eq!(color_for_tick(3), RECT_COLOR_RGB_ALT, "tick 3 should be the alt colour");
     }
 }
