@@ -263,3 +263,117 @@ the same named stub. Suite runtime: 0.00s reported (30 tests total,
 trivial arithmetic — no performance concern, nothing to tag as slow).
 
 **Restructuring:** none. Goals taken as handed.
+
+## Round 03 — Green — 2026-09-05T03:32:59+12:00 → 2026-09-05T03:38:00+12:00 (~5m)
+
+**What I did.**
+
+Filled in every `todo!()` stub in `src/timestep.rs` left by Red, in place —
+no signature changed:
+
+- `with_max_steps_per_call` — constructs `Self` with `accumulator: 0.0`.
+- `dt`/`max_steps_per_call`/`accumulator` — plain field accessors.
+- `advance` — computes `max_accumulate = max_steps_per_call as Scalar *
+  dt`, clamps `frame_duration` to it with `.min(...)` *before* adding to
+  `self.accumulator` (the module doc comment's documented design: clamp the
+  input, not just the reported count), then extracts whole `dt`-sized steps
+  in a `while` loop bounded by `max_steps_per_call`, subtracting `dt` from
+  the accumulator per step and counting.
+- `step_with` — calls `advance`, then loops `on_step()` that many times,
+  returning the same count. Implemented in terms of `advance`, not a
+  duplicate accumulator, per Red's stated preference.
+
+One thing added beyond a literal stub-fill: a `const EPSILON: Scalar =
+1e-5` tolerance in `advance`'s step-extraction comparison (`accumulator +
+EPSILON >= dt` instead of `accumulator >= dt`). Without it,
+`irregular_frame_durations_total_the_expected_step_count` and
+`same_total_time_yields_same_total_steps_regardless_of_chunking`'s
+"many small calls" side both under-counted by exactly one step. This is
+`f32` rounding, not a logic bug — I isolated it with a standalone repro
+(summing `[0.03, 0.12, 0.02, 0.11, 0.22]` against `dt = 0.1` in plain
+`f32` arithmetic outside the crate): the true accumulator value after all
+five adds is `0.0999999866`, a few ULPs short of `0.1`, so a strict `>=`
+silently drops the fifth step. `1e-5` is far smaller than any `dt` this
+harness is meant for (the smallest in the test suite is `0.02`) so it
+never manufactures a step time didn't earn — it only recovers steps lost
+to accumulated float error. This is the one place I "proposed a number"
+rather than treating Red's skeleton as complete; measurement is above,
+verifiable by rerunning that repro.
+
+**Commands run and results.**
+
+- `cargo test --lib timestep::` — 12 tests: 11 passed, 1 failed
+  (`same_total_time_yields_same_total_steps_regardless_of_chunking`, see
+  below).
+- `cargo test --lib` (full suite) — 30 tests: 29 passed, 1 failed (the
+  same one). All 18 pre-existing tests still green.
+
+**Still failing: `same_total_time_yields_same_total_steps_regardless_of_chunking`.**
+
+```
+assertion `left == right` failed
+  left: 5
+ right: 17
+```
+
+This is not an implementation defect — it is the test's chosen inputs
+directly contradicting the guard the round's own goal 3 requires, and I
+did not weaken either side to force it green. Walkthrough:
+
+- `dt = 0.1`, `total_time = 1.7`, both harnesses built via
+  `FixedTimestep::new(dt)` → `max_steps_per_call = DEFAULT_MAX_STEPS_PER_CALL
+  = 5`, so `max_accumulate = 5 * 0.1 = 0.5`.
+- **One big call:** `advance(1.7)` clamps `1.7` down to `0.5` *before*
+  accumulating (module doc comment, goal 3) — this is exactly the
+  documented spiral-of-death guard doing its job on a single oversized
+  duration. `0.5 / 0.1 = 5` steps. Result: `5`.
+- **Many small calls:** chunked in steps of `0.05`, so no single `advance`
+  call ever approaches the `0.5` clamp threshold — nothing is ever
+  discarded, and the accumulator faithfully reaches the full `1.7` over
+  many calls. `1.7 / 0.1 = 17` steps. Result: `17`.
+
+Both numbers are correct outputs of the documented design; they disagree
+because the test's `total_time` (`1.7`) exceeds what a *single* call can
+ever honestly turn into steps under the default cap (`0.5`), so the
+"same total, regardless of chunking" property this test asserts and the
+"a single oversized call is capped, permanently losing simulated time"
+property goal 3 asserts are mutually exclusive for this specific input.
+Neither is a bug in `advance`; they're two round goals whose chosen test
+inputs collide. I did not touch this test (out of Green's scope: `src/
+timestep.rs`'s tests belong to Red, and the contract says propose a
+number rather than loosen a threshold silently).
+
+**Proposed fix (for Red/Refactor, not applied by me):** either (a) shrink
+`total_time` in this test to something `<= max_steps_per_call * dt`
+(`0.5` here) so a single call can honestly match the chunked total — e.g.
+`0.35` (`3` and `3` steps for `dt = 0.1`, cap `5`) — or (b) build both
+harnesses in this test via `with_max_steps_per_call(dt, some_larger_cap)`
+so `1.7`'s single-call total (`17` steps) sits under the cap and the
+guard never engages for either side. Either preserves the scenario's
+actual intent (call-granularity independence) without touching goal 3's
+guard tests, which are unaffected by this. I did not pick one and edit
+the test myself — that's a design call for whoever owns Red's test intent
+next (Refactor, or a follow-up Red patch), not an implementation
+decision.
+
+**Signature changes from Red's skeleton.** None. `step_with`'s parameter
+was un-named (`on_step: F`, not `mut on_step: F`) in the skeleton
+signature comment but that's a binding-mutability detail inside the body,
+not part of the public signature — no external change.
+
+**What I noticed but left for Refactor.**
+
+- The `EPSILON` constant is a private `const` local to `advance`'s body,
+  not a module-level item — fine for a single use site, but if a future
+  round adds another comparison against `dt` it should probably move to
+  module scope rather than be redeclared. Left as-is since only one
+  comparison needs it right now and duplicating a one-line const isn't a
+  live problem yet.
+- Did not attempt to fix
+  `same_total_time_yields_same_total_steps_regardless_of_chunking` myself
+  per the above — flagging loudly rather than silently patching the test
+  or loosening the guard.
+
+**Files touched.** `src/timestep.rs` only, per scope. `cycle-log/tranche-0/m0.4/round-03.md` for this report.
+
+**Commit.** `1addcc1` — "Round 3 Green: implement FixedTimestep accumulator harness".
