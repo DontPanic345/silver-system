@@ -190,12 +190,13 @@ pub fn draw(canvas_id: &str) {
 /// Left as a stub for Green: the decision of how the harness's step count
 /// turns into the new tick count is new logic this round, not existing
 /// plumbing.
-fn advance_tick(_frame_duration_secs: Scalar) -> u32 {
-    todo!(
-        "feed `frame_duration_secs` to TIMESTEP.advance(...) to get a step \
-         count, advance TICK by that many steps (not by a bare +1), and \
-         return the new tick count"
-    )
+fn advance_tick(frame_duration_secs: Scalar) -> u32 {
+    let steps = TIMESTEP.with(|timestep| timestep.borrow_mut().advance(frame_duration_secs));
+    TICK.with(|tick| {
+        let new_tick = tick.get() + steps;
+        tick.set(new_tick);
+        new_tick
+    })
 }
 
 /// Advances the tick count via [`advance_tick`] from `frame_duration_secs` of
