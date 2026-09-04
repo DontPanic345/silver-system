@@ -105,18 +105,21 @@ impl FixedTimestep {
     /// [`advance`]: FixedTimestep::advance
     /// [`step_with`]: FixedTimestep::step_with
     pub fn with_max_steps_per_call(dt: Scalar, max_steps_per_call: u32) -> Self {
-        let _ = (dt, max_steps_per_call);
-        todo!("construct a FixedTimestep with a zeroed accumulator")
+        Self {
+            dt,
+            max_steps_per_call,
+            accumulator: 0.0,
+        }
     }
 
     /// The fixed step size this harness was built with.
     pub fn dt(&self) -> Scalar {
-        todo!("return the stored dt")
+        self.dt
     }
 
     /// The spiral-of-death cap this harness was built with.
     pub fn max_steps_per_call(&self) -> u32 {
-        todo!("return the stored max_steps_per_call")
+        self.max_steps_per_call
     }
 
     /// The amount of simulated time currently owed but not yet turned into a
@@ -128,7 +131,7 @@ impl FixedTimestep {
     /// [`advance`]: FixedTimestep::advance
     /// [`step_with`]: FixedTimestep::step_with
     pub fn accumulator(&self) -> Scalar {
-        todo!("return the current accumulator value")
+        self.accumulator
     }
 
     /// Records that `frame_duration` of real time has elapsed since the
@@ -148,8 +151,24 @@ impl FixedTimestep {
     ///
     /// [`step_with`]: FixedTimestep::step_with
     pub fn advance(&mut self, frame_duration: Scalar) -> u32 {
-        let _ = frame_duration;
-        todo!("clamp frame_duration, accumulate it, and extract whole dt-sized steps")
+        // A tiny epsilon guards against f32 rounding error accumulated across
+        // many `advance` calls causing an accumulator that is, in exact
+        // arithmetic, a whole multiple of `dt` to fall a few ULPs short and
+        // silently drop a step. It is far smaller than any `dt` this harness
+        // is meant for, so it never manufactures a step that real elapsed
+        // time didn't earn.
+        const EPSILON: Scalar = 1e-5;
+
+        let max_accumulate = self.max_steps_per_call as Scalar * self.dt;
+        let clamped = frame_duration.min(max_accumulate);
+        self.accumulator += clamped;
+
+        let mut steps = 0;
+        while steps < self.max_steps_per_call && self.accumulator + EPSILON >= self.dt {
+            self.accumulator -= self.dt;
+            steps += 1;
+        }
+        steps
     }
 
     /// Convenience wrapper over [`advance`]: records `frame_duration`,
@@ -162,9 +181,12 @@ impl FixedTimestep {
     /// the accumulator works.
     ///
     /// [`advance`]: FixedTimestep::advance
-    pub fn step_with<F: FnMut()>(&mut self, frame_duration: Scalar, on_step: F) -> u32 {
-        let _ = (frame_duration, on_step);
-        todo!("call advance, then invoke on_step once per elapsed step")
+    pub fn step_with<F: FnMut()>(&mut self, frame_duration: Scalar, mut on_step: F) -> u32 {
+        let steps = self.advance(frame_duration);
+        for _ in 0..steps {
+            on_step();
+        }
+        steps
     }
 }
 
