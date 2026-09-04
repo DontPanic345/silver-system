@@ -495,6 +495,37 @@ mod tests {
         let _ = grid.get(GridIndex::new(2, 0));
     }
 
+    /// Scenario (Refactor-added): the out-of-bounds contract holds on
+    /// *every* edge and axis, not just the one direction
+    /// `indexing_past_width_panics` above happens to cover — negative `i`,
+    /// negative `j`, `i == width`, and `j == height` each panic on their
+    /// own. `linear_index`'s two `assert!`s are structurally symmetric
+    /// between `i`/width and `j`/height (see `src/grid.rs`'s source), but
+    /// before this test only the `i >= width` case had ever been exercised
+    /// directly — a real coverage gap on a milestone-wide shared primitive,
+    /// closed here rather than just re-reported. All four panics are
+    /// checked independently so a future change that broke, say, only the
+    /// negative-`j` check specifically would be caught.
+    #[test]
+    fn out_of_bounds_contract_holds_on_every_edge_and_axis() {
+        let grid = Grid::new(3, 2, AIR);
+
+        let cases: [(&str, GridIndex); 4] = [
+            ("negative i", GridIndex::new(-1, 0)),
+            ("negative j", GridIndex::new(0, -1)),
+            ("i == width", GridIndex::new(3, 0)),
+            ("j == height", GridIndex::new(0, 2)),
+        ];
+
+        for (label, idx) in cases {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| grid.get(idx)));
+            assert!(
+                result.is_err(),
+                "expected grid.get({idx:?}) to panic ({label}), but it returned a value"
+            );
+        }
+    }
+
     // --- Scenario: step only advances what real elapsed time earns (round 2 goal 4) ---
 
     /// Scenario: mirrors `src/timestep.rs`'s and `src/lib.rs`'s own
