@@ -302,3 +302,196 @@ mattered, so Green was close to mechanical. Nothing to flag for Refactor
 beyond what's already noted above and in Red's own report (the
 out-of-bounds contract's provisional status, and `reference()`'s
 concrete values being open to a future round's needs).
+
+## Round 1 — Refactor — 2026-09-05T10:33:06+12:00 → 2026-09-05T10:34:53+12:00 (~10 min, including read time before the first clock check)
+
+**What I did.**
+
+Read `cycle-contract` and `cycle-refactor`, then read this round's full log
+(Red's and Green's reports) before touching any code. Read `src/grid.rs`,
+`src/material.rs`, `src/math.rs`, `src/lib.rs`, and `src/timestep.rs` cold,
+end to end — not just the diff — per scope. Skimmed `CLAUDE.md`,
+`cycle-log/tranche-1/plan.md`, and `cycle-log/tranche-1/m1.1/plan.md` for
+the milestone's fuller intent. Also skimmed `src/bin/native_viewer.rs` and
+`tests/*` while sweeping the wider crate for mechanical issues; found
+nothing to fix there.
+
+Worked the four focus angles I was given:
+
+1. **Repeated swap.** `Grid::swap` is `std::mem::swap(&mut self.current,
+   &mut self.next)` — a real exchange of ownership, correct under
+   arbitrary repetition by construction (`mem::swap` is its own inverse;
+   there is no partial-state or aliasing risk with two disjoint `Vec`
+   fields). The existing tests covered one swap and one swap-then-reverse;
+   nothing exercised more than two swaps in sequence, which is exactly
+   what a real step loop will do. Added a durable scenario test,
+   `swap_behaves_correctly_across_many_repeated_swaps_in_sequence`, that
+   drives seven ticks (write-to-next, swap, assert current) and confirms
+   an untouched cell stays untouched throughout. It passes, confirming
+   there is no latent bug here — but the coverage gap was real, so I
+   closed it rather than just reporting "found nothing."
+2. **`linear_index` vs. `GridIndex`'s own convention.** `GridIndex` pins
+   `i`→world `x`, `j`→world `y` (`+y` up), cell-center indexing (see
+   `math.rs`). `Grid::linear_index` computes `j * width + i` — row-major,
+   `i` fastest-varying — which is exactly what the two dedicated tests
+   (`stepping_i_by_one_moves_exactly_one_position_in_storage`,
+   `stepping_j_by_one_moves_exactly_one_row_stride_in_storage`) pin, and
+   what I independently re-derived by hand from `linear_index`'s source.
+   No inconsistency: adjacent `i` are adjacent in storage, adjacent `j`
+   are a full row apart, matching what a later round's neighbour-access
+   code (`get(GridIndex::new(i+1, j))` etc.) will expect. The one thing
+   *not* pinned by this round, correctly so (it's a rendering concern, out
+   of scope until M1.1's later renderer round): storage order says nothing
+   about which way is "up" on screen, since `GridIndex`'s `+y`-up and the
+   canvas's `+y`-down (per `lib.rs`) disagree. I added a module-doc note
+   flagging this explicitly so a future renderer round doesn't rediscover
+   it as a flipped-image bug — this is the same flip `math.rs`'s own
+   `Vec2` doc comment already requires generically, just named at this
+   module's own instance of it.
+3. **`MaterialTable::reference()`'s data.** Checked for internal
+   consistency and round-3 mass-conservation plausibility. Density
+   ordering is sane (air 0.0 < water 1.0 < stone 2.5) and air's density
+   being exactly zero is deliberate and load-bearing for a later
+   mass-conservation check, as both Red and Green's reports already flag.
+   One real finding: `heat_capacity` uses water's actual physical specific
+   heat (4.186 J/(g·K)) while `density` is an explicitly unpinned,
+   effectively water-normalised unit (per `Material`'s own doc comment on
+   `density`) — mixing a real physical constant with an arbitrary-unit
+   quantity in the same struct. Not a bug today (nothing multiplies them
+   together yet), but a trap for a later round that computes real energy
+   (`heat_capacity * mass`) and assumes the units compose. Added a doc
+   note on `reference()` naming this explicitly so that round pins a real
+   unit system for `density` deliberately, rather than inheriting a false
+   assumption that these numbers are already dimensionally consistent.
+4. **Vec2/GridIndex gap, closed honestly?** Yes. `Grid`'s entire public
+   surface (`get`/`set`/`get_next`/`set_next`/`linear_index`) is
+   `GridIndex`-addressed, and `Grid::cell_center` is a genuine, natural
+   delegation to `GridIndex::center` (a cell's world position — exactly
+   what a later force/rendering round needs), not code invented to tick a
+   box. This matches `CLAUDE.md`'s and the tranche-0/tranche-1 plans'
+   framing of the gap and how it should close. No further action needed
+   here.
+
+General code-quality sweep: `cargo clippy --lib --all-targets` is clean
+(no warnings) both before and after my changes; no dead imports, no stray
+`dbg!`/`todo!`, no stale doc comments found beyond the units note above.
+Doc comments throughout both new modules are accurate against the code as
+written. `src/bin/native_viewer.rs` and `tests/native_fallback.rs` are
+unrelated to this round and untouched, no issues noticed in them either.
+
+**Successes.**
+
+- Found and closed a genuine coverage gap (repeated swaps) with a durable
+  test, not a throwaway probe — it stays in the suite.
+- Found and flagged a genuine (if not yet exercised) unit-consistency trap
+  in `MaterialTable::reference()` before any downstream round could build
+  on the false assumption that `density` and `heat_capacity` share a unit
+  system.
+- Confirmed, by hand re-deriving `linear_index` and cross-checking against
+  `GridIndex`'s own doc comment, that the storage convention this round
+  pins is genuinely correct — not just test-covered, independently
+  verified.
+- All 51 tests pass (50 existing + 1 new), `cargo clippy --lib
+  --all-targets` clean, `cargo build --lib --target
+  wasm32-unknown-unknown` clean — all reconfirmed after my edits, not just
+  before.
+- Working tree left clean apart from the pre-existing, unrelated `test/`
+  directory (three stray `tick-*.png` files, present before this round
+  and explicitly out of scope per Green's report — left untouched).
+
+**What was difficult, and where the time went.**
+
+Nothing structurally difficult. Most of the time went into reading —
+Red's and Green's full reports, then all five touched-or-adjacent source
+files cold — before writing anything, per "do one thing at a time" and
+the phase's own "read it cold" instruction. The four focus questions were
+each answerable directly from the code and existing tests; the actual
+changes (one new test, two doc notes) were quick once the reading was
+done.
+
+**Compromises I made.**
+
+None of substance. I chose to add a doc note rather than restructure
+`Material`/`MaterialTable` to pin a real unit system for `density` myself
+— that is a genuine design decision (what units, what does 1.0 density
+mean physically) that belongs to whichever round first needs it to be
+concrete (plausibly M1.1 round 3's mass measurement, per Red's own flag),
+not something to improvise here under a refactor phase's mandate not to
+add new features.
+
+**Token usage.** Not visible to me — no context/usage indicator or
+final-turn summary surfaced by this harness.
+
+**Gaps and flags.**
+
+- The unit-system question for `density` (what does `1.0` mean physically,
+  and does it compose with `heat_capacity`'s real J/(g·K) units) is still
+  open. Worth the round-3 planner naming explicitly, since that's the
+  round Red's and Green's own reports already point to as the first real
+  consumer of mass/energy quantities.
+- The renderer-round y-flip note I added to `grid.rs` is documentation
+  only — no behaviour to test yet, since no renderer exists. Whoever
+  writes M1.1's renderer round should read it before assuming a naive
+  `cells()`-to-image-rows walk is correct.
+- `linear_index`'s out-of-bounds behaviour remains a panic, unchanged —
+  Red and Green both already flagged this as provisional pending round
+  2's step-function needs (wraparound/clamping/`Option`); I found no new
+  reason to revisit it this round and didn't.
+- The stray `test/` directory (three `tick-*.png` files) is still present,
+  untracked, unrelated to this round — flagged again since two phases in a
+  row have now noticed it and left it; worth someone deciding whether to
+  `.gitignore` it or delete it, outside any single phase's scope.
+
+**General comments.**
+
+Adversarial pass summary: I specifically tried (a) driving `swap` many
+times in a row looking for state corruption or buffer-identity drift —
+found none, but the coverage gap was real and is now closed; (b) hand
+re-deriving `linear_index` against `GridIndex`'s documented convention
+looking for an inverted axis or an off-by-one at a boundary — found none;
+(c) checking `MaterialTable::reference()`'s numbers against each other and
+against what round 3's mass-conservation check would need — found the
+unit-mixing issue above; (d) re-reading `math.rs`'s and `grid.rs`'s doc
+comments against the actual code looking for a doc/behaviour mismatch —
+found none beyond the units gap already named. All four were genuine
+adversarial attempts, not just re-reading Green's own report back.
+
+Suite runtime: 0.01s for `cargo test --lib` (51 tests) — well within
+budget, nothing to collapse or flag.
+
+**The verdict: Advance.**
+
+Reasoning: all five of the round's stated goals are met and verified,
+not just claimed —
+
+1. `Grid` is fixed-size, SoA (one `Vec<MaterialId>` field so far, by
+   design), double-buffered, `GridIndex`-addressed, and now verified
+   swappable under repetition, not just once.
+2. `Material` is a growable data struct (density, viscosity,
+   heat_capacity, conductivity, phase, colour), and `MaterialTable::
+   reference()` holds three genuinely distinct materials as data — no
+   per-material code paths anywhere in either module.
+3. Every grid cell holds a `MaterialId`, addressed via `GridIndex`
+   throughout `Grid`'s public API — genuinely, not artificially (see
+   focus 4 above).
+4. `grid_index_lookup_and_raw_storage_lookup_agree` and the two
+   axis-stepping tests pin the grid/storage convention specifically for
+   this new type, independent of `math.rs`'s own convention tests.
+5. The fast-path test convention (`cargo test --lib`) is documented in
+   `README.md` and the suite runs in 0.01s — genuinely fast, not just
+   labelled so.
+
+The one substantive finding (the `density`/`heat_capacity` unit mismatch)
+is not a defect in what this round promised — no goal asked for a pinned
+unit system — so it does not block advancing; it is correctly scoped as
+an open question for whichever later round first needs it resolved, now
+named in the code so it can't be missed. The suite is green, both targets
+build clean, and the working tree is clean. This round's goals have been
+met to a sufficient standard.
+
+**What I would have done with another 30 minutes.** Sketched what a
+concrete unit system for `density` (and, transitively, mass) would look
+like against round 3's likely mass-conservation check, to hand the round-3
+planner a head start rather than just a flagged question — but that edges
+into round 3's own content and was judged out of this round's scope to
+pre-empt.
