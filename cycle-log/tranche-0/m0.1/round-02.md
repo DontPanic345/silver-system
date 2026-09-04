@@ -219,3 +219,97 @@ for goals 1 and 2, which is documented above and in the doc comments in
 **Suite health:** `cargo test` — 2 passed, 1 failed (the new stub, as
 expected); confirmed the two carried-over/new tests are green, nothing else
 regressed.
+
+## Round 02 — Green — 2026-09-05T02:55:57+12:00 → 2026-09-05T02:56:34+12:00 (~1 min)
+
+**What I did.**
+
+Filled in exactly the two stubs Red left, nothing else:
+
+1. `color_for_tick(tick: u32) -> (u8, u8, u8)` in `src/lib.rs`: even tick →
+   `RECT_COLOR_RGB`, odd tick → `RECT_COLOR_RGB_ALT` (`tick % 2 == 0`).
+   Straightforward parity match against the two constants Red already
+   declared — no new constants invented.
+2. `tick_and_draw(canvas_id: &str) -> u32` in `src/lib.rs`: added a
+   `thread_local! { static TICK: Cell<u32> = ... }` for the crate-local
+   counter (wasm in a browser tab is single-threaded, so `Cell` is
+   sufficient — no `Mutex`/`Atomic` needed). Each call increments the
+   counter, calls `color_for_tick(new_tick)`, repaints via the existing
+   `paint_rect`, and returns `new_tick`. This matches exactly what Red's doc
+   comment specified for the stub, including "storage is Green's choice."
+
+Neither signature was changed from Red's skeleton — both stubs were
+implementable as given, no rework needed.
+
+Did not touch `www/index.html`'s wiring (already correct per Red/round-01),
+`paint_rect`, `draw`, `main`, or any of the seven getters.
+
+**Goal 4 (README):** added a new "Building and running the `viewer` crate"
+section to the repo-root `README.md` between "How the work runs" and
+"Shelved experiments", giving the exact commands: `cargo test`, `bash
+scripts/build-wasm.sh`, a static-serve example (`python3 -m http.server -d
+www 8000`), and the exact Playwright e2e invocation (`NODE_PATH=
+/usr/local/lib/node_modules node tests/e2e/canvas_rectangle.test.mjs`). These
+are the same commands already proven in `scripts/build-wasm.sh` and the
+round logs — no new commands invented.
+
+**Verification run (actual output, this phase):**
+
+- `cargo test`:
+  ```
+  running 3 tests
+  test tests::color_for_tick_alternates_by_parity ... ok
+  test tests::rectangle_fits_within_canvas ... ok
+  test tests::getters_expose_the_same_constants_js_reads ... ok
+
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+  ```
+- `bash scripts/build-wasm.sh`: succeeded, rebuilt `www/pkg/viewer.js` +
+  `www/pkg/viewer_bg.wasm` (confirmed fresh timestamps after the source
+  change).
+- `NODE_PATH=/usr/local/lib/node_modules node tests/e2e/canvas_rectangle.test.mjs`:
+  ```
+  PASS canvas_rectangle: rectangle pixel at tick 0 matches rect_color_rgb(),
+  differs after a real tick and matches rect_color_rgb_alt(), outside pixel
+  untouched throughout.
+  ```
+  Exit code 0.
+
+All four round goals verified green: tick-driven colour change (goal 1),
+single source of truth via getters (goal 2, unchanged from Red, still
+passing), two-sample real-pixel-data headless verification (goal 3), README
+commands recorded (goal 4).
+
+**Files touched:**
+- `src/lib.rs` — filled `color_for_tick` and `tick_and_draw`, added the
+  `TICK` thread-local.
+- `README.md` — added the build/run/test commands section.
+
+**Signature changes from Red's skeleton:** none. Both stubs were
+implementable exactly as specified.
+
+**Numbers proposed/changed:** none. No constants were touched; both
+`RECT_COLOR_RGB_ALT` and `TICK_INTERVAL_MS` are used as Red defined them.
+
+**Self-diff check:** read the full `src/lib.rs` and `README.md` diffs before
+committing. No dead compute, no stale doc comments left describing the old
+`todo!()` behaviour (both doc comments above the two functions already
+described the *implemented* behaviour correctly, written by Red in
+anticipation of Green's fill-in — left as-is since they're accurate), no
+stray debug output, nothing left over from a chase.
+
+**Left for Refactor:**
+- Whether `thread_local!` + `Cell<u32>` is the right shape for a counter
+  that M0.4's real fixed-timestep harness will eventually replace/absorb —
+  flagging per Red's request that this decision (JS-owns-timer,
+  Rust-owns-counter-and-decision) gets adversarial scrutiny against the
+  M0.4 direction.
+- The README section's placement and wording — I put it where it reads
+  naturally in the existing doc flow, but I'm not precious about exact
+  location/phrasing if Refactor wants to reshape it.
+- Untracked `cycle-log/tranche-0/plan.md` and
+  `cycle-log/tranche-0/m0.1/plan.md` remain untouched/unstaged, as flagged
+  by Red — not mine to commit.
+
+**No failing tests to report.** Everything Red left for Green now passes,
+verified by actually running the commands above, not by inspection.

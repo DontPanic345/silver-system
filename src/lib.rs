@@ -36,9 +36,20 @@
 //! genuinely new *logic* (which colour a given tick gets, how the counter
 //! advances) is left as `todo!()` for Green.
 
+use std::cell::Cell;
+
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::CanvasRenderingContext2d;
+
+thread_local! {
+    /// Crate-local tick counter driving [`tick_and_draw`]. Wasm in a browser
+    /// tab is single-threaded, so a `thread_local!` `Cell` is sufficient —
+    /// this is explicitly the small, local, throwaway-if-need-be counter
+    /// described in the module doc comment, not the shared M0.4
+    /// fixed-timestep harness.
+    static TICK: Cell<u32> = const { Cell::new(0) };
+}
 
 /// The colour painted on even ticks (including tick 0), as 8-bit sRGB.
 pub const RECT_COLOR_RGB: (u8, u8, u8) = (200, 60, 60);
@@ -106,8 +117,11 @@ fn paint_rect(canvas_id: &str, color: (u8, u8, u8)) {
 /// This is the round's new *decision*, not plumbing: left as a stub for
 /// Green.
 fn color_for_tick(tick: u32) -> (u8, u8, u8) {
-    let _ = tick;
-    todo!("alternate RECT_COLOR_RGB / RECT_COLOR_RGB_ALT by tick parity (see color_for_tick_alternates_by_parity)")
+    if tick % 2 == 0 {
+        RECT_COLOR_RGB
+    } else {
+        RECT_COLOR_RGB_ALT
+    }
 }
 
 /// Paints the rectangle at tick 0. Called once, synchronously, when the wasm
@@ -133,8 +147,13 @@ pub fn draw(canvas_id: &str) {
 /// plumbing.
 #[wasm_bindgen]
 pub fn tick_and_draw(canvas_id: &str) -> u32 {
-    let _ = canvas_id;
-    todo!("increment a crate-local tick counter, paint_rect(canvas_id, color_for_tick(new_tick)), return new_tick")
+    let new_tick = TICK.with(|t| {
+        let new_tick = t.get() + 1;
+        t.set(new_tick);
+        new_tick
+    });
+    paint_rect(canvas_id, color_for_tick(new_tick));
+    new_tick
 }
 
 /// Runs automatically when the wasm module is instantiated in the browser

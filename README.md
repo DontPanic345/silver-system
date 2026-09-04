@@ -15,6 +15,41 @@ a phase is one agent's turn. The cycle is defined by the skills in
 is the top of it — it runs indefinitely, chaining from tranche to tranche once
 `PLAN.md`'s are done. Round logs live under `cycle-log/`.
 
+## Building and running the `viewer` crate
+
+`viewer` (M0.1, the toolchain proving ground) compiles to wasm32, loads in a
+browser canvas via `wasm-bindgen`/`web-sys`, and is verified headlessly with
+Playwright rather than by eye (see `cycle-log/tranche-0/m0.1/`).
+
+Rust unit tests (native, no wasm/browser involved):
+
+```sh
+cargo test
+```
+
+Build the wasm module and JS glue (requires `wasm-bindgen-cli` installed at a
+version matching the `wasm-bindgen` crate in `Cargo.lock` — see
+`scripts/build-wasm.sh` for the install command):
+
+```sh
+bash scripts/build-wasm.sh
+```
+
+This produces `www/pkg/viewer.js` + `www/pkg/viewer_bg.wasm`. Serve `www/`
+with any static file server and open it in a browser to watch it run, e.g.:
+
+```sh
+python3 -m http.server -d www 8000
+```
+
+Run the headless end-to-end test (drives a real headless Chromium via
+Playwright, samples real canvas pixel data at two points in time — requires
+`www/pkg/` to already be built, see above):
+
+```sh
+NODE_PATH=/usr/local/lib/node_modules node tests/e2e/canvas_rectangle.test.mjs
+```
+
 ## Shelved experiments
 
 Kept for reference, not extended.
