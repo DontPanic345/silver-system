@@ -33,9 +33,9 @@ From `PLAN.md` (M0.2):
    (commit `0ce8dc5`).
 4. **A second push produces a second successful deploy with no hand-holding.**
    Met. First push (`0ce8dc5`) triggered run `33887381065`, completed
-   `success`. This closeout commit is itself the second push — see the commit
-   hash and run ID recorded below once it lands; no manual step was taken
-   between the two.
+   `success`. Second push (`ff83291`, this closeout's own commit) triggered
+   run `33887698048`, also completed `success` — confirmed by polling the
+   public Actions API, no manual step taken between the two.
 
 ## What was learned
 
