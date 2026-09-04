@@ -325,3 +325,216 @@ already flagged it, no shared-source-of-truth mechanism built this round);
 whether the `.expect(...)`/`panic!(...)` error messages in `draw()` are the
 right shape long-term versus something more structured — round-appropriate
 as a proving-ground implementation, not evaluated for anything beyond that.
+
+---
+
+## Round 01 — Refactor — 2026-09-05T02:45:09+12:00 → 2026-09-05T02:47:33+12:00 (~3 min)
+
+**What I did.**
+
+Read the whole round's diff cold (Red `7b779ae` + Green `b8a8776`): `Cargo.toml`,
+`src/lib.rs`, `www/index.html`, `scripts/build-wasm.sh`,
+`tests/e2e/canvas_rectangle.test.mjs`. Then, per the round's explicit adversarial
+focus, independently re-verified the headless harness from a fully clean state
+rather than trusting Red's/Green's reported output:
+
+1. `rm -rf target www/pkg` (clean slate — no cached build artifacts).
+2. `cargo test` — passes (1/1), no warnings.
+3. `./scripts/build-wasm.sh` from clean — succeeds, produces `www/pkg/`.
+4. `NODE_PATH=/usr/local/lib/node_modules node tests/e2e/canvas_rectangle.test.mjs`
+   against that fresh build — **PASS**, real `getImageData` pixel check.
+5. **Fault injection, attempt 1** — changed the fill colour in `draw()` to
+   `rgb(0,0,0)` (kept `fill_rect` itself intact, so this isolates "wrong
+   colour" specifically), rebuilt via the same script, reran the e2e test:
+   **FAIL**, reporting the actual observed wrong pixel —
+   `rgba(0,0,0,255), expected rgba(200,60,60,255)`. Correct failure, real data,
+   not a stale pass.
+6. Restored, then **fault injection, attempt 2** — commented out the entire
+   `fill_rect(...)` call (nothing drawn at all), rebuilt, reran: **FAIL**,
+   `rgba(0,0,0,0), expected rgba(200,60,60,255)` (alpha 0 = untouched canvas
+   backing). Correct failure, different and correctly-distinguishable signature
+   from attempt 1.
+7. Restored `src/lib.rs` to the committed version (`diff` against a backup
+   confirmed byte-identical restoration), rebuilt clean, reran the full suite
+   (`cargo test` + e2e): both green again.
+8. Checked for compiler warnings on the real committed code with
+   `cargo build --release --target wasm32-unknown-unknown`: none. (The 3
+   warnings seen during fault-injection step 6 were from my own dead-code
+   edit, not present in the shipped code — confirmed by rebuilding the
+   restored file cleanly afterward with zero warnings.)
+9. Reviewed `src/lib.rs`, `Cargo.toml`, `www/index.html`,
+   `scripts/build-wasm.sh` for fold-in issues: naming, conventions, doc-comment
+   accuracy, duplication. Found the code idiomatic and the doc comments
+   accurate (checked the coordinate-convention comment against the actual
+   `fill_rect` call — consistent; checked the "kept in sync by hand" comment
+   on `RECT_COLOR_RGB` against the actual test file — still true).
+10. Acted on one of the two flagged gaps: removed the unused `"console"`
+    `web-sys` feature from `Cargo.toml` (confirmed unused by grep and by a
+    clean rebuild with it removed — still builds, zero warnings, full suite
+    still green). Left the hand-duplicated constants gap as a deferral — see
+    Compromises.
+
+**Successes.**
+
+- **The headless harness is real**, not theater. Verified independently, not
+  just re-reading Green's report:
+  - It builds from a genuinely clean state each time (no `target/`, no
+    `www/pkg/` reused across a pass/fail pair) — ruling out a stale-cache
+    false positive.
+  - It reads live `getImageData` pixel values from a real headless Chromium
+    page, not a hardcoded assertion — proven by making the *actual rendered
+    pixel* wrong two different ways and watching the failure message report
+    the *actual wrong value observed*, not a canned string.
+  - The two fault-injection failures are distinguishable from each other
+    (wrong-but-opaque colour vs. fully untouched/transparent), which is exactly
+    what you'd expect from a harness that is genuinely reading pixel state
+    rather than a boolean gate.
+  - Restoring the original code reproduces the original PASS, confirming
+    nothing about my probing left residue.
+- `cargo test`, the wasm32 release build, and the e2e scenario all reproduce
+  cleanly from a fresh checkout state using exactly the commands
+  `scripts/build-wasm.sh` and the round log record — goal 4 (reproducible
+  commands) holds up under an independent rerun, not just Green's own report.
+- `src/lib.rs` is straightforward, idiomatic Rust for what it needs to do:
+  the `window → document → get_element_by_id → dyn_into → get_context →
+  dyn_into → set_fill_style_str → fill_rect` chain is the standard `web-sys`
+  canvas 2D pattern, error messages via `.expect()`/`panic!()` are
+  descriptive, and the constants are named and documented rather than
+  inlined. No sign-flip or off-by-one found in `RECT_X/Y/W/H` — cross-checked
+  against the disposable unit test's canvas bounds and the actual pixel
+  sample points in the JS test; all consistent.
+- Canvas 2D via `wasm-bindgen`/`web-sys` is sound to build a per-tick
+  animation loop on: nothing about this round's approach (module
+  instantiation, `#[wasm_bindgen(start)]`, the context-lookup chain) forecloses
+  calling `draw()` (or a renamed equivalent) repeatedly from a `requestAnimationFrame`
+  loop later — the context lookup is cheap and there's no per-call setup this
+  round did that would need to be hoisted out for a hot loop to work correctly.
+  The one thing Round 2 should watch: `get_context("2d")` currently re-resolves
+  the canvas element and context from scratch inside `draw()` every call. That's
+  fine once; if Round 2 calls this every frame, it's wasted DOM lookup work per
+  tick — not a correctness bug, a performance-hygiene note for whoever writes
+  Round 2's Red skeleton.
+
+**What was difficult, and where the time went.**
+
+Nothing was difficult. Almost all the ~3 minutes of wall-clock time went into
+the mechanical rebuild-test-fault-inject-restore-rebuild-test cycle (which is
+fast on this project's tiny build), not into indecision or debugging. No
+tooling snags — the recorded commands worked exactly as documented on the
+first try, every time I ran them.
+
+**Compromises I made.**
+
+- Deliberately **deferred** the hand-duplicated `RECT_COLOR_RGB`/`RECT_X..H`
+  vs. `EXPECTED`/sample-coordinate constants between `src/lib.rs` and
+  `tests/e2e/canvas_rectangle.test.mjs`, rather than building a shared
+  source of truth (e.g. exporting the constants via `#[wasm_bindgen]` and
+  reading them from the page in the test). Reasoning: building that
+  machinery now would mean engineering a synchronization mechanism for four
+  numbers that are not expected to change again this round — this is a
+  proving-ground milestone, not the round where colour/geometry becomes
+  dynamic. It becomes worth the engineering the moment Round 2 (a per-tick
+  animation loop) starts actually varying position/colour per frame, at
+  which point the two sides diverging would be a live risk instead of a
+  theoretical one, and the shared-source-of-truth shape can be designed
+  around what Round 2 actually needs (e.g. exporting current draw-state to
+  JS) rather than speculatively now. Flagging this explicitly rather than
+  silently dropping it: **Round 2's planner/Red should decide whether to
+  build that mechanism as part of adding per-tick state**, since duplicated
+  constants will get materially riskier the moment they stop being constant.
+- I did act on the other flagged gap (unused `"console"` feature) rather
+  than deferring it, since it was a zero-risk, fully-verified deletion with
+  no design decision attached — not really a "compromise," just a same-round
+  cleanup.
+
+**Gaps and flags.**
+
+- (Carried forward, not new) The hand-duplicated constants — see Compromises
+  above; explicit recommendation for Round 2 planning.
+- (Carried forward, not new) `www/pkg/` stays gitignored build output,
+  reproducible via `scripts/build-wasm.sh`; confirmed again this phase that
+  this reproduction is reliable from a fully clean `target/`+`www/pkg/` wipe,
+  not just from an incremental rebuild.
+- Minor, non-blocking: `draw()` re-resolves the canvas/context from the DOM
+  on every call. Not a problem for a single call-on-load; worth hoisting or
+  caching if Round 2 calls it per animation frame. Not acted on now since
+  there's no per-tick loop yet to optimize for, and doing so speculatively
+  risks guessing wrong about Round 2's actual shape.
+- Untracked `cycle-log/tranche-0/m0.1/plan.md` and `cycle-log/tranche-0/plan.md`
+  exist in the working tree but are outside this round's file list (not part
+  of Red's or Green's commits) — left untouched as out of scope for this
+  phase.
+
+**General comments.**
+
+This is a clean first round for a proving-ground milestone. The most
+important thing to check — whether the headless verification harness can be
+trusted for every round that follows in this tranche — held up under direct
+attack: two different, deliberately-injected wrong-`draw()` states each
+produced a distinct, correctly-diagnosed failure with real observed pixel
+data, and restoring the original code reproduced the original pass. Nothing
+found here calls the milestone's or round's goals into question.
+
+**Change list (this phase):**
+- `Cargo.toml`: removed the unused `"console"` `web-sys` feature — confirmed
+  unused (grep, and a clean rebuild without it still passes the full suite
+  with zero warnings). Rationale: dead weight in the build, flagged by both
+  Red and Green as safe to drop once confirmed unused.
+
+**Adversarial pass — what I tried:**
+- Full clean rebuild (`target/` + `www/pkg/` wiped) before every test run, to
+  rule out stale-cache false positives. Found nothing wrong — reproduced
+  cleanly every time.
+- Fault injection #1: wrong fill colour (`rgb(0,0,0)` instead of the pinned
+  colour), `fill_rect` call otherwise intact. Result: e2e test failed
+  correctly, reporting the real wrong pixel value.
+- Fault injection #2: `fill_rect` call fully commented out (nothing painted).
+  Result: e2e test failed correctly, reporting alpha 0 (untouched canvas),
+  correctly distinguished from fault #1's failure message.
+- Reviewed `RECT_X/Y/W/H` against canvas bounds (200x150) and the JS test's
+  sample points (40,40 inside; 150,120 outside) for an off-by-one or
+  sign-convention error. Found none — geometry and sample points are
+  internally consistent on both sides.
+- Checked for compiler warnings on the real committed code (both host and
+  wasm32 targets). None found.
+- Considered whether canvas 2D forecloses anything Round 2 (per-tick
+  animation) will need. Found no blocker; flagged one minor performance-
+  hygiene note (re-resolving canvas/context every call) for Round 2 to be
+  aware of, not act on now.
+
+**Correctness findings:** none. No wrong sign, no wrong ordering, no
+incorrect conserved-quantity issue — nothing to report at the "shipped code
+is actually wrong" level.
+
+**Current suite runtime:** `cargo test` ~9s (mostly compile, from clean;
+near-instant incrementally). Full wasm32 release build ~13s from clean,
+~0.1s incrementally. Playwright e2e scenario: a few seconds (browser launch
+dominates). Entirely acceptable for a suite this size — nothing to trim yet.
+
+**Verdict: Advance.**
+
+All four of this round's goals are met and independently re-verified, not
+just trusted from Green's report:
+1. Rendering approach (canvas 2D via `wasm-bindgen`/`web-sys`) is decided,
+   justified with actual toolchain evidence, and confirmed sound to build
+   Round 2's animation loop on.
+2. The wasm32 build succeeds, reproducibly, from a clean checkout.
+3. The build, served locally, draws the rectangle and a headless Playwright
+   test reads real canvas pixel data to confirm it — and that harness
+   survived direct adversarial attack (two independent fault injections,
+   both correctly caught).
+4. The exact build/serve commands in `scripts/build-wasm.sh` and the round
+   log are accurate and reproducible — confirmed by rerunning them verbatim
+   from a fully clean state.
+
+The one open item (hand-duplicated constants) is a real but low-urgency gap,
+explicitly flagged forward to Round 2's planning rather than blocking this
+round — it does not call this round's goals into question, only a future
+one's design.
+
+**What I would have done with another 30 minutes:** written a small
+`#[wasm_bindgen]`-exported accessor (or a JSON blob) for the `RECT_*`
+constants and updated the JS test to read them live, eliminating the
+hand-duplication gap entirely rather than deferring it — but only if Round
+2's actual shape (what becomes dynamic) were known, so the mechanism is
+built for the real need rather than guessed at.
