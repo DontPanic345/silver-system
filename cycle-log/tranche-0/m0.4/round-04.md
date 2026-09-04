@@ -228,3 +228,147 @@ were added this round; all pre-existing disposable unit tests
 (all of `math::tests::*`, `timestep::tests::*`, and every pre-existing
 `tests::*` test), 3 failed (the new ones, for the intended reason), 0 other
 failures.
+
+## Round 04 — Green — 2026-09-05T03:45:42+12:00 → 2026-09-05T03:49:37+12:00 (4 min)
+
+**What I did.**
+
+Part A: filled in `advance_tick` in `src/lib.rs`, replacing Red's `todo!()`
+stub:
+
+```rust
+fn advance_tick(frame_duration_secs: Scalar) -> u32 {
+    let steps = TIMESTEP.with(|timestep| timestep.borrow_mut().advance(frame_duration_secs));
+    TICK.with(|tick| {
+        let new_tick = tick.get() + steps;
+        tick.set(new_tick);
+        new_tick
+    })
+}
+```
+
+Feeds `frame_duration_secs` to `TIMESTEP`'s `FixedTimestep::advance`, gets a
+step count back, advances `TICK` by that many steps (not a bare `+1`), and
+returns the new tick count — exactly what the stub's `todo!()` message and
+Red's doc comment specified. No signature change from Red's skeleton was
+needed.
+
+Part B: rebuilt the wasm artifact, ran the Playwright e2e test, ran
+`cargo test --lib` again, committed, pushed to `main`, polled the GitHub
+Actions run to completion, and verified the live GitHub Pages deploy
+directly (not assumed from CI status) with a real headless-browser check
+against the live URL.
+
+**Successes.**
+
+Everything passed, at every stage, on the first attempt — no retries needed.
+
+- `cargo test --lib`: **35 passed, 0 failed** (was 32 passed/3 failed before
+  this fill-in). Exact command and output:
+  ```
+  test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  ```
+  All three previously-failing `advance_tick_*` tests and the green-guard
+  `dt_seconds_matches_tick_interval_ms_converted_to_seconds` test pass.
+- Self-diff (`git diff -- src/lib.rs`): a 13-line diff, exactly the stub body
+  replaced, nothing else touched — no dead compute, no leftover doc comments
+  describing an old scheme (Red's doc comment above the function already
+  described the new, correct behaviour), no stray debug output.
+- `bash scripts/build-wasm.sh`: succeeded cleanly (`cargo build --release
+  --lib --target wasm32-unknown-unknown` then `wasm-bindgen`), only the
+  expected pre-existing dead-code warnings (`GridIndex`, `FixedTimestep`'s
+  unused accessor methods) — no errors.
+- Confirmed `www/pkg/viewer.js`'s generated glue matches the new two-arg
+  signature: `export function tick_and_draw(canvas_id, frame_duration_secs)`,
+  and `www/index.html` (already updated by Red) calls it with a real
+  `performance.now()`-derived `frameDurationSecs`, not a hardcoded value.
+- Playwright e2e test against the freshly rebuilt local `www/`:
+  ```
+  PASS canvas_rectangle: rectangle pixel at tick 0 matches rect_color_rgb(), alternates to rect_color_rgb_alt() after one real tick and back to rect_color_rgb() after a second, outside pixel untouched throughout.
+  ```
+  Confirms the retrofit preserves the exact externally-observable contract
+  goal 2 required — real `setInterval` loop, three real samples over time,
+  colour alternates by tick parity.
+- `git status --porcelain` showed only `src/lib.rs` modified — `www/pkg/` is
+  gitignored (`.gitignore:11:/www/pkg`) and was never tracked, so there was
+  nothing else to `git add`. Committed with explicit `git add src/lib.rs`
+  (never `-A`), commit `2524e77`.
+- `git branch --show-current` → `main`; `git remote -v` → confirmed
+  `origin` is `https://github.com/DontPanic345/silver-system.git`. Pushed:
+  `8438bef..2524e77  main -> main`.
+- Polled `https://api.github.com/repos/DontPanic345/silver-system/actions/runs`
+  (unauthenticated, public REST API) for the run matching commit `2524e770`
+  until it left `queued`/`in_progress`. Final state, fetched directly:
+  ```
+  completed success 2524e770 https://github.com/DontPanic345/silver-system/actions/runs/33891412515
+  ```
+- **Live deploy verified directly, not assumed from CI status.** Two
+  independent checks against the real, live URL after the workflow
+  completed:
+  1. `curl` of `https://dontpanic345.github.io/silver-system/` (HTML) and
+     `https://dontpanic345.github.io/silver-system/pkg/viewer.js` — confirmed
+     the served JS glue contains `export function tick_and_draw(canvas_id,
+     frame_duration_secs)` (the new two-arg signature, not the old one-arg
+     shape), and the served `index.html` contains the `performance.now()`
+     delta logic. `viewer_bg.wasm` fetched with HTTP 200, 51548 bytes.
+  2. A real headless-Chromium Playwright script (written this phase,
+     `live_check.mjs`, adapted from `tests/e2e/canvas_rectangle.test.mjs`)
+     pointed directly at `https://dontpanic345.github.io/silver-system/`
+     (not a local server) — loaded the live page, waited for the wasm module
+     to report ready, sampled the rectangle pixel at tick 0, waited for a
+     real tick via the live page's own `setInterval`, sampled again, waited
+     for a second tick, sampled a third time. Result:
+     ```
+     PASS live: dontpanic345.github.io/silver-system/ animates correctly (tick0/1/2 colours match, retrofitted tick_and_draw signature confirmed working end-to-end in browser)
+     ```
+     This is the strongest evidence available short of a human watching a
+     browser tab: the actual deployed artifact, fetched over the network,
+     genuinely animates via the retrofitted `FixedTimestep`-driven
+     `tick_and_draw`, in a real browser engine.
+
+**What was difficult, and where the time went.**
+
+Nothing was difficult. The fill-in was exactly as scoped by Red — one
+function, using APIs already proven by `src/timestep.rs`'s own tests. Most of
+the elapsed time (about 4 minutes total) was the GitHub Actions run itself
+completing (queued → in_progress → completed took a little over 2 minutes),
+polled in the background while nothing else was pending.
+
+**Compromises I made.**
+
+None. No number was loosened, no test weakened, no partial implementation
+left behind.
+
+**Gaps and flags.**
+
+- The `advance_tick` implementation uses `TIMESTEP.with(...)` then
+  `TICK.with(...)` as two separate `thread_local!` accesses rather than one
+  combined closure — a minor style choice, not a correctness concern (wasm in
+  a browser tab is single-threaded, per the existing doc comments, so there
+  is no race between the two). Left as-is; if Refactor prefers a single
+  combined access it's a trivial reshape, not a behaviour change.
+  - Red's flagged, unreproduced `image` crate build error on a stray
+  plain `cargo build` (no `--bin` filter) did not recur during this phase —
+  every `cargo test --lib` and `bash scripts/build-wasm.sh` invocation
+  succeeded cleanly. Still flagging forward per Red's note, since it wasn't
+  root-caused, just unreproduced twice now.
+- The ad-hoc `live_check.mjs` script used to verify the live deploy is a
+  scratch file (`/tmp/.../scratchpad/live_check.mjs`), not committed to the
+  repo — it was a one-off verification tool for this phase, not a
+  permanent addition to `tests/e2e/`. If the project wants a durable
+  "check the live deploy" test committed to the repo (as opposed to
+  `tests/e2e/canvas_rectangle.test.mjs`, which only ever exercises a local
+  build), that's a decision for planning/Refactor, not something I added
+  unilaterally.
+
+**General comments.**
+
+This closes M0.4's last round: the ad-hoc `TICK: Cell<u32> += 1` mechanism
+flagged since M0.1 is now fully replaced by round 3's `FixedTimestep`
+harness, wired in and exercised by real code (not just tests) both locally
+and on the live, deployed page. `cargo test --lib` is 35/35 green, the local
+Playwright e2e test passes, the GitHub Actions deploy workflow completed
+successfully for commit `2524e77`, and the live GitHub Pages page was
+independently confirmed — via both a direct `curl` of its served artifacts
+and a real headless-browser run against the live URL — to be running the
+retrofitted code and animating correctly.
