@@ -372,3 +372,166 @@ successfully for commit `2524e77`, and the live GitHub Pages page was
 independently confirmed — via both a direct `curl` of its served artifacts
 and a real headless-browser run against the live URL — to be running the
 retrofitted code and animating correctly.
+
+## Round 04 — Refactor — 2026-09-05T08:56:53+12:00 → 2026-09-05T08:58:30+12:00 (2 min)
+
+**What I did.**
+
+Read the round's diff cold against Red's and Green's reports and against the
+M0.4 milestone plan, per the wider (whole-crate) scope this round was given.
+Reviewed `src/lib.rs`, `src/timestep.rs`, `www/index.html`, and
+`tests/e2e/canvas_rectangle.test.mjs` in full; confirmed the committed diff
+since Red's `af2d3f4` touches only `src/lib.rs` (13 lines) plus the round log
+— nothing else. Ran `cargo test --lib` (35/35 green), rebuilt the wasm
+artifact, and ran the Playwright e2e test locally to reconfirm both still
+pass on the checked-out `HEAD` before touching anything.
+
+Then ran one deliberate adversarial mutation (see below), confirmed which
+test layer catches it, and reverted it. No other code changes were made —
+the diff was already well-folded and needed no changes.
+
+**Successes.**
+
+- Confirmed the retrofit is real, not cosmetic: `TICK` is written in exactly
+  one place (`advance_tick`), and it is written with the step count
+  `FixedTimestep::advance` returns, never a bare `+1`. `TIMESTEP` is not a
+  parallel/vestigial mechanism sitting alongside the old one — the old
+  mechanism (direct `+1` increment in `tick_and_draw`) is fully gone; grepped
+  the whole crate (`src/`, `www/`) for `TICK` and found only the intended
+  uses (the doc comment, the one write site inside `advance_tick`, and an
+  unrelated `TICKS_TO_RENDER` loop bound in `src/bin/native_viewer.rs`, which
+  is M0.3's native-fallback frame count, not a tick-driving mechanism).
+- Confirmed the e2e test still genuinely samples three points in time (tick
+  0, tick ≥1, tick ≥2), each gated on a real `window.__tickCount` change via
+  `page.waitForFunction`, not a fixed sleep — Red's report that no e2e change
+  was needed checks out; the test file is untouched and still carries the
+  M0.1-derived "two samples can't distinguish advancing from stuck" comment
+  and structure.
+- `git diff af2d3f4 HEAD --stat`: only `src/lib.rs` (13 lines) and the round
+  log changed since Red — no stray edits, no dead code left behind.
+- Confirmed `HEAD` (`5e0d872`) matches `origin/main` after `git fetch` — the
+  push Green reported is real, not just claimed.
+- Rebuilt wasm from the clean tree and re-ran the Playwright e2e test myself
+  (not just trusting Green's report): both green, matching Green's numbers
+  exactly.
+- Checked for dead-code fallout: `cargo build --lib` still shows the same
+  class of warnings Green already flagged as expected (`Vec2`/`GridIndex`
+  unused — no real code consumes them yet, by M0.4's own plan; `FixedTimestep`'s
+  `dt`/`max_steps_per_call`/`accumulator`/`step_with` unused by non-test code
+  since `advance_tick` only calls `.advance()`) — nothing new, nothing this
+  round should have consumed and didn't.
+
+**What was difficult, and where the time went.**
+
+Nothing was difficult. Most of the ~2 minutes went into reading the four
+files in full plus the milestone plan, and running the mutation probe
+(mutate → `cargo test` → rebuild wasm → Playwright → revert → rebuild wasm →
+Playwright again to leave the tree's build artifacts correct).
+
+**Compromises I made.**
+
+None — no code changes were needed; the round's diff was already correct and
+well-folded.
+
+**Adversarial pass.**
+
+One deliberate mutation, per this round's explicit instruction: in
+`advance_tick`, changed `TICK.set(tick.get() + steps)` to
+`TICK.set(tick.get() + 1)` while still calling `TIMESTEP.advance(...)` and
+discarding its result (`let _steps = ...`). This exactly reintroduces the
+ad-hoc "+1 per call" bypass, disguised behind a still-present (but now
+vestigial) call into `FixedTimestep` — the specific failure mode the round's
+focus asked me to check for.
+
+- `cargo test --lib tests::`: **caught it immediately.** All three new
+  `advance_tick_*` scenario tests failed with exactly the expected
+  assertion mismatches (e.g. "three dts' worth of elapsed time... left: 1,
+  right: 3"). This confirms the native suite genuinely exercises the
+  retrofit's actual logic, not just its signature.
+- `NODE_PATH=/usr/local/lib/node_modules node tests/e2e/canvas_rectangle.test.mjs`
+  against a wasm rebuild of the mutated code: **did not catch it — the e2e
+  test still PASSed.** This is a real finding, not a null result: under
+  ordinary `setInterval` timing (fires land close to `intervalMs` apart), a
+  bare `+1`-per-call bypass is externally indistinguishable from genuine
+  `FixedTimestep`-driven advancement — the e2e test only checks that the
+  tick count/colour visibly advances twice over real wall-clock time, not
+  that the *step count per call* is computed from actual elapsed duration.
+  Catching this class of regression is the native `advance_tick` unit
+  tests' job, not the e2e test's, and they do it. I do not consider this a
+  gap to fix this round: the e2e test's stated purpose (per its own header
+  comment) is proving the running-program/real-timer loop end to end, which
+  it still does; it was never meant to be a substitute for the unit-level
+  duration-accounting tests, and Red's three new tests already cover exactly
+  this. Flagging forward for planning: if a future round wants the e2e layer
+  itself to distinguish real elapsed-time accounting from a bypass (e.g. by
+  artificially varying `setInterval` cadence or injecting frame durations
+  from JS), that would be new scope, not a defect in this round.
+- Reverted the mutation (`cp` from a pre-mutation backup), confirmed
+  `git diff --stat src/lib.rs` empty and `cargo test --lib` back to 35/35
+  green, then rebuilt wasm and re-ran Playwright once more to leave the
+  gitignored `www/pkg/` build artifacts matching the clean, committed source
+  (not the mutated one) — working tree left clean (`git status`: nothing to
+  commit).
+
+Also tried, found nothing: swept `src/`, `www/`, `README.md`, and
+`scripts/*.sh` for any other lingering reference to the old ad-hoc mechanism
+or stale doc comments describing a scheme that no longer exists — none
+found. The module-level doc comment's "## Round 4 retrofit" section
+describes only the current scheme, not a stale mix of old and new.
+
+**Correctness findings.** None. The shipped code is correct as committed.
+
+**Milestone-level sanity (M0.4 as a whole).**
+
+Checked the shipped state against `cycle-log/tranche-0/m0.4/plan.md`'s five
+targets:
+
+1. Grid/vector primitives exist and are unit-tested — `src/math.rs`,
+   confirmed via `cargo test --lib` (`math::tests::*`, 6 tests, all green).
+2. Coordinate convention pinned by both a test and a doc comment, and the
+   canvas (`src/lib.rs`) and math (`src/math.rs`) conventions state their
+   relationship — confirmed present (`math::tests::up_convention_pins_...`
+   plus the canvas's own y-down doc comment on `RECT_X`/`RECT_Y`, which
+   explicitly calls out the flip from math's y-up).
+3. Numeric type decision (`f32`, per `Scalar`) — present with written
+   rationale in `src/math.rs` per earlier rounds' reports (not re-derived
+   here, out of this round's diff, but confirmed still in place).
+4. Fixed-timestep harness exists, is unit-tested, and is now actually called
+   by running code — this round's own work, confirmed above.
+5. Post-retrofit: wasm build succeeds, e2e test passes, live Pages deploy
+   confirmed directly (not from CI status alone) — confirmed by Green's
+   report (direct `curl` + live-Chromium Playwright check against the real
+   URL) and re-confirmed by my own local rebuild/e2e rerun on the same
+   `HEAD` that is live.
+
+All five milestone targets are met. No gap found that would block closing
+M0.4.
+
+**Suite runtime.** `cargo test --lib`: 35 tests in ~0.01s — negligible, no
+concern. Playwright e2e: single test, a few hundred ms of real wall-clock
+wait per tick sample (~2 real ticks ≈ 300ms at `TICK_INTERVAL_MS=150`) plus
+browser startup, on the order of a few seconds total — acceptable for a
+single-test suite at this stage; nothing to trim.
+
+**The verdict: Advance.**
+
+The round's four goals are all met to a sufficient standard: the ad-hoc
+`TICK` counter is genuinely gone (not left as dead code beside the new
+harness), `FixedTimestep` is the sole mechanism advancing the tick, the
+externally-observable behaviour the e2e test guards is preserved verbatim,
+and goal 4's rebuild/e2e/native-test/push/live-verify chain was completed
+and independently reconfirmed this phase. The adversarial mutation confirms
+the native test suite would catch a broken retrofit of the disguised-bypass
+kind; it also surfaces a real (not fatal) limit of the e2e test's coverage,
+flagged above for planning rather than treated as a this-round defect. This
+also closes M0.4 as a whole — all five milestone targets are independently
+confirmed met.
+
+**What I would have done with another 30 minutes.** Explored whether the
+e2e test's coverage gap (above) is worth closing now vs. deferred — e.g. a
+native/headless test that drives `tick_and_draw` with deliberately irregular
+durations through the actual wasm module (not just `advance_tick` natively)
+to catch a bypass that only manifests through the `#[wasm_bindgen]` boundary
+itself. Judged out of this round's scope (goal 3/4 don't ask for a new e2e
+test, and the native tests already cover the logic this would re-check) —
+noted as a possible future-round idea, not acted on.
