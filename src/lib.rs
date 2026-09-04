@@ -155,7 +155,7 @@ fn paint_rect(canvas_id: &str, color: (u8, u8, u8)) {
 /// This is the round's new *decision*, not plumbing: left as a stub for
 /// Green.
 fn color_for_tick(tick: u32) -> (u8, u8, u8) {
-    if tick % 2 == 0 {
+    if tick.is_multiple_of(2) {
         RECT_COLOR_RGB
     } else {
         RECT_COLOR_RGB_ALT
