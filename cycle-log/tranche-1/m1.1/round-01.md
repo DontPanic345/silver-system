@@ -197,3 +197,108 @@ scope.
 
 Restructuring: none. The five goals as handed to me mapped cleanly onto one
 Red pass with no reordering or splitting needed.
+
+## Round 1 — Green — 2026-09-05T10:31:06+12:00 → 2026-09-05T10:31:47+12:00 (~1 min)
+
+**What I did.**
+
+Read `cycle-contract`, `cycle-green`, `CLAUDE.md`, and this round log in full
+(including Red's report) before touching anything. Read `src/grid.rs`,
+`src/material.rs`, and `src/math.rs` to understand the stubs and the
+conventions they must honour.
+
+Filled in all eight `todo!()` stubs Red left, in place, with no signature
+changes:
+
+- `src/grid.rs`:
+  - `Grid::new` — allocates `current`/`next` as `vec![fill; width * height]`.
+  - `Grid::linear_index` — row-major, `i` fastest-varying
+    (`j * width + i`), with two `assert!`s rejecting negative or
+    out-of-range `i`/`j` before the cast to `usize` (Red's report flagged
+    this negative-`i`/`j` case explicitly as something to keep in mind).
+  - `Grid::get`/`set`/`get_next`/`set_next` — each a one-line read/write
+    through `linear_index` into `current`/`next` as documented.
+  - `Grid::swap` — `std::mem::swap(&mut self.current, &mut self.next)`.
+- `src/material.rs`:
+  - `MaterialTable::get` — `&self.materials[id.0 as usize]`, i.e. direct
+    indexing by the `MaterialId`'s raw value (the simplest of the options
+    Red's report deliberately left open).
+  - `MaterialTable::reference` — built three materials as data: "empty/air"
+    (density 0.0, viscosity 0.0, heat_capacity 1.0, conductivity 0.0,
+    `Phase::Gas`, black), "water" (density 1.0, viscosity 0.5, heat_capacity
+    4.186 — water's real specific heat in J/(g·K), a real physical constant
+    rather than an arbitrary placeholder, conductivity 0.6, `Phase::Liquid`,
+    blue), "stone" (density 2.5, viscosity 0.0, heat_capacity 0.8,
+    conductivity 2.0, `Phase::Solid`, grey). Chose zero density for
+    empty/air specifically, per Red's report flagging that a future
+    mass-conservation check (round 3) may need exactly that.
+
+Ran `cargo test --lib`: all 50 tests pass (the 12 previously-`todo!()`
+tests plus the 38 pre-existing ones, unchanged). Ran `cargo build --lib
+--target wasm32-unknown-unknown`: compiles clean, no errors, no warnings.
+Also ran plain `cargo build --lib` and `cargo clippy --lib`: both clean,
+no warnings.
+
+Read my own diff (`git diff -- src/grid.rs src/material.rs`) start to
+finish before committing — every hunk is exactly a stub body filled in,
+nothing else touched, no leftover experiments or dead code.
+
+**Successes.**
+
+- All 12 target tests pass; the 38 pre-existing tests are unaffected.
+- Both native (`cargo build --lib`) and `wasm32-unknown-unknown` targets
+  build clean with no warnings.
+- No signature changes were needed — Red's skeleton was implementable
+  exactly as given.
+- `reference()`'s empty/air material has density `0.0` exactly, addressing
+  Red's flagged concern about round 3's mass-conservation check without
+  round 3 having to renegotiate this round's choice.
+
+**What was difficult, and where the time went.**
+
+Nothing difficult. Every stub was either pure plumbing (buffer alloc,
+one-line indexed read/write, a swap) or a bounded data choice
+(`MaterialTable::reference`'s concrete numbers, `get`'s indexing strategy)
+that Red's report had already scoped tightly. Almost all the time went to
+reading the round log, the two new modules, and `math.rs` before writing
+anything, per "do one thing at a time."
+
+**Compromises I made.**
+
+None. `MaterialTable::get` uses the simplest valid mapping (direct
+indexing) rather than a `HashMap` or similar — Red's report explicitly
+left this open and direct indexing is the natural, ungimmicked choice
+for a `Vec`-backed table addressed by a small integer id; no
+data-structure change is implied for later rounds unless a real need
+(e.g. sparse/non-contiguous ids) shows up.
+
+**Token usage.** Not visible to me — no context/usage indicator or
+final-turn summary surfaced by this harness.
+
+**Gaps and flags.**
+
+- `linear_index`'s out-of-bounds behaviour is still a panic (via
+  `assert!`), matching the round log's note that this is provisional —
+  Green kept it as-is since goal 4 and the round's scope did not ask for
+  bounds-handling to change; round 2 or later is where clamping/wrapping/
+  `Option` might get decided, per Red's own flag.
+- `reference()`'s exact numeric values (beyond empty/air's density, which
+  I deliberately zeroed) are my choice and not pinned by any test —
+  water's `heat_capacity` uses water's real specific heat (4.186) as a
+  plausibility anchor since nothing in the suite required a specific
+  number; if a later round needs different reference values for a
+  specific measurement to come out cleanly, that's a renegotiation for
+  that round's planner, not implied by this choice.
+- I did not touch `src/lib.rs`, `src/math.rs`'s logic, or `README.md` —
+  out of this round's scope and untouched by my diff.
+- The stray `test/` directory (three `tick-*.png` files) present in
+  `git status` before and after my changes is not something I created —
+  left it uncommitted/untouched, out of scope for this phase.
+
+**General comments.**
+
+Straightforward round: Red's skeleton and report left no ambiguity that
+mattered, so Green was close to mechanical. Nothing to flag for Refactor
+beyond what's already noted above and in Red's own report (the
+out-of-bounds contract's provisional status, and `reference()`'s
+concrete values being open to a future round's needs).
