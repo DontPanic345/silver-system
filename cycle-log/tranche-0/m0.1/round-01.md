@@ -222,3 +222,106 @@ different kinds of failure.
 
 **Rest of the suite green?** Yes — it's the only other test, and it passes
 (see `cargo test` output above; 1 passed, 0 failed).
+
+---
+
+## Round 01 — Green — 2026-09-05T02:43:29+12:00 → 2026-09-05T02:44:04+12:00 (~1 min)
+
+**What I did.**
+
+Filled in `pub fn draw(canvas_id: &str)` in `src/lib.rs`, following Red's
+doc-comment call sequence exactly: `web_sys::window()` →
+`.document()` → `.get_element_by_id(canvas_id)` → `dyn_into::<HtmlCanvasElement>()`
+→ `.get_context("2d")` → `dyn_into::<CanvasRenderingContext2d>()` →
+`set_fill_style_str(...)` → `fill_rect(...)` using the pinned `RECT_*`
+constants and `RECT_COLOR_RGB` (formatted as a CSS `rgb(r, g, b)` string, no
+new colour representation invented). Nothing else in the crate, host page,
+or build script needed to change.
+
+**Successes.**
+
+- `cargo test` (host target): 1 passed, 0 failed
+  (`tests::rectangle_fits_within_canvas`), same as Red left it — untouched by
+  this change.
+- `./scripts/build-wasm.sh` (Red's script, unmodified): rebuilt
+  `target/wasm32-unknown-unknown/release/viewer.wasm` and regenerated
+  `www/pkg/` cleanly, no warnings.
+- `NODE_PATH=/usr/local/lib/node_modules node
+  tests/e2e/canvas_rectangle.test.mjs` against the freshly rebuilt output:
+  `PASS canvas_rectangle: rectangle pixel matches expected colour, outside
+  pixel untouched.` — a real `getImageData` pixel check in headless
+  Chromium, not a screenshot, confirming the rectangle actually painted at
+  the pinned coordinates in the pinned colour.
+
+**What was difficult, and where the time went.**
+
+- None. This round's goal-4 groundwork (constants pinned, `web-sys` features
+  already enabled in `Cargo.toml`, build script already correct) meant the
+  actual code change was the one function body Red's doc comment already
+  specified move-for-move. Total elapsed ~1 minute, no blockers, nowhere
+  near the 30-minute checkpoint.
+
+**Compromises I made.**
+
+- None beyond what Red already flagged (the hand-duplicated
+  `EXPECTED.color`/coordinates between `src/lib.rs` and
+  `tests/e2e/canvas_rectangle.test.mjs`, and `www/pkg/` staying gitignored
+  build output). I did not introduce any new ones.
+
+**Gaps and flags.**
+
+- `set_fill_style_str` (rather than the older `set_fill_style(&JsValue)`) is
+  available on the resolved `web-sys` 0.3.104 — confirmed by the successful
+  build, not just assumed. No `Cargo.toml` changes were needed; the
+  `"console"` feature Red left in remains unused (Red already flagged this
+  for Refactor to drop if it stays that way).
+- No signature changes from Red's skeleton — `draw(canvas_id: &str)`, its
+  `#[wasm_bindgen]` export, and `main()` calling `draw("canvas")` are exactly
+  as Red left them.
+- I did not add error-reporting beyond the `.expect(...)`/`panic!(...)`
+  messages already implied by the stub's doc comment; a panic here traps to
+  `RuntimeError: unreachable` in the browser exactly as the `todo!()` did
+  when something is wrong, which is what surfaced Red's intentionally-red
+  state clearly. Nothing round-scoped calls for softer error handling, so I
+  left it as-is for Refactor to weigh in on if it disagrees.
+
+**General comments.**
+
+Straight fill-in, no surprises. All four of the round's goals are now
+demonstrated pass/fail-checked end to end: rendering approach decided
+(Red), wasm32 build succeeds (Red + reconfirmed here after the `draw()`
+change), a real browser paints and a headless Playwright test reads the
+actual canvas pixels to confirm it (this phase), and the exact commands are
+recorded in `scripts/build-wasm.sh` and this log. Recommend proceeding to
+Refactor.
+
+**Files touched:** `src/lib.rs` only (the `draw()` body, plus the two `use`
+imports it needed — `wasm_bindgen::JsCast` and `web_sys::CanvasRenderingContext2d`).
+
+**Exact commands run, in order, with results:**
+```sh
+cargo test
+# → running 1 test; test tests::rectangle_fits_within_canvas ... ok
+# → test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+./scripts/build-wasm.sh
+# → Compiling viewer v0.1.0 (...)
+# → Finished `release` profile [optimized] target(s)
+# → Built www/pkg/.
+
+NODE_PATH=/usr/local/lib/node_modules node tests/e2e/canvas_rectangle.test.mjs
+# → PASS canvas_rectangle: rectangle pixel matches expected colour, outside pixel untouched.
+```
+
+**Signature changes from Red's skeleton:** none.
+
+**Numbers proposed changing:** none — `RECT_COLOR_RGB`, `RECT_X/Y/W/H` used
+as pinned, unmodified.
+
+**Left for Refactor:** the unused `"console"` web-sys feature in
+`Cargo.toml` (Red already flagged it); the hand-duplicated expected-colour/
+coordinate constants between `src/lib.rs` and the Playwright test (Red
+already flagged it, no shared-source-of-truth mechanism built this round);
+whether the `.expect(...)`/`panic!(...)` error messages in `draw()` are the
+right shape long-term versus something more structured — round-appropriate
+as a proving-ground implementation, not evaluated for anything beyond that.

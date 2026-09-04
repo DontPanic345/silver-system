@@ -15,6 +15,8 @@
 //! not a revision of this one.
 
 use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
+use web_sys::CanvasRenderingContext2d;
 
 /// The colour Green's implementation must paint the rectangle, as 8-bit sRGB.
 /// Pinned here so Red's test and Green's implementation agree on what
@@ -47,12 +49,28 @@ pub const RECT_H: u32 = 40;
 /// JS glue that `wasm-bindgen-cli` generates.
 #[wasm_bindgen]
 pub fn draw(canvas_id: &str) {
-    let _ = canvas_id;
-    todo!(
-        "look up document.getElementById(canvas_id) as HtmlCanvasElement, \
-         get_context(\"2d\") as CanvasRenderingContext2d, set_fill_style to \
-         RECT_COLOR_RGB, and fill_rect the RECT_* constants"
-    )
+    let window = web_sys::window().expect("no global `window` exists");
+    let document = window.document().expect("window has no document");
+    let canvas = document
+        .get_element_by_id(canvas_id)
+        .unwrap_or_else(|| panic!("no element with id `{canvas_id}`"))
+        .dyn_into::<web_sys::HtmlCanvasElement>()
+        .expect("element is not an HtmlCanvasElement");
+    let ctx = canvas
+        .get_context("2d")
+        .expect("get_context(\"2d\") failed")
+        .expect("canvas has no 2d context")
+        .dyn_into::<CanvasRenderingContext2d>()
+        .expect("context is not a CanvasRenderingContext2d");
+
+    let (r, g, b) = RECT_COLOR_RGB;
+    ctx.set_fill_style_str(&format!("rgb({r}, {g}, {b})"));
+    ctx.fill_rect(
+        RECT_X as f64,
+        RECT_Y as f64,
+        RECT_W as f64,
+        RECT_H as f64,
+    );
 }
 
 /// Runs automatically when the wasm module is instantiated in the browser
