@@ -60,6 +60,12 @@ that nobody would call it drift" — planning fixes the actual number.
 
 # Tranche 0 — Mathematics and tooling foundations
 
+**Status: closed 2026-09-05.** See `cycle-log/tranche-0/closeout.md`. 3 of 4
+targets (including this tranche's own added 4th) fully met; the grid/vector
+primitives target is honestly partial — `Vec2`/`GridIndex` are unit-tested but
+not yet exercised by running code, named as an open gap for tranche 1 to close
+rather than force-wired into a static hello-world to paper over it.
+
 **Intent.** De-risk the tooling before a single unit of physics is built on top of
 it, and lay down the small mathematical substrate every later tranche will reach
 for. This tranche exists because tooling problems are the likeliest failure in the
