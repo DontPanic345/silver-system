@@ -303,3 +303,96 @@ well under the 30-minute budget with no need for a second pass.
 **Elapsed:** ~4 minutes (2026-09-05T11:00:47+12:00 →
 2026-09-05T11:04:30+12:00, per the two `date -Is` checks taken during this
 phase), well inside the 30-minute decision point.
+
+## Orchestrator close-out
+
+**Independent re-verification performed** (cold, before trusting the
+agent's report):
+
+- `git log`/`git status --short` → commit `d598307` present as claimed;
+  tree clean apart from the pre-existing, unrelated untracked `test/`
+  directory.
+- `cargo test --lib` → 65 passed, 0 failed, 1 ignored (the new
+  `reference_grid_step_timing` test) — matches the report exactly.
+- `cargo test` (full native suite) → all green, including
+  `tests/native_fallback.rs` and `tests/render_native.rs`; doc-tests 0/0.
+- `cargo build --lib --target wasm32-unknown-unknown` → clean.
+- Ran the ignored timing test directly (`cargo test --lib -- --ignored
+  reference_grid`) → passes, 0.86s wall time for the whole test (55 total
+  `Grid::step` calls in an unoptimized debug build) — consistent with the
+  reported ~14ms/step debug figure and confirms the test is real and
+  reproducible, not a stub.
+
+All of this matches the agent's own report; nothing found that
+contradicts it.
+
+**Verdict: Advance.** All 5 round goals met.
+
+**Per-goal detail:**
+
+1. Reference grid size chosen and recorded — 1024×1024 (1,048,576 cells),
+   with stated reasoning (large enough to stand in for "the large
+   universe," a clean power of two, small enough to time comfortably even
+   unoptimized) — met.
+2. Timed via the existing, unmodified native `Grid::step`/`FixedTimestep`
+   path — met; confirmed `Grid::step`, `Grid::step_once`, and
+   `FixedTimestep` are byte-for-byte untouched (`git diff --stat` on the
+   commit shows only `src/grid.rs` additions plus the round log).
+3. Number and methodology recorded in this file (grid size, machine
+   context, warm-up/measured-step counts, debug vs. release numbers) —
+   met. **Recorded reference budget: ~2.0ms/step (release build) at
+   1024×1024 on this dev container** (2.19ms and 1.91ms across two runs),
+   with the debug figures (14.86ms, 13.24ms) kept alongside for
+   context — this is the number M1.7 should cite, understood explicitly
+   as the identity-step's mechanism floor, not a promise about future
+   physics cost.
+4. Reproducible via a checked-in `#[ignore]`d test in `src/grid.rs` — met
+   and independently re-run above.
+5. No production behaviour changed — met, confirmed via diff.
+
+This closes **milestone target 3** ("the reference grid steps within a
+stated per-step budget") and is the first fixing of tranche-1 target 6's
+number.
+
+**Judgment call on the test-location deviation:** the round file
+suggested a `#[test]` "or a small native binary/example"; the agent chose
+neither a new binary nor a new `tests/` integration file, instead adding
+the test inside `src/grid.rs`'s existing module, because `FixedTimestep`
+lives behind a crate-private `mod timestep;` and an external test/binary
+can't name it without a visibility change to production code (out of this
+round's additive-only scope). This is the right call — it stays inside
+the round's own constraints rather than quietly loosening
+`timestep.rs`'s visibility to fit a binary shape nobody actually needed.
+
+**Timing:** single-pass round, ~4 minutes wall time — well inside the
+30-minute budget, no exit ramp taken.
+
+**Gaps/flags carried forward:**
+
+- The timing test's only automated assertion is a generous 1-second
+  sanity ceiling, not the specific ~2ms figure — deliberate, to avoid
+  flakiness across machines; the actual budget number lives in this
+  report for M1.7 to cite by hand, not as a frozen, machine-specific test
+  assertion. Worth keeping in mind: M1.7 will need to decide how it wants
+  to *use* this number (a CI gate? a manual check?) — not this round's
+  job to decide.
+- The release-build number requires a manual `--release` re-run per the
+  test's own doc comment (not automatically asserted) — a reasonable
+  single-pass-scope choice, flagged in case a future round wants both
+  numbers asserted automatically.
+- Reference grid built directly via `Grid::new`, not through a
+  `Scenario` — deliberate and correct (the round measures the stepping
+  mechanism itself, not any named scenario's content), but flagged since
+  the dispatch context included `scenario.rs`/`measure.rs` and a future
+  reader might otherwise expect scenario-shaped timing.
+- Carried forward unchanged: stray untracked `test/` dir (still harmless,
+  `rm` still blocked by sandboxing, still nobody's single-round scope);
+  whole-crate `cargo fmt` adoption still deferred to the milestone-scope
+  Refactor pass; `paint_scenario`'s hardcoded fixture (Round 4); density/
+  heat_capacity unit mismatch; `total_mass` unit unpinned; hand-rolled
+  JSON has no string-escaping; `Grid`'s out-of-bounds panic contract
+  provisional; `Scenario`'s owned (not shared) `MaterialTable`.
+
+**All 5 milestone targets are now met** (targets 1, 2, 4, 5 closed in
+Rounds 1-4; target 3 closed here). Next: the milestone-scope Refactor
+pass per `cycle-milestone` §3, then the M1.1 closeout.
