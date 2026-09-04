@@ -517,3 +517,38 @@ moves to M0.2 (or whatever `cycle-tranche`'s ordering calls for next).
   believe it's correct (5px margin from `constants.rectX/rectY`, `OUTSIDE`
   well clear of the 60x40 rect at (20,20)) but did not empirically mutate
   it the way I did the tick logic.
+
+## Round 02 close-out — orchestrator
+
+**Decision:** Advance, per Refactor's recommendation (which was also M0.1's
+milestone-scope pass).
+
+**Independent verification run:**
+- `cargo test`: 3 passed, 0 failed (`color_for_tick_alternates_by_parity`,
+  `getters_expose_the_same_constants_js_reads`, `rectangle_fits_within_canvas`).
+- `./scripts/build-wasm.sh`: clean release build.
+- `NODE_PATH=/usr/local/lib/node_modules node tests/e2e/canvas_rectangle.test.mjs`:
+  PASS — tick 0 / tick 1 / tick 2 pixel samples all correct (the strengthened
+  three-sample check Refactor added to catch a frozen counter).
+
+**Working tree:** clean of round artifacts (two pre-existing untracked
+planner files, unrelated to this round, left as-is).
+
+**Timing roll-up for Round 02:**
+- Red: 2026-09-05T02:50:06 → 02:54:28 (~4 min).
+- Green: (Green's own report) ~well under budget, single short pass.
+- Refactor: 02:57:39 → 03:01:30 (~4 min), including two deliberate mutation
+  attacks — one confirmed the harness catches broken alternation, the other
+  found the harness *couldn't* distinguish an advancing counter from one
+  frozen at 1, which Refactor then fixed forward (third sample point).
+- Round total: comfortably inside the 30-minute budget.
+
+**Goals met:**
+1. Rectangle changes once per tick, inline tick counter (not M0.4's future
+   harness) — met.
+2. Constant duplication eliminated via wasm-bindgen getters, JS reads at
+   runtime — met.
+3. Headless two/three-sample pixel verification, stress-tested by two
+   deliberate mutations — met, and strengthened during this round.
+4. Exact commands recorded in README.md, verified from a clean checkout twice
+   (once by Refactor, once independently here) — met.
