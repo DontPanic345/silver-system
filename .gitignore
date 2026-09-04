@@ -5,3 +5,7 @@ _site/
 vendor/
 node_modules/
 scratch/
+
+# Rust / wasm build artifacts (M0.1 onward)
+/target
+/www/pkg

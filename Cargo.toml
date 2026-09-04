@@ -1,0 +1,26 @@
+[package]
+name = "viewer"
+version = "0.1.0"
+edition = "2021"
+description = "M0.1 toolchain proving ground: draws a rectangle to an HTML canvas from Rust/wasm."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+  "console",
+  "Document",
+  "Element",
+  "HtmlCanvasElement",
+  "CanvasRenderingContext2d",
+  "Window",
+]
+
+[profile.release]
+opt-level = "s"
