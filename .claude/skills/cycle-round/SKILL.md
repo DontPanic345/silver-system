@@ -8,6 +8,15 @@ user-invocable: true
 
 Read `cycle-contract` first. You are the orchestrator for this round.
 
+If you are running more than one round (e.g. a milestone orchestrator working
+through a list of rounds), run them **one at a time, strictly sequentially**: this
+round's Red, Green, Refactor and close-out all finish before the next round's Red
+is dispatched, even though nothing technically stops firing them concurrently.
+Tranche 0's M0.4 milestone orchestrator dispatched three rounds with overlapping
+timestamps despite its own plan saying otherwise; it was harmless only because the
+rounds happened to touch disjoint files — that was luck, not design. This is
+CLAUDE.md's "do one thing at a time" applied at round granularity.
+
 Your job is to dispatch phases and pass **the smallest possible handoff** between
 them. Never paste file contents, and never pass one phase's reasoning to the next.
 

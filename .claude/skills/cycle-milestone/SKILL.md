@@ -23,9 +23,18 @@ user directly. If you were handed a whole tranche instead, stop and use
 
 ## 2. Run rounds
 
-For each round: run `cycle-round`. Between rounds, re-plan — `cycle-plan` at round
-level, reading the previous round's log. That re-plan is not a formality; it is
-where the milestone adapts.
+For each round: run `cycle-round`. **Rounds run one at a time, strictly
+sequentially** — wait for a round's Red, Green and Refactor to all finish and its
+close-out (§4 below) to land before dispatching the next round's Red, even when
+nothing technically stops firing them concurrently. This is CLAUDE.md's "do one
+thing at a time" applied at round granularity, not just a `cycle-round` convention.
+Tranche 0's M0.4 dispatched three rounds with overlapping timestamps despite its
+own plan saying otherwise (`cycle-log/tranche-0/m0.4/closeout.md`); it happened to
+be harmless because the rounds touched disjoint files, but that was luck, not
+design — don't rely on it holding next time.
+
+Between rounds, re-plan — `cycle-plan` at round level, reading the previous round's
+log. That re-plan is not a formality; it is where the milestone adapts.
 
 After each round, ask which of the milestone's targets are now met, and say so
 explicitly. Targets are measurable: measure them, don't estimate them.
