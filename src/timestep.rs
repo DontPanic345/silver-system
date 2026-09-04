@@ -234,13 +234,30 @@ mod tests {
     }
 
     /// Scenario: however the same total real time is chopped up into calls
-    /// (one huge call vs. many tiny ones), the harness reports the same
+    /// (one big call vs. many tiny ones), the harness reports the same
     /// total number of elapsed steps — the accumulator's job is to track
     /// total elapsed time regardless of call granularity.
+    ///
+    /// This invariant and goal 3's guard are only simultaneously satisfiable
+    /// when `total_time` fits within what a *single* call can honestly turn
+    /// into steps, i.e. `total_time <= max_steps_per_call * dt` (here `0.5`
+    /// with the default cap). Beyond that bound the properties are mutually
+    /// exclusive by design: the guard's whole point (see the module doc
+    /// comment) is that a single oversized call permanently loses time a
+    /// finer chunking would not have lost — chunking-dependence there is the
+    /// guard working, not a bug. That boundary case is exercised separately
+    /// by [`the_guard_does_not_leave_a_debt_for_the_next_call_to_pay_off`]
+    /// and [`chunking_invariance_stops_holding_once_a_single_call_exceeds_the_cap`];
+    /// this test sticks to `total_time` values a single call can legitimately
+    /// match, so it tests call-granularity independence and nothing about
+    /// the guard.
     #[test]
     fn same_total_time_yields_same_total_steps_regardless_of_chunking() {
         let dt = 0.1;
-        let total_time = 1.7_f32;
+        // Chosen to stay under the default cap's max_accumulate (0.5) so a
+        // single call can honestly report the same total as many small
+        // calls — see the doc comment above.
+        let total_time = 0.47_f32;
 
         let mut one_big_call = FixedTimestep::new(dt);
         let steps_one_call = one_big_call.advance(total_time);
@@ -256,6 +273,49 @@ mod tests {
         }
 
         assert_eq!(steps_one_call, steps_many_calls);
+    }
+
+    /// Scenario (documents the boundary between the two properties above):
+    /// once a *single* call's duration exceeds `max_steps_per_call * dt`,
+    /// the guard discards the excess for that call — so the same total time,
+    /// delivered as one oversized call vs. many small ones that individually
+    /// stay under the cap, now legitimately yields *different* total step
+    /// counts. This is goal 3's guard doing its documented job (permanently
+    /// losing simulated time after an oversized call rather than deferring
+    /// it), not a violation of chunking-invariance: that invariant was never
+    /// meant to hold across a chunking that changes whether the guard fires.
+    #[test]
+    fn chunking_invariance_stops_holding_once_a_single_call_exceeds_the_cap() {
+        let dt = 0.1;
+        let total_time = 1.7_f32; // exceeds max_steps_per_call * dt == 0.5
+
+        let mut one_big_call = FixedTimestep::new(dt);
+        let steps_one_call = one_big_call.advance(total_time);
+        assert_eq!(
+            steps_one_call, 5,
+            "a single oversized call is capped to max_steps_per_call, discarding the rest"
+        );
+
+        let mut many_small_calls = FixedTimestep::new(dt);
+        let mut steps_many_calls = 0;
+        let mut remaining = total_time;
+        let chunk: Scalar = 0.05;
+        while remaining > 0.0 {
+            let this_chunk = chunk.min(remaining);
+            steps_many_calls += many_small_calls.advance(this_chunk);
+            remaining -= this_chunk;
+        }
+        assert_eq!(
+            steps_many_calls, 17,
+            "chunked below the cap, no time is discarded, so the honest total elapses"
+        );
+
+        assert_ne!(
+            steps_one_call, steps_many_calls,
+            "the guard is expected to make these differ for an oversized total_time \
+             — if they ever match again, either the guard stopped clamping or the \
+             chunking above stopped avoiding it"
+        );
     }
 
     /// Scenario: the remainder left over after a partial step genuinely
