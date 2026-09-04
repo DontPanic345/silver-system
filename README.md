@@ -1,14 +1,26 @@
 # silver-system
 
-A workbench for 2D simulation experiments — the long-term interest is
-emergent physical behaviour from simple interacting rules (fluids,
-materials, temperature, pressure, reactions), in the spirit of Oxygen Not
-Included and Noita.
+Building a small world that is part of a much larger universe — emergent physical
+behaviour from simple interacting rules (fluids, materials, temperature, pressure,
+reactions), in the spirit of Oxygen Not Included and Noita.
 
-## Experiments
+The work plan is [`PLAN.md`](PLAN.md): four tranches — physics, chemistry, biology,
+and the glass pane. The language is Rust.
 
-- [`terrarium/`](terrarium/) — a dependency-free browser falling-sand sim
-  that grew a sealed glass jar and a closed water cycle. Shelved as a
-  successful test; kept for reference.
+## How the work runs
 
-Next up: a fluid simulation.
+`tranche → milestone → round → phase`. A round is one Red → Green → Refactor pass;
+a phase is one agent's turn. The cycle is defined by the skills in
+[`.claude/skills/`](.claude/skills/), starting with `cycle-contract`. Round logs
+live under `cycle-log/`.
+
+## Shelved experiments
+
+Kept for reference, not extended.
+
+- [`terrarium/`](terrarium/) — a dependency-free browser falling-sand sim that grew
+  a sealed glass jar and a closed water cycle. A successful test.
+- [`stable-fluids/`](stable-fluids/) — a browser Stam stable-fluids sim with
+  conservative advection, temperature and buoyancy, built test-first over seven
+  rounds. Halted on a checkerboard mode in the colocated pressure projection. Its
+  retrospective is why the current cycle skills look the way they do.
