@@ -313,3 +313,207 @@ stray debug output, nothing left over from a chase.
 
 **No failing tests to report.** Everything Red left for Green now passes,
 verified by actually running the commands above, not by inspection.
+
+## Round 02 — Refactor — 2026-09-05T02:57:39+12:00 → 2026-09-05T03:00:17+12:00 (~3 min)
+
+**Scope:** the whole milestone (round 1 + round 2 combined) — `src/lib.rs`,
+`www/index.html`, `scripts/build-wasm.sh`,
+`tests/e2e/canvas_rectangle.test.mjs`, `README.md`, `Cargo.toml`.
+
+**What I did.**
+
+1. Read all six files cold, as though I hadn't seen Red's or Green's
+   reasoning.
+2. Ran a clean-checkout rebuild: deleted `www/pkg/` and
+   `target/wasm32-unknown-unknown/`, then ran `bash scripts/build-wasm.sh`
+   and the Playwright e2e test exactly as README.md documents them. Both
+   succeeded unchanged — the recorded commands are accurate.
+3. Adversarial pass, mutation 1 (per the round brief's named focus): changed
+   `color_for_tick` to always return `RECT_COLOR_RGB` regardless of tick.
+   `cargo test` failed for the right reason
+   (`color_for_tick_alternates_by_parity`, exact expected-vs-actual values).
+   Rebuilt wasm and ran the e2e test: failed for the right reason too — "is
+   identical at tick 0 and after tick advanced (both rgba(200,60,60,255))" —
+   naming the exact mechanism, not a timeout or opaque error. Reverted.
+4. Adversarial pass, mutation 2: changed `tick_and_draw` to compute
+   `TICK.with(|t| t.get() + 1)` without calling `t.set(...)` — the counter
+   never actually advances, it just recomputes "current + 1" (currently 0)
+   every call, forever returning 1. `cargo test` stayed fully green (no unit
+   test touches `tick_and_draw`'s statefulness). Rebuilt wasm and ran the
+   e2e test **as it stood at the start of this phase**: it also passed
+   green. This is a real finding, not a non-finding — see Correctness
+   findings below. Reverted the source, confirmed `diff` against the
+   pre-mutation file showed no difference, re-ran `cargo test` (3 passed) to
+   confirm the revert was clean before making any permanent change.
+5. Fixed the gap found in step 4: added a third sample to
+   `tests/e2e/canvas_rectangle.test.mjs` — after the first tick is observed
+   and checked (existing behaviour, unchanged), wait for
+   `window.__tickCount >= 2` and sample the pixel again, asserting it's back
+   to the even-tick colour. Re-ran the full mutation-2 experiment against
+   the strengthened test: it now fails with "window.__tickCount never
+   reached 2 within 5000ms (stuck at 1)" — the exact right reason. Reverted
+   the source mutation again, confirmed the strengthened test passes green
+   on the real, correct code, confirmed `cargo test` still 3/3 green.
+6. Confirmed working tree clean before committing (`git status`): only the
+   test file changed, plus two pre-existing untracked planner files
+   (`cycle-log/tranche-0/plan.md`, `cycle-log/tranche-0/m0.1/plan.md`) that
+   round 2's Red already flagged as not its/mine to commit — left untouched
+   and unstaged, as before.
+7. Committed the test-file change alone (`git add
+   tests/e2e/canvas_rectangle.test.mjs`), one commit, message states what
+   and why. Working tree left clean afterward (confirmed with `git status`).
+
+**Change list.**
+- `tests/e2e/canvas_rectangle.test.mjs`: added a third pixel sample after a
+  second real tick, asserting the counter keeps advancing rather than
+  freezing at 1 — rationale: closes a real gap the adversarial pass found
+  (see below), and this harness is explicitly the template for every later
+  milestone's animated-scenario verification, so it's worth it being
+  correct now rather than propagating a tautology.
+- No other files changed. `src/lib.rs`, `www/index.html`,
+  `scripts/build-wasm.sh`, `README.md`, `Cargo.toml` were read closely and
+  found to already be in good shape (see General comments) — nothing there
+  warranted a change given the round's scope and my remaining time.
+
+**Successes.**
+- The build/serve/test commands recorded in README.md are genuinely
+  accurate from a clean checkout — verified by actually deleting the build
+  artifacts and rerunning them, not by reading the script.
+- Mutation 1 (wrong colour logic) is already caught cleanly at both the
+  unit-test and e2e-test layers, with messages that name the actual
+  mechanism.
+- The single-source-of-truth fix (goal 2) holds up under cold reading: I
+  could not find a single duplicated RECT_*/tick literal anywhere in
+  `tests/e2e/canvas_rectangle.test.mjs` outside the one deliberately-kept
+  `OUTSIDE = {150, 120}` canvas-dimension point, which the file's own
+  comment correctly explains is not one of the shared values.
+- Doc comments in `src/lib.rs` are accurate to the code as it now stands —
+  no comment describes stale todo!() behaviour or a scheme that's since
+  changed.
+
+**What was difficult, and where the time went.**
+Most of the ~20 minutes of hands-on-keyboard time went into the adversarial
+pass itself — specifically into finding a mutation that the existing test
+suite would *not* catch, since the "obvious" mutation (wrong colour) was
+already well covered by both Red and Round 1's Refactor precedent. The
+frozen-non-advancing-counter mutation took a couple of tries to land on
+(the first idea, "don't call tick_and_draw's inner set at all", is what I
+landed on) and required actually running the full build+e2e loop twice
+(once to confirm the miss, once to confirm the fix) to have real evidence
+rather than a hunch.
+
+**Compromises I made.**
+- I did not add a native (non-browser) regression test for the
+  frozen-counter case — the fix lives entirely in the Playwright e2e file,
+  which is slower (~1.2s) than the Rust unit tests (~0.01s) but still fast
+  enough that this isn't a suite-health concern at this size. Flagging in
+  case a future round wants a cheaper unit-level guard on `TICK`'s
+  statefulness (e.g. call `tick_and_draw` twice in a `#[cfg(test)]` test and
+  assert the returned counts differ) — I judged the e2e coverage sufficient
+  for now rather than adding a second test for the same property.
+- I did not rename or restructure anything in `src/lib.rs` even though I
+  read it closely — nothing there needed it; restraint here is deliberate,
+  not an oversight.
+
+**Gaps and flags — correctness finding.**
+The two-sample verification claim ("sample the canvas at two points in time
+… assert they differ") as it stood at the start of this phase was **not
+fully sound**: it cannot distinguish a genuinely advancing tick counter from
+one that recomputes `current + 1` without persisting it (frozen at 1
+forever). I demonstrated this is not hypothetical by making exactly that
+change to `tick_and_draw` and watching both `cargo test` (unaffected, 3/3
+green — no unit test touches counter statefulness) and the e2e test (green,
+"PASS … differs after a real tick") stay fully green with the bug present.
+This is now fixed (see Change list) and re-verified both ways (bug present →
+new check fails correctly; bug absent → suite green). I'm reporting this as
+a finding rather than silently folding it in because it's exactly the kind
+of "test suite claims more than it proves" issue this phase exists to
+catch, and because it bears on the answer to focus item 2 in the round
+brief: the *original* two-sample harness was, in this one specific way,
+answerable by a non-advancing counter — i.e., partially tautological. The
+three-sample version I shipped no longer has this gap for the counter's
+statefulness, though it still can't ("wouldn't need to") prove the counter
+never *skips* values, which isn't a property this milestone's goals asked
+for.
+
+**M0.4 generalization assessment (focus item 1 — assessment only, not
+acted on).**
+The Round 2 tick mechanism (JS `setInterval` drives a wall-clock timer; each
+fire calls into Rust, which owns the counter and the tick→appearance
+decision) proves the toolchain end to end, which is all M0.1 needs. It is
+**not** the shape of a fixed-timestep simulation harness and I'd expect
+M0.4 to replace rather than extend it:
+- `setInterval` gives no accumulator/catch-up semantics — if a browser tab
+  is backgrounded and timers get throttled or coalesced, ticks are just
+  lost, not caught up. A real fixed-timestep harness (the kind PLAN.md's
+  M0.4 describes) typically decouples "how many sim steps to run this
+  frame" from "how often to render" via an accumulator against
+  `requestAnimationFrame`'s real elapsed time, precisely so it *doesn't*
+  lose or skew steps under variable frame timing.
+- `tick_and_draw` conflates "advance one simulation step" with "repaint" in
+  a single exported function and a single call site. M0.4's harness will
+  need those separated (advance N steps, then render once) once step count
+  and frame count can diverge.
+- The counter itself (`thread_local! Cell<u32>`) is fine as infrastructure —
+  a single-threaded wasm-in-a-tab counter — and that storage choice
+  probably *does* carry forward. It's the scheduling/coupling around it
+  that won't.
+- Net: M0.4 will most likely throw away the `setInterval`/`tick_and_draw`
+  coupling and keep only the proven pieces underneath it (that wasm can
+  hold mutable state across calls, that JS can drive it on a timer, that a
+  a repaint can be triggered from Rust). This is exactly what the module
+  doc comment in `src/lib.rs` already says ("explicitly NOT the shared
+  M0.4 … harness") — the code is honest about its own scope, which is the
+  right call for M0.1. No action needed now; this is groundwork
+  information for M0.4's planner.
+
+**General comments.**
+The milestone's code is small and genuinely clean — doc comments read as
+true, the plumbing/logic split Red drew (getters implemented for real,
+decision logic stubbed) held up well under Green, and there's no
+duplicated-constant residue anywhere. The one real gap was in the test's
+own claim strength, not in the shipped Rust code.
+
+**Suite runtime:** `cargo test` ~0.01s; the Playwright e2e test ~1.2s
+end-to-end (includes two real `150ms` ticks plus browser launch/teardown).
+Both comfortably fast at this milestone's size; no action needed.
+
+**Milestone-level target check (against PLAN.md's M0.1 targets).**
+1. *"The wasm build succeeds"* — met. Verified this phase from a clean
+   checkout (`rm -rf www/pkg target/wasm32-unknown-unknown && bash
+   scripts/build-wasm.sh`), not just by reading the script.
+2. *"The artifact runs in a real browser and draws something [that visibly
+   changes over time]"* — met. Verified this phase with the actual
+   Playwright e2e test (a real headless Chromium, real canvas pixel reads,
+   real wall-clock ticks) both on the correct code (passes) and against two
+   deliberately broken variants (fails for the named reason each time, the
+   second one only after this phase's fix).
+3. *"The exact commands are recorded so CI can repeat them exactly"* — met.
+   README.md's commands were run verbatim this phase from a clean checkout
+   and matched exactly what's written.
+
+**Verdict: Advance.** All three of M0.1's PLAN.md targets are met with
+fresh, this-session evidence, not carried-over assertion. The one
+correctness gap the adversarial pass found (the frozen-counter blind spot
+in the e2e test) was inside this phase's scope, is now fixed, and is
+re-verified both directions. Nothing else found across either round's code
+warrants another round. Recommend M0.1 closes out now and the next planner
+moves to M0.2 (or whatever `cycle-tranche`'s ordering calls for next).
+
+**What I would have done with another 30 minutes.**
+- Added a cheap native (`#[cfg(test)]`, no browser) unit test asserting
+  `tick_and_draw` called twice returns two different, monotonically
+  increasing values — cheaper insurance on the same property the e2e fix
+  now covers, so a future round doesn't have to pay the ~1.2s browser round
+  trip just to catch a counter regression.
+- Looked at whether `paint_rect`'s per-call `format!` (allocating a new
+  `String` every tick for the fill style) is worth caching — almost
+  certainly not at this milestone's scale and doesn't affect any stated
+  target, so I left it, but would sanity-check it against M0.4's likely
+  much-higher tick rate.
+- Spent time deliberately trying to break the "outside pixel stays
+  transparent" regression guard (e.g. an off-by-one in `RECT_X`/`RECT_Y`)
+  to see if the boundary check is as tight as it reads — I read it and
+  believe it's correct (5px margin from `constants.rectX/rectY`, `OUTSIDE`
+  well clear of the 60x40 rect at (20,20)) but did not empirically mutate
+  it the way I did the tick logic.
