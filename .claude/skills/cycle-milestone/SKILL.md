@@ -24,9 +24,10 @@ user directly. If you were handed a whole tranche instead, stop and use
 ## 2. Run rounds
 
 For each round: run `cycle-round`. **Rounds run one at a time, strictly
-sequentially** — wait for a round's Red, Green and Refactor to all finish and its
-close-out (§4 below) to land before dispatching the next round's Red, even when
-nothing technically stops firing them concurrently. This is CLAUDE.md's "do one
+sequentially** — wait for a round's phase(s) (a single pass, or Red/Green/Refactor
+for a round judged risky — see `cycle-plan` §1c) to finish and its close-out (§4
+below) to land before dispatching the next round, even when nothing technically
+stops firing them concurrently. This is CLAUDE.md's "do one
 thing at a time" applied at round granularity, not just a `cycle-round` convention.
 Tranche 0's M0.4 dispatched three rounds with overlapping timestamps despite its
 own plan saying otherwise (`cycle-log/tranche-0/m0.4/closeout.md`); it happened to

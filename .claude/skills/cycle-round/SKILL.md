@@ -1,6 +1,6 @@
 ---
 name: cycle-round
-description: Run one round — plan it, then dispatch Red, Green and Refactor as fresh isolated agents, and decide what happens next from Refactor's recommendation. Use to run a single round of the cycle.
+description: Run one round — plan it, then either dispatch a single self-verifying pass or, for rounds judged risky, Red/Green/Refactor as fresh isolated agents, and decide what happens next. Use to run a single round of the cycle.
 user-invocable: true
 ---
 
@@ -8,10 +8,14 @@ user-invocable: true
 
 Read `cycle-contract` first. You are the orchestrator for this round.
 
+`cycle-plan`'s round-level planning (§1c step 3) will have already decided whether
+this round is **single-pass** or **risky**. That decision is frozen for the round;
+don't second-guess it mid-dispatch. Section 2 below covers both.
+
 If you are running more than one round (e.g. a milestone orchestrator working
 through a list of rounds), run them **one at a time, strictly sequentially**: this
-round's Red, Green, Refactor and close-out all finish before the next round's Red
-is dispatched, even though nothing technically stops firing them concurrently.
+round's phase(s) and close-out all finish before the next round's dispatch begins,
+even though nothing technically stops firing them concurrently.
 Tranche 0's M0.4 milestone orchestrator dispatched three rounds with overlapping
 timestamps despite its own plan saying otherwise; it was harmless only because the
 rounds happened to touch disjoint files — that was luck, not design. This is
@@ -30,18 +34,31 @@ before dispatching anything:
 - the round number and its log path,
   `cycle-log/<tranche-slug>/<milestone-slug>/round-NN.md`;
 - the round's goals, and the round's and milestone's intent;
-- Refactor's scope and focus for this round, and any adversarial focus.
+- whether the round was planned single-pass or risky, and if risky, Refactor's
+  scope and focus for this round, and any adversarial focus.
 
 Create the round log with a header naming the round, its goals and its intent.
 
 ---
 
-## 2. Dispatch the phases
+## 2. Dispatch the phase(s)
 
-Each phase is a **fresh isolated agent** — use the `Agent` tool, and never
-`subagent_type: "fork"`. A fork inherits your context, which destroys the isolation
-the whole design rests on: Red and Green have both shipped the same wrong mental
-model, and it was a cold read that caught it.
+Every dispatch is a **fresh isolated agent** — use the `Agent` tool, and never
+`subagent_type: "fork"` (a fork inherits your context, which destroys the
+isolation the whole design rests on; see `cycle-contract` §3a).
+
+### Single-pass rounds (the default)
+
+One dispatch. Prompt it with the round's goal, its intent, and the round log
+path. It builds the goal, tests it, re-reads its own diff cold against the goal
+before committing, and appends one report to the round log in the standard
+format — no separate Red/Green/Refactor handoff. Model **sonnet, medium effort**.
+
+Take its report at face value the same way you would Refactor's recommendation in
+a risky round: it says whether the goal was met, you decide whether that's enough
+to advance (see §3).
+
+### Risky rounds
 
 Default model **sonnet**, medium effort. Refactor gets **sonnet, high effort** — it
 has the hardest job.
@@ -66,30 +83,34 @@ implementation notes — Refactor is meant to look at the result cold.
 
 ## 3. Decide what happens next
 
-Refactor answers: have the round's goals been met to a sufficient standard? That
-answer is a **recommendation, not a command.** Refactor is a cold, isolated,
-single-round agent — well placed to judge whether this round's code is right,
-badly placed to judge whether the *goal* is worth continuing to pursue, because it
-has no memory of what happened in this goal's earlier rounds. You are the only
-thing in the system with that memory. Deciding what to do with the recommendation
-is your job, not a formality:
+The round's dispatch — Refactor in a risky round, the single pass itself in a
+single-pass round — answers: have the round's goals been met to a sufficient
+standard? That answer is a **recommendation, not a command.** It's a cold,
+isolated, single-round agent — well placed to judge whether this round's code is
+right, badly placed to judge whether the *goal* is worth continuing to pursue,
+because it has no memory of what happened in this goal's earlier rounds. You are
+the only thing in the system with that memory. Deciding what to do with the
+recommendation is your job, not a formality:
 
-- **Advance** — the normal case when Refactor recommends it. Run the suite once
+- **Advance** — the normal case when the round recommends it. Run the suite once
   yourself. This is the only thing you verify independently: one cheap check, not
   a re-audit. Then close the round out.
-- **Cycle** — the round runs again with Refactor's required updates as the new
-  input. Go back to step 1 with them. A corrective round is a normal outcome, not
-  a failure.
+- **Cycle** — the round runs again with the required updates as the new input
+  (Refactor's, in a risky round; the pass's own stated gaps, in a single-pass
+  round). Go back to step 1 with them. A corrective round is a normal outcome,
+  not a failure.
 - **Back to planning** — take the exit ramp. Run `cycle-plan` with what was
   learned, per its "re-planning after an exit ramp" section.
 
-**The loop guard, and the one place you overrule Refactor:** if this is the
-**third or later** round in a row still working the same goal, escalate to
-planning regardless of what this round's Refactor recommends — even "advance," and
-especially another "cycle." Three fresh Refactors independently reaching for
+**The loop guard, and the one place you overrule the round's own recommendation:**
+if this is the **third or later** round in a row still working the same goal,
+escalate to planning regardless of what this round recommends — even "advance,"
+and especially another "cycle." Three fresh, independent passes reaching for
 "cycle again" on the same goal is itself evidence the goal is framed wrong, not
 evidence the code needs one more pass. Say so explicitly when you escalate: which
-round this is on the goal, and what each Refactor said.
+round this is on the goal, and what each pass said. A goal stuck like this is also
+itself a sign it may have been mis-judged single-pass — worth naming to the
+planner even if it was actually run risky throughout.
 
 If any phase returns an exit ramp instead of a normal result — an unattainable
 goal, a 30-minute decision point with no clear path, a tooling failure — do not

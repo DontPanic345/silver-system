@@ -106,19 +106,45 @@ Decide, in this order:
 2. **The round's goals.** Small enough to land in one round, meaningful enough to
    matter. Write them so they are clear, knowing they will be interpreted. Give the
    round an intent if the goals alone would mislead.
-3. **Refactor's scope and focus.** Every round gets a Refactor pass at round scope
-   at minimum. If nothing risky changed this round, spend that budget on a *larger*
-   scope and a broader focus — the milestone, the test suite, performance, a
-   security or gap sweep. If significant feature work landed, aim Refactor at that
-   work and at folding it into the existing codebase.
-4. **Adversarial focus, if any.** The useful adversarial angles are not knowable
-   before the project is known; they come from the domain. Long runs, resting
-   states, sharp interfaces, symmetry, conservation over time, boundary cells. Pick
-   the one this round's changes most plausibly broke, and hand it to Refactor.
-5. **The phase prompts.** Write a self-contained prompt for each of Red, Green and
-   Refactor, each carrying: the round's goals, the round's and milestone's intent,
-   its own scope and focus, and the round log path. Nothing else — no reasoning
-   from another phase, no file contents.
+3. **Risky, or single-pass?** Full Red/Green/Refactor is expensive — three agent
+   dispatches and a handoff between each — and running it by default on every
+   round, regardless of what the round actually is, generates its own overhead:
+   tranche 0 proved this concretely (a static rectangle and a handful of math
+   primitives each took multiple rounds of phase ceremony, and a real share of
+   what got "found and fixed" was the ceremony itself misfiring — forks that
+   couldn't spawn subagents, rounds dispatched out of sequence — not domain work).
+   So default to **single-pass**: one fresh agent builds the round's goal, tests
+   it, reviews its own diff against the goal, and commits — one report, the same
+   format as any phase's. Reserve full Red/Green/Refactor for a round you judge
+   **risky**:
+   - it touches a shared primitive or interface other code already depends on
+     (the blast radius reaches past this round);
+   - it bears on a stated conservation/determinism target, where a cold second
+     look is the point, not a formality;
+   - the same goal already took an exit ramp or a cycle-again — it's proven
+     tricky once already;
+   - it changes something hard to reverse (a public interface, a deploy path, a
+     data format);
+   - you are genuinely unsure the approach is right and want an independent,
+     isolated check on it.
+   State which you chose for this round, and why, in the round header — this is
+   frozen for the round the same way a goal is once a phase has started on it.
+4. **Refactor's scope and focus** (risky rounds only). Every risky round gets a
+   Refactor pass at round scope at minimum. If nothing risky changed this round,
+   spend that budget on a *larger* scope and a broader focus — the milestone, the
+   test suite, performance, a security or gap sweep. If significant feature work
+   landed, aim Refactor at that work and at folding it into the existing codebase.
+5. **Adversarial focus, if any** (risky rounds only). The useful adversarial
+   angles are not knowable before the project is known; they come from the
+   domain. Long runs, resting states, sharp interfaces, symmetry, conservation
+   over time, boundary cells. Pick the one this round's changes most plausibly
+   broke, and hand it to Refactor.
+6. **The phase prompt(s).** For a single-pass round, write one self-contained
+   prompt carrying the round's goal, its intent, and the round log path. For a
+   risky round, write one for each of Red, Green and Refactor, each carrying: the
+   round's goals, the round's and milestone's intent, its own scope and focus, and
+   the round log path. Nothing else — no reasoning from another phase, no file
+   contents.
 
 ---
 
