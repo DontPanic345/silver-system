@@ -45,6 +45,18 @@
 //! are `width` apart), and [`Grid::cell_center`] delegates to
 //! `GridIndex::center` so a cell's world-space position is available
 //! without this module re-deriving it.
+//!
+//! **Refactor note for a future renderer round:** increasing `j` moves one
+//! full row *forward* in this flat storage (`linear_index` grows), and `j`
+//! increases in world `+y` (up, per `math.rs`). Neither of those facts says
+//! anything about which way is "up" on screen — a canvas row index increases
+//! *downward* (`src/lib.rs`'s own pinned convention). A future round that
+//! walks `Grid::cells()` linearly to fill image rows top-to-bottom must
+//! flip that axis explicitly (row 0 of the image is the *largest* `j`, not
+//! `j == 0`), the same flip `math.rs`'s `Vec2` doc comment already requires
+//! at any world-to-canvas boundary — this is not a new rule, just this
+//! module's own instance of it, named here so it isn't rediscovered as a
+//! bug once a renderer exists.
 
 use crate::material::MaterialId;
 use crate::math::{GridIndex, Scalar, Vec2};
@@ -296,6 +308,41 @@ mod tests {
             "after swap, next should hold what current held before the swap, \
              confirming this is a real exchange, not a one-way copy"
         );
+    }
+
+    /// Scenario: a *step* function will call `swap` once per tick, every
+    /// tick, for the life of a run — this round's "swappable" claim (goal 1)
+    /// is only actually true if that holds under repeated use, not just the
+    /// one-swap case above. Simulates several ticks by hand (write a
+    /// distinct, tick-numbered material into `next`, then swap) and checks
+    /// after every single swap — not just the last one — that `current`
+    /// holds exactly what that tick wrote and nothing from an earlier or
+    /// later tick leaks through. Refactor-added: this is exactly the kind of
+    /// "does it still hold after repetition, not just once" adversarial
+    /// check `cycle-refactor` asks for on a brand-new shared primitive.
+    #[test]
+    fn swap_behaves_correctly_across_many_repeated_swaps_in_sequence() {
+        let mut grid = Grid::new(2, 2, AIR);
+        let idx = GridIndex::new(1, 0);
+        let untouched = GridIndex::new(0, 1);
+
+        for tick in 0..7u16 {
+            let this_tick = MaterialId(tick);
+            grid.set_next(idx, this_tick);
+            grid.swap();
+            assert_eq!(
+                grid.get(idx),
+                this_tick,
+                "after swap #{tick}, current should hold exactly what was \
+                 written into next for this tick, not an earlier or later one"
+            );
+            assert_eq!(
+                grid.get(untouched),
+                AIR,
+                "after swap #{tick}, a cell never written to should still \
+                 read its original fill, unaffected by any number of swaps"
+            );
+        }
     }
 
     // --- Scenario: convention pin, grid/storage agreement (goal 4) ---

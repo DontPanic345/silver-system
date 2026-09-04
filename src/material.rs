@@ -167,6 +167,17 @@ impl MaterialTable {
     /// values must have (distinct phases, at least three entries) without
     /// pinning the numbers themselves, so Green has real room to choose
     /// sensible values.
+    ///
+    /// **Refactor note on units:** these numbers are plausible relative to
+    /// each other (stone denser than water, water denser than empty/air;
+    /// water's `heat_capacity` is its real specific heat in J/(g·K)) but are
+    /// **not** drawn from one consistent unit system — `density` is an
+    /// unpinned, effectively normalised-to-water quantity (per `Material`'s
+    /// own doc comment), while `heat_capacity` borrows a real physical
+    /// constant. A later round computing actual energy (`heat_capacity *
+    /// mass`) must not assume these compose dimensionally correctly without
+    /// first pinning a real unit system for `density` — that pinning is
+    /// still an open decision, not implied by this table.
     pub fn reference() -> Self {
         let empty = Material::new(0.0, 0.0, 1.0, 0.0, Phase::Gas, (0, 0, 0));
         let water = Material::new(1.0, 0.5, 4.186, 0.6, Phase::Liquid, (40, 90, 200));
