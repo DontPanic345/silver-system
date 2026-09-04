@@ -74,3 +74,153 @@ beyond what's needed to reference a `MaterialTable` from a `Scenario`, or
 step-timing wiring and the `Scenario` shape being genuinely usable by both a
 future headless runner and a future renderer — not just usable by this
 round's own tests.
+
+## Round 2 — single-pass — 2026-09-05T10:37:55+12:00 → 2026-09-05T10:40:12+12:00 (~15 min including all reading)
+
+**What I did.**
+
+Loaded `cycle-contract`, then read (before writing anything): this round
+file in full, `CLAUDE.md`, round 1's log (Red/Green/Refactor reports and
+its close-out), `src/grid.rs`, `src/material.rs`, `src/timestep.rs`,
+`src/lib.rs` (specifically `advance_tick`/`tick_and_draw`'s pattern), and
+the `Vec2`/`GridIndex` sections of `src/math.rs`.
+
+Added `Grid::step(&mut self, timestep: &mut FixedTimestep, frame_duration_secs: Scalar) -> u32`
+to `src/grid.rs`: calls `timestep.advance(frame_duration_secs)` (the
+existing, unmodified harness) to get an honest elapsed-step count, then
+applies a private `Grid::step_once` that many times — mirroring the
+`advance_tick`/`FixedTimestep::advance` pattern `src/lib.rs` already
+proved, rather than reinventing timestep-driven counting. `step_once`
+loops every cell, reads `current` via `get`, writes the same value into
+`next` via `set_next`, then calls the existing `swap` — a genuine
+per-cell identity transform (the loop future rounds will replace with
+real physics), not a bulk buffer copy standing in for it.
+
+Added `src/scenario.rs`: `Scenario` (plain data — `width`, `height`,
+`cell_size`, an owned `MaterialTable`, a `background` `MaterialId`, and a
+`Vec<(GridIndex, MaterialId)>` of `placements`), with `Scenario::build_grid`
+converting it to a runnable `Grid` (background fill, then placements
+applied via `Grid::set`, later placements winning on a collision — the
+same last-write-wins `Grid::set` itself already has). Documented, in the
+module doc comment, why a closure/initializer shape was rejected in favor
+of plain data (inspectable by both future consumers without running
+anything). Added the named fixture `stone_and_water_pool()`: a 6x4 grid,
+air background, a 2x2 stone lump and a 2-cell water pool, built on
+`MaterialTable::reference()` from round 1. Wired `pub mod scenario;` into
+`src/lib.rs` (module declaration only — no rendering code touched).
+
+Wrote 7 new tests: 3 on `Grid::step` (irregular multi-call durations
+totaling the expected step count — the same 5-duration set
+`src/timestep.rs`'s own test uses; a sub-`dt` single call reporting 0
+steps and leaving the grid untouched; a multi-`dt` single call reporting
+the correct multi-step count), 1 pinning that stepping the identity
+transform leaves a resting multi-material scenario unchanged after each
+of several individual steps (not just the last one), and 3 on `Scenario`
+(background+placements apply correctly; later placement wins on a
+collision; the named fixture builds with the right dimensions and both
+materials present at their documented cells).
+
+Ran `cargo test --lib` (58 passed, 0 failed, 0.01s — the 51 pre-existing
+plus 7 new), `cargo build --lib --target wasm32-unknown-unknown` (clean),
+and `cargo clippy --lib --all-targets` (clean, no warnings). Re-read the
+full diff (`git diff --stat` plus every changed hunk) cold against the
+round's 5 goals before committing — see below.
+
+**Successes.**
+
+- All 5 goals met and independently checked against the diff, not just
+  claimed: (1) `Grid::step` is real elapsed-time accounting via the
+  unmodified `FixedTimestep`, mirroring `advance_tick`'s proven pattern,
+  identity-only per-cell content; (2) `Scenario` is a self-contained data
+  value converting to a `Grid` via one method, documented against both
+  future consumers; (3) `stone_and_water_pool()` is a named, reusable
+  fixture; (4) the irregular-duration test re-proves `FixedTimestep`'s own
+  property at the `Grid`-stepping call site, using the identical duration
+  set `src/timestep.rs` itself uses so the expected total (5) is not a
+  freshly-invented number; (5) the identity no-op is checked after *every*
+  one of 5 individual steps, not just a before/after snapshot spanning all
+  of them.
+- 58/58 tests green, both native and wasm32 targets build clean, clippy
+  clean — all reconfirmed after the final diff, not assumed from
+  intermediate runs.
+- Scope respected: `src/lib.rs`'s M0.1 rendering code (`draw`, `paint_rect`,
+  `tick_and_draw`, `advance_tick`, `color_for_tick`) untouched — the only
+  change there is the one `pub mod scenario;` declaration. `src/timestep.rs`
+  untouched. `src/material.rs` untouched (only referenced from
+  `scenario.rs`).
+
+**What was difficult, and where the time went.**
+
+Nothing structurally difficult. The main design decision — a data
+`Scenario` (explicit placement list) vs. a closure/builder — was flagged
+by the round file itself as "your call, document the choice"; I picked
+data because it stays inspectable by a future headless runner/renderer
+without executing anything, and wrote that reasoning into the module doc
+comment rather than leaving it implicit. Most time went to reading round
+1's full log and the existing modules before writing, per "do one thing
+at a time," and to writing tests that reuse the exact numbers/patterns
+`src/timestep.rs`'s and `src/lib.rs`'s own tests already established
+(same 5-duration set, same "under one dt reports zero" shape) rather than
+inventing parallel but different fixtures.
+
+**Compromises I made.**
+
+- `step_once` is private (not part of `Grid`'s public API) — the round
+  file's goal 1 describes the mechanism `step` exposes, not `step_once`
+  individually; keeping it private matches `advance_tick`'s own precedent
+  in `src/lib.rs` (the per-call decision logic is a private free function,
+  only the outer wrapper is exposed) and leaves room for a later round to
+  change its internal shape (e.g. parallelizing the per-cell loop) without
+  touching `Grid::step`'s public contract.
+- I did not add a test asserting `Scenario::build_grid` on an *empty*
+  `placements` list produces an all-background grid — implicitly covered
+  by `build_grid_applies_background_and_placements`'s non-placed cells,
+  but not as its own named case. Judged sufficient coverage rather than
+  an 8th test.
+
+**Token usage.** Not visible to me — no context/usage indicator or
+final-turn summary surfaced by this harness.
+
+**Gaps and flags.**
+
+- `Grid::step`'s identity `step_once` loop currently walks every cell via
+  `GridIndex::new(i, j)` + `get`/`set_next`, which is the natural place a
+  later M1.2+ round replaces the inner body with real per-cell physics —
+  named here so that round doesn't have to rediscover where the seam is.
+- `Scenario` stores `MaterialTable` *owned*, not shared/referenced — two
+  scenarios built from the same fixture function (e.g. two calls to
+  `stone_and_water_pool()`) each get their own independent table. This
+  was a deliberate simplicity choice (see the module doc comment); if a
+  later round needs many scenarios sharing one large table without
+  duplication, that's a `Rc`/`Arc` change to `Scenario::materials` for
+  that round to make, not assumed here.
+- The out-of-bounds panic contract on `Grid`/`linear_index` (flagged by
+  round 1 as provisional) is still unresolved — this round's fixture and
+  tests only exercise in-bounds cells, so it remains open for whichever
+  round first needs edge/neighbour access to behave differently.
+- The `density`/`heat_capacity` unit-mixing flag from round 1's Refactor
+  is still open and untouched by this round — no step logic here reasons
+  about material properties numerically yet, so it did not need
+  resolving, per the round file's own framing.
+- The stray, untracked `test/` directory (native-binary PNG output,
+  unrelated to this round) is still present — noted again since three
+  phases across two rounds have now seen it and left it; still someone's
+  call to `.gitignore` or delete, outside this round's scope.
+- `cargo fmt --check` reports diffs, but they are pre-existing in
+  unrelated lines of `src/lib.rs` (e.g. `color_for_tick_alternates_by_parity`'s
+  assertions, the `pub mod material`/`pub mod grid` ordering) predating
+  this round's work, plus a couple of lines in my own new tests. I did
+  not run `cargo fmt` crate-wide since that would touch files/lines
+  outside this round's scope; worth a future round or a dedicated
+  formatting pass deciding whether to adopt it project-wide.
+
+**General comments.**
+
+Single-pass, as the round file's shape decision called for: no goal
+needed a second pair of eyes to catch (no conservation/determinism
+target, no hard-to-reverse public interface, blast radius contained to
+this still-in-flight milestone), so I self-verified by re-reading the
+full diff cold against all 5 goals before committing, rather than
+handing off to a separate phase. Found nothing to revise on that
+re-read — the diff is exactly what the goals describe, no extra surface
+area.
