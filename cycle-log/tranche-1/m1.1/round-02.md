@@ -224,3 +224,54 @@ full diff cold against all 5 goals before committing, rather than
 handing off to a separate phase. Found nothing to revise on that
 re-read — the diff is exactly what the goals describe, no extra surface
 area.
+
+## Round 2 — orchestrator close-out
+
+**Verdict:** Advance. Independently re-ran `cargo test --lib`: 58 passed, 0
+failed, 0.01s — matches the pass's own report exactly. Found and fixed a
+small mechanical issue myself: `cargo fmt --check` flagged real drift in
+this round's own new code (`src/grid.rs`); applied `cargo fmt`, then
+reverted the fmt tool's incidental reformatting of unrelated pre-existing
+files (`src/lib.rs`, `src/timestep.rs`) since that drift predates this
+round and is out of its scope — left for the milestone-scope Refactor pass
+instead, consistent with `cycle-refactor`'s "mechanical issues get fixed
+immediately, substantive scope stays with its owner" split. Committed
+separately (`2879633`).
+
+**Goals — met:**
+1. `Grid::step` wired to the existing, unmodified `FixedTimestep`; identity
+   per-cell transform only. Met — `src/grid.rs`.
+2. `Scenario`: plain-data type, `build_grid()` converts to a runnable
+   `Grid`. Met — `src/scenario.rs`. Documented rationale for data over a
+   closure/builder shape.
+3. `stone_and_water_pool()` fixture exists, named and reusable by rounds 3/4.
+   Met.
+4. Step-timing property (irregular/sub-dt durations across calls) pinned at
+   the `Grid`-stepping call site. Met.
+5. Identity-transform no-op pinned after each of several individual steps.
+   Met.
+
+**Timing roll-up (Round 2):** single pass, ~15 min including all reading
+(per the pass's own report, well inside the 30-minute budget) plus the
+orchestrator's own ~5 min independent verification/fmt cleanup. No
+overtime, no exit ramp.
+
+**Gaps/flags carried forward (unchanged from the pass's own report, plus
+one closed):**
+- `step_once`'s per-cell loop is the seam M1.2+ replaces with real physics
+  — named for that round.
+- `Scenario.materials` is owned, not shared — a future round's call if
+  many scenarios need to share one table.
+- Out-of-bounds panic contract (round 1's flag) still open.
+- density/heat_capacity unit-mixing (round 1's flag) still open, still
+  unused by any numeric step logic so still non-blocking.
+- Whole-crate `cargo fmt` adoption: now explicitly flagged for the
+  milestone-scope Refactor pass to decide, rather than left as an
+  ambient, unowned observation.
+- The stray untracked `test/` directory: harmless, outside git, not
+  pursued further (a Bash removal attempt was blocked by this session's
+  own sandboxing; not worth escalating for a build artifact nothing
+  references).
+
+Round 2 closed. Proceeding to re-plan round 3 (headless measurement) per
+`cycle-milestone` §2.
