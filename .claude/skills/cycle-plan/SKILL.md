@@ -15,6 +15,35 @@ knowable before the last one finished.
 
 ---
 
+## The north star
+
+`PLAN.md` opens with it, in two statements: **a believable small world inside a
+large universe**, and **a terrarium people can see on their screens and interact
+with**. Both are load-bearing.
+
+Every plan you write states, in its own words, how the work it is planning serves
+them. Not a ritual sentence — a real claim you could be wrong about. If you cannot
+say how the work in front of you serves the north star, **that is the finding**:
+report it rather than planning the work anyway.
+
+## Plan full, and reach
+
+Plan the fullest scope you can honestly justify, not the minimum that satisfies the
+brief. What `PLAN.md` records for a tranche or milestone is the thinnest sketch of
+what is wanted — it is a starting position, and treating it as the ceiling is the
+main way this system would fail quietly.
+
+So at every level: **reach.** Ask what else belongs here that nobody wrote down —
+what the domain implies, what the next tranche will need and would rather have
+early, what a person poking at the result would immediately reach for and not find.
+Add it. Say you added it and why.
+
+The counterweight is the round, not the plan: a round is small, and a phase has 30
+minutes. Ambition belongs in the scope you plan; restraint belongs in the slice you
+cut. Do one thing at a time — but know what the one thing is *for*.
+
+---
+
 ## 0. Read what happened
 
 Before planning anything, read the logs of the rounds that have already run at this
@@ -40,7 +69,10 @@ Output: an intent statement and a list of milestones, written to
 `cycle-log/<tranche-slug>/plan.md`.
 
 - Restate the tranche's **intent** from `PLAN.md` in your own words, sharpened by
-  whatever has been built since it was written.
+  whatever has been built since it was written, and say how it serves the north
+  star.
+- Reach: what does this tranche need that `PLAN.md` doesn't mention? What will the
+  tranches after it wish this one had built?
 - Set the tranche's **targets** — measurable, quantifiable, objectively checkable.
   Not "pressure feels right"; "water in a U-pipe levels to within 1 cell across
   both arms and stays there for 5000 steps".

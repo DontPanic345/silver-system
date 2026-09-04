@@ -1,6 +1,15 @@
 # silver-system
 
-Building a small world that is part of a much larger universe.
+## The north star
+
+> **A believable small world inside a large universe.**
+
+> **A terrarium people can see on their screens and interact with.**
+
+Both statements, together, are the goal. The first is the standard — believability
+comes from the universe underneath being genuinely full, not from what the camera
+shows. The second is the deliverable. `PLAN.md` opens with the long version; every
+tranche states how it serves them.
 
 ## Principles
 
