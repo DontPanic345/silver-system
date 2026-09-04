@@ -258,3 +258,165 @@ arrives (Red's call to keep it together for now stands unchallenged by me).
 cell-center convention decided and documented, conversion function
 implemented, and both durable and disposable tests pin convention and
 correctness, all green. No blockers found. Ready for Refactor.
+
+## Round 02 — Refactor — 2026-09-05T03:26:09+12:00 → 2026-09-05T03:27:20+12:00 (~1 min)
+
+**What I did.**
+
+Read `cycle-contract`, then read `src/math.rs` cold (without reading Red's or
+Green's reasoning first, as instructed) before forming a view. Ran
+`cargo test --lib` myself: 18/18 green, matching Green's report exactly. Then
+read Red's and Green's log entries above to compare against my own read.
+
+Adversarial pass on the stated focus:
+
+- **Adjacency/composition.** Worked the arithmetic by hand:
+  `center(i, j) = ((i+0.5)*cell_size, (j+0.5)*cell_size)`. Incrementing `i` by
+  one moves `x` by exactly `(i+1.5 - i-0.5)*cell_size = cell_size`, `y`
+  unchanged; incrementing `j` by one moves `y` by exactly `cell_size` in
+  `+y`, `x` unchanged — no cross term, no sign inversion. `j` maps straight
+  to `y` with no flip, so it correctly inherits round 1's `+y`-up convention
+  rather than the canvas's `+y`-down one. This matches the two adjacency
+  tests (`adjacent_indices_along_i_...`, `adjacent_indices_along_j_...`)
+  exactly, and I don't find a case where they'd pass on a wrong composition
+  — both assert the exact displacement vector *and* the `j` test separately
+  asserts `step.y > 0.0`, not just `step.x == 0.0`, so a `-y` regression
+  would be caught. No correctness issue found here.
+- **Convention documentation.** The doc comment on `GridIndex` states: what
+  `(i, j)` denotes, that `center` returns the cell's center (with the exact
+  formula spelled out, not just prose), where the world origin sits relative
+  to cell `(0,0)` (its lower-value corner, explicitly said never to be
+  returned by `center`), that `j` follows `+y`-up (with the canvas contrast
+  restated), and — separately, under its own subheading — that cell-center
+  is *this milestone's default*, not the only possible layout, naming
+  exactly what M1.4 would add (staggered/face/corner values) and stating
+  plainly that `GridIndex`/`center` do not need to anticipate it. I judge
+  this sufficiently plain for a later milestone: it distinguishes "what this
+  guarantees" (the formula, the corner-vs-center fact) from "what it doesn't
+  claim" (the only layout) in separate, clearly-labeled sections.
+- **Edge cases.** Negative indices: the formula has no special-casing around
+  zero (confirmed by the disposable test and by inspection — plain
+  multiplication, no `abs`/`floor` branch), so negative cells behave
+  consistently; correct. Zero or negative `cell_size`: not guarded anywhere
+  in the module (`Vec2`/`Scalar` don't validate their inputs either, so this
+  matches the surrounding style) — worked both by hand: `cell_size == 0.0`
+  collapses every cell's center to the world origin (degenerate but no
+  panic, no NaN); `cell_size < 0.0` flips the sign of the offset consistently
+  (still no panic). Judged this worth a one-line doc note rather than a
+  runtime check or a new test, since a physically-meaningless but
+  arithmetically-consistent result for a nonsensical input matches this
+  module's existing philosophy of not validating inputs (`Vec2::scale(0.0)`
+  is exercised as a real scenario, not guarded against, for the same reason).
+- **File organization.** `src/math.rs` now holds two primitives (`Vec2`,
+  `GridIndex`) plus their tests in one file/module. At ~380 lines (roughly
+  half tests), I judge this still reads cleanly and matches the milestone
+  intent's own framing ("vector/grid primitives" as one group) — no split
+  needed yet. Considered splitting the `tests` module into `vec2_tests`/
+  `grid_tests` submodules for readability; declined — the existing `// ---`
+  section comments already partition it clearly and a submodule split would
+  be pure churn with no behavior or clarity gain proportional to the file's
+  current size.
+- **Test suite health.** 18 tests, 0.00s runtime — no budget concern, nothing
+  to collapse or tag. Confirmed no test is tautological (each round-2 test
+  asserts a specific numeric result or inequality tied to the stated
+  convention, not just "doesn't panic").
+- **Correctness findings:** none. The shipped arithmetic is right; I found
+  a documentation-drift issue (below), not a computation bug.
+
+**Successes.**
+
+Found one real doc-comment drift bug: `GridIndex::center`'s doc comment
+still read "so it is left as a stub for Green" after Green had already
+replaced the `todo!()` with the real implementation — exactly the "a comment
+describing both the old scheme and the new one is worse than no comment"
+trap the skill calls out. Fixed it to state `center`'s actual precondition
+(`cell_size` assumed positive) instead of narrating a now-false process
+fact. Also found the module's top-of-file doc comment listed only `Scalar`
+and `Vec2`, silently out of date the moment `GridIndex` was added — fixed to
+mention all three.
+
+**What was difficult, and where the time went.**
+
+Nothing difficult. Most of the ~1 minute went to hand-verifying the
+adjacency arithmetic and the zero/negative-`cell_size` cases before deciding
+neither needed a runtime guard, and to reading the milestone plan
+(`cycle-log/tranche-0/m0.4/plan.md`) to settle the reverse-conversion
+question below with real context rather than guessing.
+
+**Compromises I made.**
+
+None. Both fixes are in scope and complete.
+
+**Gaps and flags.**
+
+- **Resolved the open question Red/Green flagged: does a reverse
+  (world position → `GridIndex`) conversion belong in this round?**
+  Decision: **no, declined for this round.** Reasoning: (1) the round-header
+  goal as I was given it says "a conversion function" singular, and the
+  milestone plan's own round-2 description
+  (`cycle-log/tranche-0/m0.4/plan.md` §4) lists only "a conversion function
+  between a grid index and its `Vec2` world-space position" as the round-2
+  deliverable — index→position, not the reverse; (2) nothing in round 3
+  (fixed-timestep harness) or round 4 (retrofit) as scoped in that same plan
+  consumes a reverse conversion, so there's no downstream pressure forcing
+  it now; (3) a reverse mapping is new decision-worthy logic, not plumbing —
+  it has to pick a rule for `floor` vs `round`, and for which cell owns a
+  boundary that lands exactly on a multiple of `cell_size`, and for negative
+  positions — exactly the kind of thing that should go through its own
+  Red→Green→Refactor pass with its own tests pinning the boundary rule, per
+  cycle-contract's "you are not a source of new features" limit on this
+  phase and CLAUDE.md's "do one thing at a time". I did not add it.
+  I do note the milestone plan's own §5 (Refactor scope per round) says
+  round 2's focus is partly "does converting an index to a position and
+  back round-trip correctly" — with no reverse function existing, there is
+  currently nothing to round-trip. Flagging for the planner: either that
+  phrase anticipated a reverse conversion that never got scoped into round
+  2's actual goal list, or it was loose language about the forward direction
+  only. Worth a future round (or M1.4, if the staggered-grid work needs it
+  first) if and when something downstream actually needs
+  position→`GridIndex`.
+- Dead-code warnings (6, on `Scalar`/`Vec2`/`UP`/`GridIndex`/methods) are
+  unchanged from Green's report — expected, this module isn't wired into
+  `src/lib.rs` yet, not a new issue.
+- Test/file organization is fine as-is for now; flagged above only as a
+  "considered, declined" note for whoever next touches this file with more
+  content to add.
+
+**General comments.**
+
+Change list:
+
+1. `src/math.rs` top-of-file module doc comment: mention `GridIndex`
+   alongside `Scalar`/`Vec2` — it existed but wasn't named. Doc-drift fix.
+2. `src/math.rs` `GridIndex::center` doc comment: replace the stale
+   "left as a stub for Green" sentence (Green already filled it) with a
+   stated precondition (`cell_size` assumed positive) — doc-drift fix plus
+   a small real gap (the precondition was previously unstated).
+
+Both are doc-only; no test, signature, or arithmetic changed.
+`cargo test --lib`: 18 passed, 0 failed, 0 ignored — same as Green left it,
+runtime 0.00s (unchanged, no budget concern). `cargo build --lib`: 0 errors,
+6 pre-existing dead-code warnings (unchanged from Green's report).
+
+**Verdict: Advance.** All 4 round goals are met to a sufficient standard:
+`GridIndex` exists with a clean integer `(i, j)` representation; the
+cell-center-vs-corner convention is decided and documented plainly enough
+(with an explicit, separately-labeled statement of what's *not* claimed, for
+M1.4's benefit); the forward conversion function is implemented and its
+arithmetic is verified correct by hand, not just by the tests it happens to
+pass; and the tests pin both the convention (including a negative assertion
+against the corner interpretation) and the conversion's correctness
+(adjacency along both axes, scaling, negative indices). The one real defect
+found — the stale doc comment — was a documentation issue, not a
+computation bug, and is fixed. The reverse-conversion question is resolved
+with reasoning (declined for this round, flagged forward) rather than left
+open. No blockers to advancing to round 3.
+
+**With another 30 minutes** I would: (a) write a small property-style probe
+sweeping a range of `(i, j, cell_size)` triples (including large-magnitude
+`i`/`j` near `i32` bounds) to check for `f32` precision loss in the
+`as Scalar` cast becoming visible at extreme indices — not expected to
+matter at this milestone's scale, but cheap to confirm; (b) sketch what a
+`GridIndex::containing(pos, cell_size)` reverse conversion's test list would
+look like (boundary-cell ownership, negative positions) as a head start for
+whichever future round picks it up, without implementing it.
