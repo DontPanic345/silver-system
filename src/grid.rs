@@ -60,6 +60,7 @@
 
 use crate::material::MaterialId;
 use crate::math::{GridIndex, Scalar, Vec2};
+use crate::timestep::FixedTimestep;
 
 /// A fixed-size, double-buffered grid of cells, each holding a
 /// [`MaterialId`]. See the module doc comment for the structure-of-arrays
@@ -200,6 +201,51 @@ impl Grid {
     pub fn cell_center(&self, index: GridIndex, cell_size: Scalar) -> Vec2 {
         index.center(cell_size)
     }
+
+    /// Advances this grid by however many fixed steps `frame_duration_secs`
+    /// of real elapsed time earns, per `timestep` (the same
+    /// `timestep::FixedTimestep` harness `src/lib.rs`'s `advance_tick`
+    /// drives — see that function's doc comment for the pattern this
+    /// mirrors). Returns the number of fixed steps that elapsed (0, 1, or
+    /// occasionally more, per `FixedTimestep::advance`'s own accumulator/
+    /// spiral-of-death semantics), having applied [`Grid::step_once`] that
+    /// many times.
+    ///
+    /// This round's goal 1: the *mechanism* of stepping being real
+    /// elapsed-time accounting (not a bare per-call `+1`), wired to the
+    /// existing, unmodified `FixedTimestep`. The per-cell transformation
+    /// each elapsed step applies is deliberately the identity — see
+    /// [`Grid::step_once`].
+    pub fn step(&mut self, timestep: &mut FixedTimestep, frame_duration_secs: Scalar) -> u32 {
+        let steps = timestep.advance(frame_duration_secs);
+        for _ in 0..steps {
+            self.step_once();
+        }
+        steps
+    }
+
+    /// Applies exactly one fixed step: for every cell, writes `next` from
+    /// `current` (via [`Grid::get`]/[`Grid::set_next`], never touching
+    /// `current` mid-step) and then [`Grid::swap`]s once the whole pass is
+    /// done.
+    ///
+    /// **This round's per-cell transformation is the identity** — every
+    /// cell's next value is exactly its current value, unchanged. No
+    /// gravity, no transport, no material behaviour: that is explicitly
+    /// M1.2 onward's job (see the round's Intent). This function exists so
+    /// a later round replaces the body of the inner loop with real per-cell
+    /// physics without changing the stepping mechanism ([`Grid::step`],
+    /// [`FixedTimestep`] wiring) around it at all.
+    fn step_once(&mut self) {
+        for j in 0..self.height as i32 {
+            for i in 0..self.width as i32 {
+                let idx = GridIndex::new(i, j);
+                let current_value = self.get(idx);
+                self.set_next(idx, current_value);
+            }
+        }
+        self.swap();
+    }
 }
 
 #[cfg(test)]
@@ -209,6 +255,7 @@ mod tests {
 
     const AIR: MaterialId = MaterialId(0);
     const WATER: MaterialId = MaterialId(1);
+    const STONE: MaterialId = MaterialId(2);
 
     // --- Scenario: fixed dimensions, GridIndex-addressed (goal 1) ---
 
@@ -446,5 +493,122 @@ mod tests {
     fn indexing_past_width_panics() {
         let grid = Grid::new(2, 2, AIR);
         let _ = grid.get(GridIndex::new(2, 0));
+    }
+
+    // --- Scenario: step only advances what real elapsed time earns (round 2 goal 4) ---
+
+    /// Scenario: mirrors `src/timestep.rs`'s and `src/lib.rs`'s own
+    /// "irregular durations total the expected step count" scenarios, now
+    /// re-proven at `Grid::step`'s call site specifically. Feeds a stream of
+    /// irregular, sub-`dt` and multi-`dt` real durations across several
+    /// calls and checks the *total* number of steps `Grid::step` reports
+    /// across all calls matches what the total elapsed time honestly earns
+    /// — not a bare per-call `+1`, and not losing or inventing steps at call
+    /// boundaries.
+    #[test]
+    fn grid_step_only_advances_what_real_elapsed_time_earns_across_irregular_calls() {
+        let mut grid = Grid::new(2, 2, AIR);
+        let mut timestep = FixedTimestep::new(0.1);
+
+        // Durations: 0.03, 0.12, 0.02, 0.11, 0.22 -> total 0.50 -> 5 steps,
+        // the same total `src/timestep.rs`'s own
+        // `irregular_frame_durations_total_the_expected_step_count` pins for
+        // `FixedTimestep::advance` directly.
+        let durations = [0.03, 0.12, 0.02, 0.11, 0.22];
+        let total_steps: u32 = durations
+            .iter()
+            .map(|&d| grid.step(&mut timestep, d))
+            .sum();
+
+        assert_eq!(
+            total_steps, 5,
+            "the total steps Grid::step reports across several irregular calls \
+             should match what the total real elapsed time earns"
+        );
+    }
+
+    /// Scenario: a single call carrying less than one `dt` of real elapsed
+    /// time must not advance the grid at all — `Grid::step` returns 0 and
+    /// swap never runs, so a value written straight into `current` (not via
+    /// a step) survives unchanged. Pins the same "no step yet" property
+    /// `FixedTimestep`'s own tests pin, now at the `Grid`-stepping call
+    /// site.
+    #[test]
+    fn grid_step_with_duration_under_one_dt_reports_zero_steps_and_grid_is_unchanged() {
+        let mut grid = Grid::new(2, 2, AIR);
+        let idx = GridIndex::new(0, 0);
+        grid.set(idx, WATER);
+        let mut timestep = FixedTimestep::new(0.1);
+
+        let steps = grid.step(&mut timestep, 0.05);
+
+        assert_eq!(steps, 0, "half a dt's worth of time should not yet elapse a step");
+        assert_eq!(
+            grid.get(idx),
+            WATER,
+            "with zero steps elapsed, the grid must be entirely untouched"
+        );
+    }
+
+    /// Scenario: a single call carrying several whole `dt`s of real elapsed
+    /// time advances the grid by that many steps in one call, not by one —
+    /// exercised by counting swaps indirectly: after a call worth 3 steps,
+    /// `current`/`next` have been exchanged an odd number of times overall,
+    /// which for a 3-step call from a fresh grid means the *contents* match
+    /// (identity transform, so unobservable directly by value) but the step
+    /// *count itself* is what this test pins, mirroring
+    /// `advance_tick_with_several_dts_advances_by_that_many_steps_and_colour_matches_parity`
+    /// in `src/lib.rs`.
+    #[test]
+    fn grid_step_with_several_dts_in_one_call_advances_by_that_many_steps() {
+        let mut grid = Grid::new(2, 2, AIR);
+        let mut timestep = FixedTimestep::new(0.1);
+
+        let steps = grid.step(&mut timestep, 0.35);
+
+        assert_eq!(
+            steps, 3,
+            "0.35 / 0.1 should elapse 3 whole steps in a single Grid::step call"
+        );
+    }
+
+    // --- Scenario: stepping the identity transformation is a true no-op (round 2 goal 5) ---
+
+    /// Scenario: a resting scenario — several distinct materials placed in
+    /// several cells, nothing moving — stays exactly as it was after
+    /// stepping forward by a real elapsed duration covering several fixed
+    /// steps. This round's step content is the identity transform (no
+    /// gravity, no transport, no material behaviour), so every cell must
+    /// read back exactly what it held before stepping, for every step in
+    /// between — not just the final one.
+    #[test]
+    fn stepping_the_identity_transformation_leaves_a_resting_scenario_unchanged() {
+        let mut grid = Grid::new(3, 3, AIR);
+        grid.set(GridIndex::new(0, 0), STONE);
+        grid.set(GridIndex::new(1, 1), WATER);
+        grid.set(GridIndex::new(2, 2), STONE);
+
+        let snapshot = |g: &Grid| -> Vec<MaterialId> {
+            (0..3)
+                .flat_map(|j| (0..3).map(move |i| GridIndex::new(i, j)))
+                .map(|idx| g.get(idx))
+                .collect()
+        };
+        let before = snapshot(&grid);
+
+        let mut timestep = FixedTimestep::new(0.1);
+        // Several fixed steps' worth of real elapsed time, split across
+        // multiple calls, so the no-op property is checked after every
+        // single step, not just after one big jump.
+        for _ in 0..5 {
+            let steps = grid.step(&mut timestep, 0.1);
+            assert_eq!(steps, 1, "each 0.1s call at dt=0.1 should elapse exactly one step");
+            assert_eq!(
+                snapshot(&grid),
+                before,
+                "the identity transform must leave every cell exactly as it was, \
+                 after each and every step"
+            );
+        }
     }
 }

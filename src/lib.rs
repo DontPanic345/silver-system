@@ -65,6 +65,11 @@ mod timestep;
 pub mod material;
 pub mod grid;
 
+// M1.1 round 2: `Scenario`, the "one definition, two consumers" type round
+// 3 (headless runner) and round 4 (renderer) will both build a Grid from —
+// see src/scenario.rs.
+pub mod scenario;
+
 use math::Scalar;
 use timestep::FixedTimestep;
 
