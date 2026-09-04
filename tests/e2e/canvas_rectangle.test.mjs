@@ -221,9 +221,44 @@ async function main() {
       return;
     }
 
+    // --- Sample 3: wait for a *second* real tick. Two samples alone can't
+    // tell a genuinely advancing counter from one that computes
+    // `current + 1` without ever storing it — such a counter would return 1
+    // forever, which still differs from tick 0 and would slip past the
+    // sample-1-vs-sample-2 checks above. Confirmed by deliberately
+    // introducing exactly that bug during round 2's Refactor pass: this
+    // third sample is what caught it (see round-02.md). ---
+    let sawSecondTick = true;
+    await page.waitForFunction(() => window.__tickCount >= 2, { timeout: waitTimeoutMs }).catch(() => {
+      sawSecondTick = false;
+    });
+
+    if (!sawSecondTick) {
+      fail(
+        `FAIL canvas_rectangle: window.__tickCount never reached 2 within ` +
+          `${waitTimeoutMs}ms (stuck at ${await page.evaluate(() => window.__tickCount)}). Expected ` +
+          `tick_and_draw()'s counter to keep advancing on every ${constants.intervalMs}ms tick, ` +
+          `not just once.`
+      );
+      return;
+    }
+
+    const tick2 = await samplePixels(page, sampleX, sampleY);
+
+    if (!colorsEqual(tick2.inside, constants.color)) {
+      fail(
+        `FAIL canvas_rectangle: tick-2 pixel at (${sampleX},${sampleY}) is ` +
+          `rgba(${tick2.inside.join(',')}), expected rgba(${constants.color.join(',')},255) ` +
+          `(the even-tick colour, per rect_color_rgb()). A counter that recomputes ` +
+          `"current + 1" without storing it would freeze here instead of advancing.`
+      );
+      return;
+    }
+
     pass(
-      'PASS canvas_rectangle: rectangle pixel at tick 0 matches rect_color_rgb(), differs after ' +
-        'a real tick and matches rect_color_rgb_alt(), outside pixel untouched throughout.'
+      'PASS canvas_rectangle: rectangle pixel at tick 0 matches rect_color_rgb(), alternates to ' +
+        'rect_color_rgb_alt() after one real tick and back to rect_color_rgb() after a second, ' +
+        'outside pixel untouched throughout.'
     );
   } finally {
     await browser.close();
