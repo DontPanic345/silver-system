@@ -38,6 +38,10 @@
 
 use std::cell::Cell;
 
+// M0.4: shared math primitives (Scalar, Vec2). Not used by this file's own
+// canvas logic yet — see src/math.rs for what it is and why.
+mod math;
+
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::CanvasRenderingContext2d;
