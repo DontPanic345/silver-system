@@ -15,12 +15,16 @@ a phase is one agent's turn. The cycle is defined by the skills in
 is the top of it — it runs indefinitely, chaining from tranche to tranche once
 `PLAN.md`'s are done. Round logs live under `cycle-log/`.
 
-## Live deploy
+## Live deploy — the path actually in use
 
 Every push to `main` builds the `viewer` crate to wasm and publishes `www/` to
 GitHub Pages via `.github/workflows/deploy-pages.yml`:
 
 **https://dontpanic345.github.io/silver-system/**
+
+This is the path that's built and watched going forward. The native fallback
+below exists and is proven, but isn't maintained day to day — per M0.3's own
+rule, don't quietly maintain both once one is proven.
 
 ## Building and running the `viewer` crate
 
@@ -56,6 +60,21 @@ Playwright, samples real canvas pixel data at two points in time — requires
 ```sh
 NODE_PATH=/usr/local/lib/node_modules node tests/e2e/canvas_rectangle.test.mjs
 ```
+
+## The fallback (M0.3, not in current use)
+
+If wasm-in-the-browser ever stops working, a native binary is the proven plan
+B: it renders the same rectangle-per-tick logic to real PNG files instead of
+a canvas, sharing the geometry/colour constants with the wasm path (one
+source of truth, `viewer::render_frame`).
+
+```sh
+cargo run --bin native_viewer -- /tmp/native-fallback-out
+```
+
+Writes `tick-0.png`, `tick-1.png`, `tick-2.png`. Verified headlessly (real
+pixel bytes read back from the PNGs, not eyeballed) by
+`tests/native_fallback.rs`, which runs as part of `cargo test`.
 
 ## Shelved experiments
 

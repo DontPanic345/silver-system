@@ -9,3 +9,7 @@ scratch/
 # Rust / wasm build artifacts (M0.1 onward)
 /target
 /www/pkg
+
+# M0.3 native fallback's default output dir (cargo run --bin native_viewer
+# with no arg writes here)
+/native-fallback-out
