@@ -189,3 +189,72 @@ changes): `center_scales_linearly_with_cell_size_away_from_the_origin_cell`,
 
 Confirmed the rest of the suite is green: all 13 pre-existing tests (9 in
 `math::tests` from round 1, 4 in `tests` from M0.1/M0.2/M0.3) pass unchanged.
+
+## Round 02 — Green — 2026-09-05T03:25:01+12:00 → 2026-09-05T03:25:18+12:00 (~1 min)
+
+**What I did.**
+
+Read `cycle-contract`, Red's skeleton and doc comment on `GridIndex::center`,
+and Red's report above. The doc comment, the round-header goals, and Red's
+own stated expected body all agreed exactly, so there was nothing to
+reconcile — filled the one real stub as named.
+
+**File touched:** `src/math.rs` only.
+
+Replaced the `todo!()` body of `GridIndex::center` with:
+
+```rust
+pub fn center(self, cell_size: Scalar) -> Vec2 {
+    Vec2::new(
+        (self.i as Scalar + 0.5) * cell_size,
+        (self.j as Scalar + 0.5) * cell_size,
+    )
+}
+```
+
+This is exactly the arithmetic named in the stub's `todo!()` message and in
+the `GridIndex` doc comment (cell-center convention, `(i+0.5, j+0.5) *
+cell_size`) — no reinterpretation needed.
+
+**Commands run and results.**
+
+- `cargo test --lib math::` → `test result: ok. 14 passed; 0 failed; 0
+  ignored; 0 measured; 4 filtered out`. All 5 of Red's new tests
+  (`grid_zero_zero_center_is_offset_half_a_cell_from_world_origin`,
+  `adjacent_indices_along_i_are_exactly_one_cell_size_apart_in_x`,
+  `adjacent_indices_along_j_are_exactly_one_cell_size_apart_in_plus_y`,
+  `center_scales_linearly_with_cell_size_away_from_the_origin_cell`,
+  `center_handles_negative_indices_consistently`) pass, plus round 1's 9.
+- `cargo test --lib` (full suite) → `test result: ok. 18 passed; 0 failed; 0
+  ignored; 0 measured; 0 filtered out`. All 13 pre-existing tests (9
+  `math::tests` from round 1, 4 `tests` from M0.1/M0.2/M0.3) plus the 5 new
+  ones are green — 18/18, none skipped.
+- `cargo build --lib` → 0 errors. 6 pre-existing `dead_code` warnings remain
+  (`Scalar`, `Vec2`, `UP`, `GridIndex`, and their methods "never
+  constructed/used") — expected and unchanged from round 1: this module
+  isn't wired into `src/lib.rs`'s rendering path yet, per the module's own
+  top-of-file doc comment. Not introduced or worsened by this round; nothing
+  to fix here.
+
+**Signature changes from Red's skeleton:** none. `center`'s signature,
+parameter order, and return type are exactly as Red left them.
+
+**Numbers changed:** none. No threshold, tolerance, or constant was touched
+or proposed.
+
+**Self-diff.** Read the diff: it is a single 6-line body replacing a
+6-line `todo!()` call, nothing else changed in the file. No dead compute, no
+stray doc-comment drift (the doc comment already described this exact
+arithmetic and needed no edit), no leftover experiment code.
+
+**Left for Refactor:** the reverse (world position → `GridIndex`) conversion
+question Red flagged — still unresolved, still out of this round's built
+scope, not something Green should decide unilaterally. Also left for
+Refactor: whether `GridIndex` belongs in `src/math.rs` alongside `Vec2`
+long-term or should move to its own module once more grid-shaped code
+arrives (Red's call to keep it together for now stands unchallenged by me).
+
+**Recommendation:** all 4 round goals met — `GridIndex` type introduced,
+cell-center convention decided and documented, conversion function
+implemented, and both durable and disposable tests pin convention and
+correctness, all green. No blockers found. Ready for Refactor.

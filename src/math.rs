@@ -176,10 +176,9 @@ impl GridIndex {
     /// convention doc comment says what should happen; this is where it
     /// actually happens), so it is left as a stub for Green.
     pub fn center(self, cell_size: Scalar) -> Vec2 {
-        todo!(
-            "return Vec2::new((self.i as Scalar + 0.5) * cell_size, \
-             (self.j as Scalar + 0.5) * cell_size) per the cell-center \
-             convention documented on GridIndex"
+        Vec2::new(
+            (self.i as Scalar + 0.5) * cell_size,
+            (self.j as Scalar + 0.5) * cell_size,
         )
     }
 }
