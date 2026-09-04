@@ -43,8 +43,13 @@ The work plan is `PLAN.md`. The language is Rust.
 `terrarium/` and `stable-fluids/` are shelved experiments, kept for reference — do
 not extend them.
 
-## Determinism
+## Determinism and conservation
 
 Bit-identical determinism is **architecture-contingent**, not a standing
 requirement. GPU execution is the intended direction. Don't engineer for
 determinism unless a goal asks for it.
+
+Conservation (mass, energy, carbon, nitrogen, ...) follows the same logic but is
+not optional the way determinism is: every "conserved" target means conserved to a
+**stated numerical tolerance**, not literal zero drift. Measure it, record the
+tolerance, don't chase bit-exact equality past what the tolerance needs.

@@ -4,8 +4,8 @@ Building a small world that is part of a much larger universe — emergent physi
 behaviour from simple interacting rules (fluids, materials, temperature, pressure,
 reactions), in the spirit of Oxygen Not Included and Noita.
 
-The work plan is [`PLAN.md`](PLAN.md): four tranches — physics, chemistry, biology,
-and the glass pane. The language is Rust.
+The work plan is [`PLAN.md`](PLAN.md): mathematics and tooling foundations, then
+physics, chemistry, biology, and the glass pane. The language is Rust.
 
 ## How the work runs
 

@@ -30,20 +30,119 @@ north star, that is the finding, and it goes back to planning.
 
 The language is Rust. GPU execution is the intended direction of travel.
 
-Tranches run in order: physics, chemistry, biology, the glass pane. Milestones
-within a tranche are listed with their intent and targets, but that list is a
-**starting position, not a contract** — `cycle-plan` sharpens it at tranche level
-before the tranche runs, and again between milestones.
+Tranches run in order: mathematics and tooling foundations, physics, chemistry,
+biology, the glass pane. Milestones within a tranche are listed with their intent
+and targets, but that list is a **starting position, not a contract** —
+`cycle-plan` sharpens it at tranche level before the tranche runs, and again
+between milestones.
 
 Targets here are the ones knowable now. Expect planning to add more, make these
 sharper, and occasionally conclude one was wrong. Rounds are not listed at all;
 they are planned a round at a time, because the shape of round N+1 is not knowable
 before round N reports.
 
-**The glass pane is tranche 4, but a viewer is needed in tranche 1.** Scenarios
-have to be watchable long before the pane is built properly — a minimal renderer
-lands in physics and grows. Tranche 4 is where it becomes the product rather than
-a debugging tool.
+**The glass pane is tranche 4, but a viewer is needed from tranche 0.** Scenarios
+have to be watchable long before the pane is built properly — tranche 0 proves the
+rendering pipeline works at all, tranche 1 puts a minimal viewer on it, and it
+grows from there. Tranche 4 is where it becomes the product rather than a
+debugging tool.
+
+**Conservation is approximate, not bit-exact.** Every "conserved" target in this
+document means conserved to a stated numerical tolerance, measured and recorded at
+the milestone that first checks it — not literal zero drift. This follows the same
+logic as the determinism note in `CLAUDE.md`: a reasonable approximation that holds
+over the stated run length is the actual requirement, and chasing exact equality
+past that point spends effort the north star doesn't need. Where a target below
+says "exactly" or "0.00%", read it as shorthand for "to a tolerance tight enough
+that nobody would call it drift" — planning fixes the actual number.
+
+---
+
+# Tranche 0 — Mathematics and tooling foundations
+
+**Intent.** De-risk the tooling before a single unit of physics is built on top of
+it, and lay down the small mathematical substrate every later tranche will reach
+for. This tranche exists because tooling problems are the likeliest failure in the
+whole plan — Rust-to-web is the biggest unknown here — and the right time to find
+that out is before anything depends on it, not during tranche 4.
+
+**Serving the north star.** Neither statement of the north star is reachable if
+nobody can see the result. This tranche's entire job is proving that "a terrarium
+people can see on their screens" is achievable at all, cheaply, before spending
+real work on a pipeline that might not hold up.
+
+**Tranche targets.**
+
+- Something reachable at a public GitHub Pages URL, built from this repo's Rust
+  source by CI — not a demo, not even physics, literally anything visible counts.
+- If that specifically can't be made to work, a working alternative way for the
+  user to see output exists and is documented, decided before physics work starts
+  rather than discovered under pressure later.
+- The grid/vector primitives physics needs exist, are unit-tested, and are
+  exercised by real code rather than sitting unused.
+
+## M0.1 — Toolchain proving ground
+
+**Intent.** Confirm the whole chain from `cargo build` to a browser tab, on this
+actual machine, before trusting it with real work.
+
+- Confirm the toolchain builds for `wasm32-unknown-unknown` (or whatever target the
+  chosen approach needs).
+- Pick a minimal web rendering approach — canvas via `wasm-bindgen`/`web-sys`, or a
+  WebGL/WebGPU crate — chosen on what actually builds and runs here, not on paper
+  suitability.
+- A single Rust program that draws something to a canvas — a coloured rectangle is
+  enough — running in a real browser, served locally first.
+
+**Targets.** The wasm build succeeds; the artifact runs in a real browser and draws
+something; the exact commands are recorded so CI can repeat them exactly.
+
+## M0.2 — Deploy to GitHub Pages
+
+**Intent.** The same artifact, reachable at a public URL with no manual step.
+
+- A GitHub Actions workflow that builds the wasm artifact and publishes it to
+  GitHub Pages on push.
+- Verify the deployed page actually loads and draws — CI reporting green is not
+  the target, a person opening the URL and seeing it is.
+
+**Targets.** A public GitHub Pages URL exists and is recorded in the README,
+showing the M0.1 output; a second push produces a second successful deploy with no
+hand-holding.
+
+## M0.3 — The fallback
+
+**Intent.** We will probably hit a tooling error somewhere in this chain. Build
+and prove the fallback now, while the stakes are zero, rather than discovering it's
+needed during a later tranche under pressure.
+
+- If wasm-in-the-browser doesn't work at all — sandboxing, a crate that won't
+  cross-compile, whatever it turns out to be — a native binary as plan B, with
+  headless screenshot capture (Playwright is already available in this
+  environment) as the way to hand the user a picture of what's running. This
+  matches the existing preference: verify with headless output, hand the user a
+  picture or numbers, don't ask them to run something themselves.
+- State plainly which path — Pages or the fallback — is actually in use. Don't
+  quietly maintain both once one is proven; that's cost with no payoff.
+
+**Targets.** A documented, exercised path exists for the user to see output even
+in the worst case; the chosen path is stated in the README, not left ambiguous.
+
+## M0.4 — Mathematical foundations
+
+**Intent.** The small, boring substrate every tranche will reach for — get it
+right once here rather than have each tranche invent its own.
+
+- 2D vector and grid-index types, with the coordinate convention pinned and
+  tested. The JS attempt's most expensive recurring bug was exactly this, done
+  informally and re-derived under pressure three times.
+- Numeric type decisions — fixed vs floating point, precision — stated with the
+  reasoning, not defaulted into.
+- A fixed-timestep stepping harness, shared by every later tranche.
+
+**Targets.** Grid/vector primitives are unit-tested, including a test that pins
+the coordinate convention explicitly; the fixed-timestep loop is exercised by the
+M0.1 hello-world so it isn't a paper exercise nobody actually calls.
 
 ---
 
@@ -68,10 +167,10 @@ off-screen and at rest, not just where the eye is drawn.
 
 - Water in a U-pipe levels to within 1 cell across both arms and stays there for
   5,000 steps.
-- Mass and energy conserve to 0.00% drift over 10,000 steps in every closed
-  scenario.
-- A resting configuration — pool, pile, sealed gas — is bit-stable at rest: no
-  jitter, no creep, no checkerboard.
+- Mass and energy conserve to within a stated tolerance over 10,000 steps in
+  every closed scenario.
+- A resting configuration — pool, pile, sealed gas — is stable at rest within that
+  tolerance: no jitter, no creep, no checkerboard.
 - Every primitive scenario passes empirically with no human looking at it.
 - A step of the reference grid fits the performance budget set in milestone 1.
 
@@ -108,8 +207,8 @@ the number recorded so later milestones can be held to it.
 **Scenarios.** A central column of sand falls into a pile. A central column of
 something else does *not* stay still. A pile at rest stays at rest for 5,000 steps.
 
-**Targets.** Pile forms with a repose angle in a stated range; mass conserved
-exactly; a resting pile is unchanged after 5,000 steps.
+**Targets.** Pile forms with a repose angle in a stated range; mass conserved to
+within a stated tolerance; a resting pile is unchanged after 5,000 steps.
 
 ## M1.3 — Liquids and the free surface
 
@@ -124,7 +223,7 @@ looks and where naive solvers fail.
 finds a level. Water poured into an irregular vessel fills it from the bottom.
 
 **Targets.** Resting pool unchanged over 5,000 steps; a fallen column levels to
-within 1 cell; no mass drift.
+within 1 cell; mass conserved to within a stated tolerance.
 
 ## M1.4 — Pressure and incompressible flow
 
@@ -137,7 +236,7 @@ chemistry later depends on.
 - Hydrostatic pressure increasing with depth.
 - Communicating vessels; flow driven by pressure difference.
 - Sealed volumes that resist compression, and the beginnings of over-pressure —
-  the hook chemistry's explosions hang on.
+  the hook a later chemistry milestone can use for rapid pressure release.
 
 **Scenarios.** **The U-pipe**: a U-shaped pipe surrounded by air, one arm filled
 with water, the water comes to a level across both arms. A sealed container holds
@@ -181,8 +280,9 @@ tranche 2.
 analytic decay curve. Warm water rises; cool air falls. A closed system's total
 energy is unchanged.
 
-**Targets.** Energy drift 0.00% over 10,000 steps; conduction matches the analytic
-solution within a stated tolerance; symmetric setups stay symmetric.
+**Targets.** Energy conserved to within a stated tolerance over 10,000 steps;
+conduction matches the analytic solution within a stated tolerance; symmetric
+setups stay symmetric.
 
 ## M1.7 — Consolidation and scale
 
@@ -213,8 +313,8 @@ leaf that falls becomes soil. This tranche builds the machinery those loops run 
 
 **Tranche targets.**
 
-- A closed water cycle runs for 100,000 steps with no mass drift and no state it
-  can't recover from.
+- A closed water cycle runs for 100,000 steps with mass conserved to within a
+  stated tolerance and no state it can't recover from.
 - Every reaction conserves mass and energy, individually and in aggregate.
 - Combustion self-extinguishes correctly when starved of fuel or oxygen — it never
   runs away and never burns from nothing.
@@ -230,8 +330,8 @@ heat between them.
 - Pressure-dependent boiling point, if the pressure work in M1.4 supports it.
 
 **Targets.** Boiling holds a temperature plateau while latent heat is absorbed;
-mass conserved across every transition; ice→water→steam→water→ice returns to the
-starting mass exactly.
+mass conserved across every transition to within a stated tolerance;
+ice→water→steam→water→ice returns to within that tolerance of the starting mass.
 
 ## M2.2 — The reaction framework
 
@@ -291,30 +391,32 @@ possible — matter dissolved *inside* other matter.
 - Permeation: air dissolved in rubber, escaping a balloon slowly.
 - Diffusion driven by concentration gradients, at rates that differ per medium.
 
-**Open question this milestone must answer.** Whether to model a contiguous
-region's composition as a single fully-mixed entity, or as per-cell fields. Current
-read: per-cell fields, because uniform composition transports composition at
-infinite speed and deletes plumes, stratification and local depletion — the very
-phenomena this tranche exists to grow. Revisit only as an optimisation for
-quiescent enclosed volumes. **This is a planning decision for M2.5, made on
-evidence, and recorded.**
+**Decided: no fully-mixed regions.** Composition is tracked per-cell, not as a
+single mixed entity across a contiguous region. Uniform composition would
+transport composition at infinite speed, deleting plumes, stratification and
+local depletion — the phenomena this tranche exists to grow. Not open for
+re-litigation without a concrete performance wall per-cell fields can't clear.
 
 **Targets.** A gas dissolved in water outgasses on heating, with mass conserved; a
 balloon loses pressure over a long run at a rate set by the material; soil holds
 and releases moisture rather than shedding it instantly.
 
-## M2.6 — Explosions and ballistics
+## M2.6 — Rapid pressure release (optional)
 
-**Intent.** Violent, fast release — and, more importantly, debris that behaves
-afterwards.
+**Intent.** Not load-bearing for the north star — cut it the moment it competes
+for time with anything else in this plan. Included because a sudden pressure
+release is a natural extension of M1.4's pressure work and cheap groundwork *if*
+it stays cheap.
 
-- Rapid pressure release coupling into the M1.4 pressure field.
-- Particles that fly naturally and *land* naturally, rejoining the grid as ordinary
-  matter rather than despawning.
-- Fragmentation, shockfront, and the aftermath: a hole, scattered debris, heat.
+- Rapid pressure release coupling into the M1.4 pressure field — a rupture, a
+  sudden reaction, venting into a lower-pressure space.
+- Stop there unless it's free: no debris system, no ballistics, no particle layer.
+  If a visual "something happened" is wanted, a shockfront in the existing gas/
+  pressure fields is enough; flying fragments are a separate, deferrable feature,
+  not a requirement of this milestone.
 
-**Targets.** Mass conserved through an explosion and its debris; thrown material
-lands and comes to rest; no particle leaks out of the world or vanishes.
+**Targets.** None fixed — this milestone exists to be dropped cheaply. If it runs,
+mass and energy conserve to within a stated tolerance through the release.
 
 ## M2.7 — The water cycle, closed
 
@@ -327,9 +429,9 @@ north star means.
 - Condensation on cool surfaces; cloud, dew, fog.
 - Precipitation, runoff, pooling, and back to evaporation.
 
-**Targets.** 100,000 steps with 0.00% water drift; the loop runs continuously
-without a human resetting anything; the cycle responds to a temperature change
-rather than running at a fixed rate.
+**Targets.** 100,000 steps with water conserved to within a stated tolerance; the
+loop runs continuously without a human resetting anything; the cycle responds to
+a temperature change rather than running at a fixed rate.
 
 ---
 
@@ -347,7 +449,8 @@ genuinely full: life only stays alive if the cycles beneath it actually close.
 
 - A sealed terrarium sustains a living system for a very long run — the target
   number set at planning, and measured — without intervention.
-- Carbon and nitrogen conserve exactly across all biological activity.
+- Carbon and nitrogen conserve to within a stated tolerance across all biological
+  activity.
 - Population levels respond to conditions and recover from disturbance, rather than
   sitting at a fixed value or dying out on a knife-edge.
 
@@ -415,8 +518,8 @@ the soil.
 - Recovery from disturbance: knock it, and watch it come back.
 
 **Targets.** The sealed system survives a very long run unattended; all conserved
-quantities hold exactly; after a disturbance the system returns toward equilibrium
-rather than collapsing or running away.
+quantities hold to within a stated tolerance; after a disturbance the system
+returns toward equilibrium rather than collapsing or running away.
 
 ---
 
@@ -500,7 +603,7 @@ honestly is part of the work.
 
 ## Beyond the plan
 
-Four closed tranches is not the end of the project. It is the first point at which
+Five closed tranches is not the end of the project. It is the first point at which
 the whole planned scope exists to look at — and the right move then is a planning
 pass with the north star in hand, deciding whether the next thing is a new tranche,
 a return pass deepening an earlier one now that the later ones have revealed what
