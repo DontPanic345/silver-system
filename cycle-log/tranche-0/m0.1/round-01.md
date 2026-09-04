@@ -538,3 +538,40 @@ constants and updated the JS test to read them live, eliminating the
 hand-duplication gap entirely rather than deferring it — but only if Round
 2's actual shape (what becomes dynamic) were known, so the mechanism is
 built for the real need rather than guessed at.
+
+## Round 01 close-out — orchestrator
+
+**Decision:** Advance, per Refactor's recommendation.
+
+**Independent verification run** (the one cheap check the orchestrator owns):
+- `cargo test`: 1 passed, 0 failed.
+- `./scripts/build-wasm.sh` from the current tree: clean release build.
+- `NODE_PATH=/usr/local/lib/node_modules node tests/e2e/canvas_rectangle.test.mjs`:
+  `PASS canvas_rectangle: rectangle pixel matches expected colour, outside pixel
+  untouched.`
+
+**Working tree:** clean of round artifacts. Two untracked files
+(`cycle-log/tranche-0/plan.md`, `cycle-log/tranche-0/m0.1/plan.md`) predate this
+round — planning-level, not round-level — left untracked here; committed by the
+orchestrator separately if/when useful.
+
+**Timing roll-up for Round 01:**
+- Red: 2026-09-05T02:35 → (Red's own report has exact figures) — ~7 min per
+  agent duration log.
+- Green: 2026-09-05T02:43:29 → 02:44:04 (~1 min, well under budget).
+- Refactor: adversarial pass including two deliberate fault-injections plus a
+  clean-checkout rebuild — ~4 min per agent duration log.
+- Round total: well inside the 30-minute budget, no overtime needed.
+
+**Goals met:**
+1. Rendering approach decided and justified (canvas 2D via wasm-bindgen/web-sys) — met.
+2. wasm32 build succeeds — met, re-verified independently.
+3. Real browser draws the rectangle, verified headless via real canvas pixel
+   data, harness itself stress-tested by Refactor (two fault injections) — met.
+4. Exact commands recorded (`scripts/build-wasm.sh`) — met.
+
+**Gap carried forward to Round 2 planning:** hand-duplicated `RECT_*`
+expected-colour/coordinate constants between `src/lib.rs` and
+`tests/e2e/canvas_rectangle.test.mjs` — deliberately left alone by Refactor
+since the values aren't moving yet; worth a shared source of truth once Round
+2 makes them move (the tick loop changes rectangle position/colour over time).
