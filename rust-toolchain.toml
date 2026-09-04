@@ -1,0 +1,20 @@
+# Pins the toolchain version this repo was built and proven against, so a
+# fresh checkout on a new machine gets the same rustc/cargo automatically via
+# rustup (which reads this file before every `cargo`/`rustc` invocation in
+# this directory) rather than silently drifting onto whatever "stable"
+# happens to resolve to that day.
+#
+# Flagged as a real gap by tranche 0's own planning
+# (cycle-log/tranche-0/plan.md §2) and left undone by every milestone until
+# this tranche-scope refactor pass closed it.
+#
+# CI (.github/workflows/deploy-pages.yml) deliberately does NOT read this
+# file — it uses `dtolnay/rust-toolchain@stable`, which always resolves to
+# whatever the latest stable release is at the time the workflow runs. That
+# is an intentional, separate choice (CI stays current automatically; this
+# file gives local development a fixed, reproducible target) — not an
+# oversight. If CI and local ever need to match exactly, change both here.
+[toolchain]
+channel = "1.98.1"
+targets = ["wasm32-unknown-unknown"]
+components = ["clippy", "rustfmt"]

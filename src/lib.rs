@@ -305,6 +305,11 @@ mod tests {
     /// geometry actually fits inside the canvas declared in
     /// `www/index.html` (200x150). If either side changes, this is the
     /// tripwire that catches the mismatch before it silently clips.
+    // Same reasoning as math.rs's up_convention test: clippy sees this as a
+    // compile-time-constant assertion and suggests a `const` block, which
+    // would turn a future geometry mistake into a compile error instead of a
+    // failing test. Kept as a runtime assertion on purpose.
+    #[allow(clippy::assertions_on_constants)]
     #[test]
     fn rectangle_fits_within_canvas() {
         const CANVAS_W: u32 = 200;

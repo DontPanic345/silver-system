@@ -6,9 +6,13 @@
 // per project preference (see memory: verify sims with headless numbers, not
 // screenshots). It serves the built www/ directory over plain HTTP, drives a
 // real headless Chromium via Playwright, and reads back actual canvas pixel
-// data with getImageData at two distinct points in time (tick 0, then a
-// later tick) and asserts they differ — it does not look at a PNG, and it is
-// not a single static-frame check.
+// data with getImageData at three distinct points in time (tick 0, tick 1,
+// tick 2) and asserts the colour alternates and back — it does not look at a
+// PNG, and it is not a single static-frame check. (Originally two samples in
+// round 1; round 2's Refactor found a two-sample check can't distinguish a
+// genuinely advancing counter from one stuck after its first increment, so a
+// third sample was added — see round-02.md. This comment was left saying
+// "two" until the tranche-0 tranche-scope refactor pass caught the drift.)
 //
 // Round 2 fixes forward the duplication round 1's Refactor flagged: the
 // expected colour/coordinate/tick-interval values are no longer hardcoded

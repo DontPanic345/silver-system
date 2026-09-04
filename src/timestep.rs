@@ -113,11 +113,19 @@ impl FixedTimestep {
     }
 
     /// The fixed step size this harness was built with.
+    ///
+    /// `#[allow(dead_code)]`: an introspection getter, not yet called by any
+    /// running code (only its own test) — same deliberate, temporary state
+    /// as `src/math.rs`'s `Vec2`/`GridIndex`, named there in tranche 0's
+    /// tranche-scope refactor pass. `advance`, the harness's actual
+    /// production method, is exercised by `src/lib.rs`.
+    #[allow(dead_code)]
     pub fn dt(&self) -> Scalar {
         self.dt
     }
 
     /// The spiral-of-death cap this harness was built with.
+    #[allow(dead_code)] // see `dt`'s doc comment just above.
     pub fn max_steps_per_call(&self) -> u32 {
         self.max_steps_per_call
     }
@@ -130,6 +138,7 @@ impl FixedTimestep {
     ///
     /// [`advance`]: FixedTimestep::advance
     /// [`step_with`]: FixedTimestep::step_with
+    #[allow(dead_code)] // see `dt`'s doc comment above.
     pub fn accumulator(&self) -> Scalar {
         self.accumulator
     }
@@ -181,6 +190,7 @@ impl FixedTimestep {
     /// the accumulator works.
     ///
     /// [`advance`]: FixedTimestep::advance
+    #[allow(dead_code)] // see `dt`'s doc comment above.
     pub fn step_with<F: FnMut()>(&mut self, frame_duration: Scalar, mut on_step: F) -> u32 {
         let steps = self.advance(frame_duration);
         for _ in 0..steps {

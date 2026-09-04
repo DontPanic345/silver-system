@@ -4,9 +4,22 @@
 //! This module is M0.4's "small, boring substrate" (see the milestone's
 //! intent in `cycle-log/tranche-0/m0.4/plan.md`): later tranches reach for
 //! `Scalar`, `Vec2` and `GridIndex` rather than each inventing their own.
-//! Nothing here is wired into rendering yet — `src/lib.rs`'s canvas code is
-//! untouched by this module and still works entirely in its own pixel
-//! coordinates.
+//!
+//! **`Vec2` and `GridIndex` are not called by any running code yet** — only
+//! by their own unit tests below. `Scalar` and `FixedTimestep`
+//! (`src/timestep.rs`) *are* exercised by real code (`src/lib.rs`'s
+//! `tick_and_draw`), so the tranche-0 target of "exercised by real code, not
+//! sitting unused" is genuinely met for those two, not for `Vec2`/`GridIndex`.
+//! This was found and named, not silently dropped, in tranche 0's
+//! tranche-scope refactor pass: forcing a grid-cell index into M0.1's static
+//! two-colour rectangle to technically satisfy the target would be exactly
+//! the kind of artificial, paper-exercise wiring the tranche's own reach
+//! notes (`cycle-log/tranche-0/plan.md` §2) warned against for the
+//! hello-world's *animation* — the same reasoning applies here. `GridIndex`
+//! needs a real grid to be a genuine use; M1's first milestone that stands
+//! one up is the honest place to wire it in. `#[allow(dead_code)]` below
+//! records this as a deliberate, temporary state, not an oversight —
+//! removed the moment real code calls these.
 
 /// The scalar type every world-space / physics quantity in this crate is
 /// expressed in.
@@ -58,12 +71,14 @@ pub type Scalar = f32;
 /// change that silently swapped this convention (e.g. redefining "up" as
 /// `-y` to match the canvas instead) would fail a test, not just a doc
 /// comment.
+#[allow(dead_code)] // see the module doc comment: real production use lands in M1.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Vec2 {
     pub x: Scalar,
     pub y: Scalar,
 }
 
+#[allow(dead_code)] // see the module doc comment: real production use lands in M1.
 impl Vec2 {
     /// Builds a vector from its components. Plain field construction, no
     /// decision to make, so implemented directly rather than stubbed (same
@@ -112,6 +127,7 @@ impl Vec2 {
 /// `src/lib.rs`, where `+y` is down. Exists specifically so the convention
 /// pinned above is backed by something a test can assert on: see
 /// `up_convention_pins_math_physics_y_up_not_canvas_y_down` below.
+#[allow(dead_code)] // see the module doc comment: real production use lands in M1.
 pub const UP: Vec2 = Vec2 { x: 0.0, y: 1.0 };
 
 /// An integer `(i, j)` grid-cell coordinate.
@@ -155,12 +171,14 @@ pub const UP: Vec2 = Vec2 { x: 0.0, y: 1.0 };
 /// that needs it. `GridIndex` and `center` below do not need to anticipate
 /// that decision; a staggered variant can be added alongside this one
 /// without changing what this one guarantees.
+#[allow(dead_code)] // see the module doc comment: real production use lands in M1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GridIndex {
     pub i: i32,
     pub j: i32,
 }
 
+#[allow(dead_code)] // see the module doc comment: real production use lands in M1.
 impl GridIndex {
     /// Builds a grid index from its integer cell coordinates. Plain field
     /// construction, no decision to make, so implemented directly rather
@@ -197,6 +215,12 @@ mod tests {
     /// this module's convention to match the canvas (`+y` down) instead of
     /// math/physics (`+y` up) — e.g. by redefining `UP` as `(0.0, -1.0)` —
     /// this assertion is what would catch it, not just the doc comment.
+    // Clippy sees `UP.y` as a compile-time constant and suggests moving this
+    // into a `const { assert!(..) }` block — that would turn a broken
+    // convention into a compile error somewhere else in the crate instead of
+    // a failing test right here, which defeats the point of pinning it as a
+    // test. Deliberately kept as a runtime assertion.
+    #[allow(clippy::assertions_on_constants)]
     #[test]
     fn up_convention_pins_math_physics_y_up_not_canvas_y_down() {
         assert!(

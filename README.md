@@ -54,7 +54,7 @@ python3 -m http.server -d www 8000
 ```
 
 Run the headless end-to-end test (drives a real headless Chromium via
-Playwright, samples real canvas pixel data at two points in time — requires
+Playwright, samples real canvas pixel data at three points in time — requires
 `www/pkg/` to already be built, see above):
 
 ```sh

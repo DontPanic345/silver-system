@@ -34,6 +34,16 @@ jobs:
           if ! command -v wasm-bindgen >/dev/null; then
             cargo install wasm-bindgen-cli --version 0.2.127
           fi
+      # Gate the deploy on the native test suite (unit tests across
+      # src/math.rs, src/timestep.rs, src/lib.rs, plus the native-fallback
+      # integration test) — added in tranche 0's tranche-scope refactor pass
+      # after finding the workflow published on every push regardless of
+      # whether `cargo test` passed. The browser e2e test
+      # (tests/e2e/canvas_rectangle.test.mjs) is deliberately not run here:
+      # it needs a Playwright browser install, which is a heavier, separate
+      # addition left as an open gap (see the tranche-0 closeout).
+      - name: Run native test suite
+        run: cargo test
       - name: Build wasm artifact
         run: ./scripts/build-wasm.sh
       - uses: actions/configure-pages@v5
