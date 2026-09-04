@@ -495,3 +495,58 @@ like against round 3's likely mass-conservation check, to hand the round-3
 planner a head start rather than just a flagged question — but that edges
 into round 3's own content and was judged out of this round's scope to
 pre-empt.
+
+## Round 1 — orchestrator close-out
+
+**Verdict:** Advance. Independently re-ran `cargo test --lib`: 51 passed, 0
+failed, 0.01s — matches Refactor's report exactly, not taken on its word
+alone. `git status --short` confirms no uncommitted tracked changes (the
+only untracked item, `test/`, is stray native-binary PNG output from an
+ad-hoc verification run, not part of this round's tracked work, and has no
+bearing on the round's goals).
+
+**Goals — met:**
+1. `Grid`: SoA, double-buffered (`current`/`next`), `GridIndex`-addressed,
+   fixed dimensions at construction. Met — `src/grid.rs`.
+2. `Material` as data (density, viscosity, heat_capacity, conductivity,
+   phase, colour) with a small reference table (air/water/stone). Met —
+   `src/material.rs`. One open flag (density/heat_capacity unit mismatch)
+   carried forward, not blocking.
+3. Grid cells hold `MaterialId`, addressed via `GridIndex`; `Vec2`/
+   `GridIndex` genuinely exercised by real code (not forced) — the
+   tranche-0 gap is closed. Met, and independently confirmed by Refactor's
+   cold read as non-artificial.
+4. Coordinate convention pinned for the grid specifically (row-major,
+   `i`-fastest storage agreeing with `GridIndex`'s `i`→x/`j`→y), with tests.
+   Met.
+5. Test tagging / fast path established (`cargo test --lib`, documented in
+   `README.md`). Met.
+
+**Timing roll-up (Round 1):**
+- Red: 2026-09-05T10:24:16+12:00 → ~10:31 (~7 min).
+- Green: not separately timestamped in its own report section above with
+  an explicit start/end pair beyond its narrative — per its own report,
+  well inside the 30-minute budget (background-agent wall time was
+  ~100s of tool-use time; task duration 100,650ms per the dispatch
+  system).
+- Refactor: high-effort pass, background-agent tool-use time ~180s
+  (task duration 179,647ms per the dispatch system); well inside the
+  30-minute budget.
+- **Round 1 total:** all three phases individually well under their
+  30-minute budgets; no overtime, no exit ramp.
+
+**Gaps/flags carried forward to later rounds/the milestone closeout:**
+- `Grid`'s out-of-bounds contract (panic) is provisional — round 2's step
+  logic may want clamping/wrapping/`Option` once neighbour access at edges
+  is real.
+- `density` (unpinned, water-normalized) vs. `heat_capacity` (real physical
+  units, J/(g·K)) is a mixed unit system in `MaterialTable::reference()` —
+  not a defect against this round's goals, but round 3 (headless mass
+  measurement) or round 6 (temperature, later milestone) should pin an
+  actual unit system before either quantity is used in a real
+  conservation check.
+- `MaterialTable::reference()`'s exact numeric choices are open to a future
+  round's specific needs (e.g. round 3's mass-conservation check may want
+  particular values).
+
+Round 1 closed. Proceeding to re-plan round 2 per `cycle-milestone` §2.
