@@ -46,14 +46,24 @@
 
 use std::cell::{Cell, RefCell};
 
-// M0.4: shared math primitives (Scalar, Vec2). Not used by this file's own
-// canvas logic yet — see src/math.rs for what it is and why.
+// M0.4: shared math primitives (Scalar, Vec2, GridIndex). Not used by this
+// file's own canvas logic (M0.1's rectangle) — see src/math.rs for what it
+// is and why. M1.1 round 1's grid module below is GridIndex's/Vec2's first
+// real caller.
 mod math;
 
 // M0.4 round 3: fixed-timestep accumulator harness (Scalar dt in, step
 // count out). Round 4 wires this into tick_and_draw via advance_tick below
 // — see src/timestep.rs for what it is and why.
 mod timestep;
+
+// M1.1 round 1: material representation (Material, MaterialTable) and the
+// grid (Grid) they're stored in — see src/material.rs and src/grid.rs.
+// `pub` so later rounds/milestones and integration tests (tests/*.rs) can
+// build on them, the same way RECT_COLOR_RGB etc. below are `pub` for
+// tests/native_fallback.rs.
+pub mod material;
+pub mod grid;
 
 use math::Scalar;
 use timestep::FixedTimestep;

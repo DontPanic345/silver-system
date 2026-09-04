@@ -38,6 +38,43 @@ Rust unit tests (native, no wasm/browser involved):
 cargo test
 ```
 
+### Test tagging / fast path (established M1.1 round 1)
+
+Three speeds of test exist in this repo, and the commands below are the
+convention every round from M1.1 round 1 onward is expected to keep:
+
+- **Fast — in-crate unit and scenario tests** (`src/**/*.rs`'s own
+  `#[cfg(test)] mod tests`, e.g. `src/math.rs`, `src/timestep.rs`,
+  `src/grid.rs`, `src/material.rs`, `src/lib.rs`). No subprocess, no
+  filesystem, no browser. This is the command to run while iterating:
+
+  ```sh
+  cargo test --lib
+  ```
+
+- **Medium — the same, plus the native-binary integration test**
+  (`tests/native_fallback.rs`, which builds and runs `native_viewer` as a
+  real subprocess and decodes real PNG bytes back). Still no browser, but
+  slower than `--lib` alone:
+
+  ```sh
+  cargo test
+  ```
+
+- **Slow — the Playwright e2e path** (`tests/e2e/canvas_rectangle.test.mjs`),
+  a real headless-Chromium run. Never part of `cargo test` — run explicitly,
+  and only after building the wasm module (see below):
+
+  ```sh
+  NODE_PATH=/usr/local/lib/node_modules node tests/e2e/canvas_rectangle.test.mjs
+  ```
+
+No `#[ignore]`-tagged tests exist yet; if a future round adds a genuinely
+slow `#[test]` (a long-running headless scenario, say), tag it `#[ignore]`
+and document its companion command (`cargo test --lib -- --ignored`) right
+next to this section rather than letting it silently join the default
+`--lib` run.
+
 Build the wasm module and JS glue (requires `wasm-bindgen-cli` installed at a
 version matching the `wasm-bindgen` crate in `Cargo.lock` — see
 `scripts/build-wasm.sh` for the install command):
