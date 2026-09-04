@@ -168,6 +168,12 @@ headings:
 
 **Compromises I made.**
 
+**Token usage.** Your own total token usage for this phase, if you have any way
+to see it (a context/usage indicator, a final-turn summary, whatever your harness
+surfaces). State the number plainly if you have it. If you have no visibility into
+your own usage, say so explicitly — "not visible to me" is a valid report, a
+missing heading is not.
+
 **Gaps and flags.**  Anything the next phase or the planner should know about,
 including things outside your scope that you noticed.
 
@@ -177,6 +183,13 @@ including things outside your scope that you noticed.
 Report the truth. If tests fail, say so and include the output. If you skipped
 something, say you skipped it. If it works and you verified it, say so plainly
 without hedging.
+
+An orchestrator dispatching a milestone or tranche cold (per §3a) has no visibility
+into the sub-agents it spawns beyond what they report back — it cannot read their
+token usage off the `Agent` call the way a fork's caller can. So a milestone or
+tranche closeout's timing/usage roll-up is only as complete as the phase reports
+that fed it: if a phase said "not visible to me," the roll-up carries that gap
+forward honestly rather than guessing a number.
 
 ---
 
