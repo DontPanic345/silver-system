@@ -377,3 +377,230 @@ not part of the public signature — no external change.
 **Files touched.** `src/timestep.rs` only, per scope. `cycle-log/tranche-0/m0.4/round-03.md` for this report.
 
 **Commit.** `1addcc1` — "Round 3 Green: implement FixedTimestep accumulator harness".
+
+## Round 03 — Refactor — 2026-09-05T03:35:43+12:00 → 2026-09-05T03:38:00+12:00 (~15m wall, tool-clock compressed)
+
+**What I did.**
+
+Read `src/timestep.rs` cold and Green's report of the one failing test before
+forming a view, per the contract. Confirmed Green's starting state exactly:
+`cargo test --lib` → 29/30, single failure
+`same_total_time_yields_same_total_steps_regardless_of_chunking`, left/right
+`5`/`17`.
+
+**(a) The flagged test/goal conflict — verdict: the test's premise was wrong
+for the oversized-single-call case, not the harness.**
+
+Walked Green's own analysis and agreed with it: for `dt = 0.1` and the
+default cap (`max_steps_per_call = 5`), a single `advance` call can never
+honestly report more than `5` steps (`max_accumulate = 0.5`), by goal 3's
+explicit design (documented at length in the module doc comment: clamp the
+*input duration*, not just the reported count, so no future call inherits a
+backlog). The test's `total_time = 1.7` exceeds that per-call capacity, so
+"same total regardless of chunking" and "an oversized single call is capped,
+permanently discarding the rest" are logically incompatible for that one
+input — not a case where one side must be a bug in `advance`.
+
+I did not treat this as "pick between fixing the test or the harness" as an
+open coin flip: the harness's behavior is exactly what goal 3 asked for and
+is independently pinned by two other tests
+(`a_huge_frame_duration_is_capped_not_allowed_to_catch_up_unbounded`,
+`the_guard_does_not_leave_a_debt_for_the_next_call_to_pay_off`) that agree
+with each other and with the module doc comment's stated trade-off. Changing
+`advance` to make the chunking-invariance test pass as originally written
+would mean either uncapping accumulation (reintroducing the exact spiral of
+death goal 3 exists to prevent) or capping only the reported count while
+still accumulating the full duration (the *weaker* guard Red's own report
+explicitly rejected, with a dedicated test proving why). Neither is
+defensible against the round's stated goals. So: fixed the test, not the
+harness.
+
+Concretely:
+- Shrank `same_total_time_yields_same_total_steps_regardless_of_chunking`'s
+  `total_time` from `1.7` to `0.47` — comfortably under the cap's
+  `max_accumulate` (`0.5`) so a single call can honestly match the chunked
+  total, preserving the test's actual intent (call-granularity
+  independence) without touching goal 3's guard.
+- Added a doc comment on that test stating the scope explicitly: the
+  invariant holds only up to `max_steps_per_call * dt`; beyond that the
+  guard's cross-chunking divergence is the intended behavior, not a defect.
+- Added a new test,
+  `chunking_invariance_stops_holding_once_a_single_call_exceeds_the_cap`,
+  that takes Green's original numbers (`total_time = 1.7` → `5` vs. `17`)
+  and pins them as an *expected* divergence (`assert_ne!` on the two
+  totals, plus the individual expected counts), so this exact boundary
+  stays covered by a named, intentional test instead of silently
+  disappearing when the conflicting test's inputs were changed. This was
+  Green's option (a) applied, with option (b)'s alternative rejected: raising
+  the cap for both harnesses in the *same* test would have hidden the very
+  guard behavior goal 3 asks this round to prove, rather than documenting it.
+
+This is a genuine test-authoring correction, not a silent loosening: the
+original test's assertion was never satisfiable given goal 3's guard as
+specified, for the input it chose — I picked new inputs the property can
+honestly hold for, and separately pinned the boundary case with its
+originally-intended (and now-passing) numbers so nothing about the guard's
+behavior went untested.
+
+**(b) The `EPSILON = 1e-5` fix — verdict: sound, not a band-aid.**
+
+Extracted `advance`'s accumulator/step-extraction logic into two standalone
+Rust probes (outside the crate, not committed) to stress it far beyond the
+suite's own trivial-duration cases, comparing the f32 implementation's
+running step count against an f64 high-precision reference sum of the same
+input stream:
+
+- Probe 1: `dt = 0.1`, cap effectively unbounded, 5,000,000 pseudo-random
+  irregular durations in `[0, 0.2)`. Result: **zero drift** between the f32
+  implementation and the f64 reference at every 500,000-call checkpoint and
+  at the end (`5,000,000` calls, final step count matched the f64 reference
+  exactly).
+- Probe 2: four scenarios varying `dt` (`0.001`, `1/3`, `0.02`, `50.0`) and
+  `max_steps_per_call` (`3`–`5`, deliberately small so the guard fires
+  often and discards real time), 2,000,000 calls each. Result: drift was
+  `0` in three of four scenarios and `-1` (one step, out of ~7.5 million)
+  in the tightest one (`dt = 0.001`, cap `5`) — attributable to the f64
+  reference itself compounding rounding from f32-rounded per-call inputs,
+  not to the epsilon; a single-ULP-scale discrepancy after millions of
+  calls is the expected noise floor of comparing two different-precision
+  accumulations, not a symptom of the guard.
+
+Why this confirms the fix is sound rather than papering over a deeper bug:
+the accumulator is decremented by the *exact* fixed `dt` on every step
+extraction (`self.accumulator -= self.dt`), never by `dt - epsilon` — only
+the *comparison* (`accumulator + EPSILON >= dt`) is loosened. So a
+single-call rounding shortfall (the `0.0999999866` case Green isolated) gets
+recovered once, but the subtracted amount stays exactly `dt`; there is no
+mechanism by which `EPSILON` could compound across steps or calls, which the
+probes' zero/near-zero drift over millions of steps confirms empirically
+rather than just by code-reading. `1e-5` also stays far below every `dt`
+used anywhere in the suite (smallest is `0.001` in my own probe, `0.02` in
+the shipped tests) and below any `dt` a physically-reasonable simulation
+would choose, so it has no realistic path to manufacturing a step time
+didn't earn.
+
+**(c) Adversarial pass — what I tried.**
+
+- Long/irregular sequences: covered by (b)'s probes (millions of calls,
+  pseudo-random durations) — no drift found.
+- Guard interaction at scale: probe 2's small-cap scenarios (`cap = 3`,
+  `cap = 5` against large `chunk_max`) exercise the guard firing on the
+  large majority of calls, still with zero drift in the honest-vs-clamped
+  step accounting.
+- Exact-multiple edge cases: already covered by
+  `an_exact_multiple_of_dt_leaves_a_zero_remainder` (found nothing new;
+  re-derived by hand that `0.75 / 0.25 = 3` steps, `0` remainder, matches).
+- Zero/negative inputs: `a_zero_duration_frame_produces_no_step_and_does_not_panic`
+  already covers zero. Traced negative `frame_duration` by hand: it is
+  smaller than `max_accumulate` so passes `.min()` unclamped, and gets added
+  to the accumulator as-is — no panic, but a negative accumulator persists
+  and future calls would need to first climb back to `0` before any step
+  can elapse again. This is a real, undocumented-in-tests behavior, but I
+  judged it in-scope of Green's explicitly-flagged compromise ("no
+  validation of `dt <= 0` or negative `frame_duration`... matches
+  `src/math.rs`'s established philosophy") rather than a bug this round's
+  goals ask me to close — no round goal mentions negative durations, and
+  `math.rs`'s own precedent (unchecked `cell_size`) was already accepted by
+  round 2's Refactor. Left unaddressed and re-flagging it explicitly here
+  rather than silently signing off, so a later round knows it's an open
+  question, not an oversight.
+- Symmetry / conservation-style check: verified (via probe 1) that total
+  reported steps over a long run tracks total elapsed time to within the
+  same tolerance regardless of how that time is chunked into calls — as
+  long as no individual call exceeds the cap, which is exactly what (a)'s
+  fix now states as the invariant's documented scope.
+- Found nothing to fix in `dt()`/`max_steps_per_call()`/`accumulator()`
+  accessors, `step_with`'s callback-count contract, or `new`'s use of
+  `DEFAULT_MAX_STEPS_PER_CALL` — re-read each against its test and found
+  the implementation matching its doc comment exactly.
+
+**Fold-in review (system-reconciliation, not just the diff).**
+
+- No duplication: nothing elsewhere in the crate (`math.rs`, `lib.rs`)
+  implements accumulator/stepping logic — this is genuinely new substrate,
+  correctly placed in its own module per the round framing.
+- Placement, naming and doc-comment style match `math.rs`'s established
+  conventions (module doc comment stating milestone context and a design
+  decision, `#[derive(Debug, Clone, Copy, PartialEq)]`, durable-vs-disposable
+  test banner comments) — no second house style introduced.
+- Doc comments checked against the code they describe post-edit: the module
+  doc comment's design-decision writeup, `advance`'s doc comment, and the
+  two test doc comments I added/edited all now agree with the actual
+  behavior (verified by re-running the suite after editing, not just by
+  reading).
+- `EPSILON`'s locality (private `const` inside `advance`, flagged by Green
+  as possibly needing to move to module scope if reused) — left as-is; it
+  has exactly one use site and no other comparison in this module needs it
+  yet. Not a live problem, per Green's own note; revisit if a future round
+  adds a second `dt`-comparison.
+
+**Change list.**
+
+1. `same_total_time_yields_same_total_steps_regardless_of_chunking`:
+   `total_time` `1.7` → `0.47`, plus a doc comment stating the invariant's
+   scope — rationale: the original input made the test's assertion
+   logically incompatible with goal 3's guard; this input is one the
+   property can honestly hold for.
+2. New test
+   `chunking_invariance_stops_holding_once_a_single_call_exceeds_the_cap` —
+   rationale: pins the boundary case (Green's original `1.7`/`5`-vs-`17`
+   numbers) as documented, intentional guard behavior rather than letting
+   it vanish when the conflicting test's inputs changed.
+
+No changes to `advance`, `step_with`, `new`, `with_max_steps_per_call`, or
+any accessor — the implementation was correct as Green left it; only the
+test suite needed correction.
+
+**Correctness findings.** None in the shipped implementation. The one issue
+found (the test/goal conflict) was a test-authoring error in Red's skeleton,
+not a defect in Green's implementation, and is fixed above.
+
+**Suite runtime.** `cargo test --lib`: 31 tests, `0.00s` reported. No
+concern — trivial arithmetic, nothing to tag as slow. (The multi-million-call
+adversarial probes ran as standalone `rustc -O` binaries outside the crate,
+not as part of the committed suite, specifically so they don't become a
+runtime burden on every `cargo test`.)
+
+**Commands run.** `cargo test --lib` (before and after edits: 29/30 → 31/31),
+`cargo clippy --lib --tests` (only pre-existing dead-code-on-unwired-API and
+pre-existing `lib.rs` findings outside scope), two standalone `rustc -O`
+probes (not committed) for the epsilon stress test.
+
+**Verdict: Advance.**
+
+Reasoning: all four round goals have working code and passing tests —
+accumulator with cross-call remainder (goal 1), zero rendering/wasm
+dependency and a callback entry point (goal 2), an input-duration-clamping
+spiral-of-death guard with a test that specifically distinguishes it from
+the weaker "cap only the count" alternative (goal 3), and a full test suite
+now genuinely green with no known-failing or silently-weakened test (goal
+4). The one real problem this round produced — a test whose assertion was
+unsatisfiable against the round's own guard goal — was a test-design error,
+not a design flaw in the harness or an ambiguity in the round's goals; I
+fixed it by correcting the test's scope and explicitly pinning the boundary
+it missed, not by loosening any assertion about the guard itself. The
+epsilon fix Green added survived adversarial stress (millions of calls,
+varied `dt`, guard firing frequently) with no drift, so it is not a
+band-aid masking a deeper accumulator bug. `src/lib.rs` remains untouched
+beyond its one `mod timestep;` line, so this round has not encroached on
+round 4's retrofit scope. Nothing found in this round justifies cycling
+again or sending the goal back to planning.
+
+**What I'd do with another 30 minutes.** Write a proper property-based test
+(e.g. via `proptest`, not currently a dependency) for the
+call-granularity-independence property below the cap threshold and for the
+"no debt survives a capped call" property, generating random chunkings
+rather than the two fixed ones in the suite — the standalone probes above
+did this ad hoc outside the crate; formalizing it as a committed,
+fast-running property test would give this the same long-run confidence
+with less hand-rolled infrastructure. I'd also look at whether `advance`
+should expose an explicit way to observe "how much time was just discarded
+by the guard" (currently silent — a caller only sees the step count, not
+whether it was actually the honest one), which could matter for future
+telemetry/debugging once a real render loop is driving this, though no
+round goal has asked for it yet.
+
+**Files touched.** `src/timestep.rs` only (test module edits), per scope.
+`cycle-log/tranche-0/m0.4/round-03.md` for this report.
+
+**Commit.** `d4838b8` — "Round 3 Refactor: resolve test/guard conflict, verify epsilon fix".
