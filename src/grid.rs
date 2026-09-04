@@ -70,8 +70,13 @@ impl Grid {
     /// Left as a stub for Green: allocating and filling both buffers at the
     /// chosen size is this round's real content, not plumbing.
     pub fn new(width: usize, height: usize, fill: MaterialId) -> Self {
-        let _ = (width, height, fill);
-        todo!("allocate current and next buffers of width * height cells, filled with `fill`")
+        let size = width * height;
+        Grid {
+            width,
+            height,
+            current: vec![fill; size],
+            next: vec![fill; size],
+        }
     }
 
     /// This grid's fixed width, in cells. Plain plumbing (returns the field
@@ -100,8 +105,17 @@ impl Grid {
     /// (`0 <= i < width`, `0 <= j < height`) — this round's grid does not
     /// wrap or clamp out-of-bounds access.
     pub fn linear_index(&self, index: GridIndex) -> usize {
-        let _ = index;
-        todo!("convert `index` to a flat position, row-major with i fastest-varying; panic if out of bounds")
+        assert!(
+            index.i >= 0 && (index.i as usize) < self.width,
+            "GridIndex {index:?} out of bounds: width is {}",
+            self.width
+        );
+        assert!(
+            index.j >= 0 && (index.j as usize) < self.height,
+            "GridIndex {index:?} out of bounds: height is {}",
+            self.height
+        );
+        index.j as usize * self.width + index.i as usize
     }
 
     /// Reads the material at `index` from the **current** buffer.
@@ -109,8 +123,7 @@ impl Grid {
     /// Left as a stub for Green: depends on [`Grid::linear_index`], this
     /// round's real decision.
     pub fn get(&self, index: GridIndex) -> MaterialId {
-        let _ = index;
-        todo!("read current[self.linear_index(index)]")
+        self.current[self.linear_index(index)]
     }
 
     /// Writes the material at `index` into the **current** buffer directly
@@ -120,8 +133,8 @@ impl Grid {
     ///
     /// Left as a stub for Green: depends on [`Grid::linear_index`].
     pub fn set(&mut self, index: GridIndex, id: MaterialId) {
-        let _ = (index, id);
-        todo!("write id into current[self.linear_index(index)]")
+        let pos = self.linear_index(index);
+        self.current[pos] = id;
     }
 
     /// Reads the material at `index` from the **next** buffer — mainly for
@@ -129,8 +142,7 @@ impl Grid {
     ///
     /// Left as a stub for Green: depends on [`Grid::linear_index`].
     pub fn get_next(&self, index: GridIndex) -> MaterialId {
-        let _ = index;
-        todo!("read next[self.linear_index(index)]")
+        self.next[self.linear_index(index)]
     }
 
     /// Writes the material at `index` into the **next** buffer — the write
@@ -138,8 +150,8 @@ impl Grid {
     ///
     /// Left as a stub for Green: depends on [`Grid::linear_index`].
     pub fn set_next(&mut self, index: GridIndex, id: MaterialId) {
-        let _ = (index, id);
-        todo!("write id into next[self.linear_index(index)]")
+        let pos = self.linear_index(index);
+        self.next[pos] = id;
     }
 
     /// Swaps the `current` and `next` buffers, so whatever was just written
@@ -152,7 +164,7 @@ impl Grid {
     /// equivalent) is one line, but it is still this round's content to
     /// commit to, not assumed here.
     pub fn swap(&mut self) {
-        todo!("swap the current and next buffers")
+        std::mem::swap(&mut self.current, &mut self.next);
     }
 
     /// A read-only view of this grid's **current**-buffer storage, in the

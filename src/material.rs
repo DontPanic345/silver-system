@@ -155,8 +155,7 @@ impl MaterialTable {
     ///
     /// Panics if `id` does not name a material in this table.
     pub fn get(&self, id: MaterialId) -> &Material {
-        let _ = id;
-        todo!("look up the material stored at `id` in this table")
+        &self.materials[id.0 as usize]
     }
 
     /// The reference material table this round's goal 2 asks for: at least
@@ -169,10 +168,10 @@ impl MaterialTable {
     /// pinning the numbers themselves, so Green has real room to choose
     /// sensible values.
     pub fn reference() -> Self {
-        todo!(
-            "build the reference material table: at least an empty/air, a \
-             water, and a stone material, as data"
-        )
+        let empty = Material::new(0.0, 0.0, 1.0, 0.0, Phase::Gas, (0, 0, 0));
+        let water = Material::new(1.0, 0.5, 4.186, 0.6, Phase::Liquid, (40, 90, 200));
+        let stone = Material::new(2.5, 0.0, 0.8, 2.0, Phase::Solid, (120, 120, 120));
+        MaterialTable::new(vec![empty, water, stone])
     }
 }
 
