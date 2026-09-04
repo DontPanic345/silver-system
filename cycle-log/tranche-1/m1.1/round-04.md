@@ -305,3 +305,83 @@ condition before committing; found nothing to revise. This closes milestone
 target 2 ("a minimal renderer paints a scenario's grid, watchable in a
 browser and headlessly verifiable") — pending independent orchestrator
 verification per `cycle-milestone` §2.
+
+## Orchestrator close-out
+
+**Independent re-verification performed** (cold, before trusting the
+agent's report):
+
+- `cargo test --lib` → 65 passed, 0 failed (62 pre-existing + 3 new,
+  matching the report).
+- `cargo test` (full native suite, including the new
+  `tests/render_native.rs`) → all green, PNGs written including
+  `scenario.png`; doc-tests 0/0.
+- `cargo build --lib --target wasm32-unknown-unknown` → clean build,
+  4.51s.
+- `git status --short` → clean apart from the pre-existing, unrelated
+  untracked `test/` directory (flagged since Round 1, out of every
+  round's scope so far).
+
+All of this matches the agent's own report; nothing found that
+contradicts it.
+
+**Verdict: Advance.** All 5 round goals met, both must-not-break
+conditions (existing `canvas_rectangle.test.mjs` and `native_fallback.rs`
+stay green and unmodified) held.
+
+**Per-goal detail:**
+
+1. Pure `render_grid_to_rgb8` in new `src/render.rs`, mirroring
+   `render_frame`'s shape — met. Implements and pins (dedicated test) the
+   grid-row-to-image-row y-axis flip that Round 1's Refactor flagged in
+   advance as a future trap; good that this landed exactly where it was
+   predicted to be needed.
+2. `#[wasm_bindgen] paint_scenario` export, reusing `paint_rect`'s
+   pattern via a new `paint_rgb8_to_canvas` helper (`putImageData`) — met.
+3. `src/bin/native_viewer.rs` extended to also write `scenario.png` — met.
+4. Headless empirical pixel check — met, and exceeded: both the
+   native/PNG path (new `tests/render_native.rs`) and the wasm/Playwright
+   path (new `tests/e2e/scenario_canvas.test.mjs` + `www/scenario.html`)
+   were built and both pass, rather than exit-ramping to just one as the
+   round file's stated fallback allowed for.
+5. One-definition-two-consumers demonstrated concretely via the shared
+   `stone_and_water_pool()` fixture, used by both `measure.rs` and the
+   new renderer — met.
+
+This closes **milestone target 2** ("the same scenario renders") for
+real: both a browser-side path (wasm export + canvas) and a headless,
+non-human-in-the-loop verification path (native PNG decode and
+Playwright pixel read) exist and pass.
+
+**Timing:** single-pass round, well inside the 30/60-minute budget
+(agent's own report and the size of the diff — one new module, one new
+wasm export, an extended native binary, two new test files — are
+consistent with a normal single-pass round; no exit ramp taken).
+
+**Gaps/flags carried forward:**
+
+- `paint_scenario` is hardcoded to the `stone_and_water_pool()` fixture
+  rather than accepting an arbitrary `Scenario` parameter. Judgment call:
+  acceptable for M1.1 as scoped — the milestone's own framing calls for a
+  minimal renderer that "stays cheap and minimal on purpose," and target
+  2 only requires demonstrating that *a* scenario renders through both
+  consumers, which this does. Taking an arbitrary `Scenario` is real
+  follow-on work (worth doing before any milestone that needs to render
+  more than one fixture interactively) but is not required to meet M1.1's
+  stated target as written — flagged for the milestone-scope Refactor
+  pass to make an explicit call on rather than silently dropped.
+- RGB8→RGBA buffer expansion allocates fresh per call — fine for one-shot
+  paint, worth revisiting if/when rendering becomes continuous (later
+  tranche work, not M1.1).
+- Carried forward unchanged: `total_mass`'s unit still unpinned; hand-
+  rolled JSON has no string-escaping; `run_headless`'s dt-matches-
+  internal-`FixedTimestep` assumption; `Grid`'s out-of-bounds panic
+  contract provisional; `Scenario`'s owned (not shared) `MaterialTable`;
+  stray untracked `test/` dir (still harmless, still out of scope, `rm`
+  still blocked by sandboxing — not pursued further); whole-crate
+  `cargo fmt` adoption still deferred to the milestone-scope Refactor
+  pass.
+
+Next: Round 5 (reference grid size and performance budget), the last
+round in the milestone's original starting plan, addressing milestone
+target 3.
