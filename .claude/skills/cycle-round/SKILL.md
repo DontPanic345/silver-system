@@ -1,6 +1,6 @@
 ---
 name: cycle-round
-description: Run one round — plan it, then dispatch Red, Green and Refactor as fresh isolated agents, and act on Refactor's verdict. Use to run a single round of the cycle.
+description: Run one round — plan it, then dispatch Red, Green and Refactor as fresh isolated agents, and decide what happens next from Refactor's recommendation. Use to run a single round of the cycle.
 user-invocable: true
 ---
 
@@ -55,17 +55,32 @@ implementation notes — Refactor is meant to look at the result cold.
 
 ---
 
-## 3. Act on the verdict
+## 3. Decide what happens next
 
-Refactor answers: have the round's goals been met to a sufficient standard?
+Refactor answers: have the round's goals been met to a sufficient standard? That
+answer is a **recommendation, not a command.** Refactor is a cold, isolated,
+single-round agent — well placed to judge whether this round's code is right,
+badly placed to judge whether the *goal* is worth continuing to pursue, because it
+has no memory of what happened in this goal's earlier rounds. You are the only
+thing in the system with that memory. Deciding what to do with the recommendation
+is your job, not a formality:
 
-- **Advance** — run the suite once yourself. This is the only thing you verify
-  independently: one cheap check, not a re-audit. Then close the round out.
+- **Advance** — the normal case when Refactor recommends it. Run the suite once
+  yourself. This is the only thing you verify independently: one cheap check, not
+  a re-audit. Then close the round out.
 - **Cycle** — the round runs again with Refactor's required updates as the new
   input. Go back to step 1 with them. A corrective round is a normal outcome, not
   a failure.
 - **Back to planning** — take the exit ramp. Run `cycle-plan` with what was
   learned, per its "re-planning after an exit ramp" section.
+
+**The loop guard, and the one place you overrule Refactor:** if this is the
+**third or later** round in a row still working the same goal, escalate to
+planning regardless of what this round's Refactor recommends — even "advance," and
+especially another "cycle." Three fresh Refactors independently reaching for
+"cycle again" on the same goal is itself evidence the goal is framed wrong, not
+evidence the code needs one more pass. Say so explicitly when you escalate: which
+round this is on the goal, and what each Refactor said.
 
 If any phase returns an exit ramp instead of a normal result — an unattainable
 goal, a 30-minute decision point with no clear path, a tooling failure — do not

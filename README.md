@@ -11,8 +11,9 @@ and the glass pane. The language is Rust.
 
 `tranche → milestone → round → phase`. A round is one Red → Green → Refactor pass;
 a phase is one agent's turn. The cycle is defined by the skills in
-[`.claude/skills/`](.claude/skills/), starting with `cycle-contract`. Round logs
-live under `cycle-log/`.
+[`.claude/skills/`](.claude/skills/), starting with `cycle-contract`. `cycle-tranche`
+is the top of it — it runs indefinitely, chaining from tranche to tranche once
+`PLAN.md`'s are done. Round logs live under `cycle-log/`.
 
 ## Shelved experiments
 

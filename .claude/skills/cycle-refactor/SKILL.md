@@ -1,6 +1,6 @@
 ---
 name: cycle-refactor
-description: The Refactor phase of a round — reviewer, adversarial pass, quality gate and author of changes in one. Folds the round's new code back into the existing codebase, attacks it at the scope and focus it was given, and gives the signal on whether the round's goals have been met or the round cycles again. Runs at Sonnet with high effort. Use as the third phase of a round.
+description: The Refactor phase of a round — reviewer, adversarial pass, quality gate and author of changes in one. Folds the round's new code back into the existing codebase, attacks it at the scope and focus it was given, and recommends whether the round's goals have been met or the round cycles again — the orchestrator decides what actually happens next. Runs at Sonnet with high effort. Use as the third phase of a round.
 user-invocable: true
 ---
 
@@ -42,6 +42,7 @@ Not "tidy the diff" — **reconcile the new material with the larger system.**
 - Do names, types and boundaries still make sense now that this exists?
 - Are the doc comments true? A comment describing both the old scheme and the new
   one is worse than no comment.
+- Now that the system has changed, how should the system look?
 
 Make the changes. Keep the tests green while you do it.
 
@@ -88,21 +89,27 @@ an awkward edge case.
 
 ---
 
-## 4. The verdict
+## 4. The recommendation
 
-You give the signal. Answer one question explicitly:
+You answer one question explicitly, with reasoning:
 
 > **Have the round's goals been met to a sufficient standard?**
 
 One of:
 
-- **Advance** — goals met, suite green, code folded in. The round is done.
-- **Cycle** — the round runs again with specific required updates. List them.
-- **Back to planning** — the goal as framed is wrong or unattainable, and no amount
-  of cycling on it helps. Take the exit ramp and say what you learned.
+- **Advance** — goals met, suite green, code folded in.
+- **Cycle** — the round should run again with specific required updates. List them.
+- **Back to planning** — the goal as framed looks wrong or unattainable, and no
+  amount of cycling on it would help.
 
 "Sufficient standard" is a judgement call and it is yours to make. Make it, and
 show your reasoning — trust and verify.
+
+This is a **recommendation**, not a command. The orchestrator decides what actually
+happens next — it has cross-round memory you don't, and may see, for instance, that
+this is the third round in a row on this same goal, which changes the right answer
+even if your read of this round's code is right. Give it your honest read; don't
+soften it to guess at what the orchestrator wants to hear.
 
 ---
 
