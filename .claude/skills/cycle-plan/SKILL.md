@@ -26,21 +26,30 @@ them. Not a ritual sentence — a real claim you could be wrong about. If you ca
 say how the work in front of you serves the north star, **that is the finding**:
 report it rather than planning the work anyway.
 
-## Plan full, and reach
+## Plan only what this tranche needs, defer the rest
 
-Plan the fullest scope you can honestly justify, not the minimum that satisfies the
-brief. What `PLAN.md` records for a tranche or milestone is the thinnest sketch of
-what is wanted — it is a starting position, and treating it as the ceiling is the
-main way this system would fail quietly.
+A tranche's scope is **what it needs to support the north star right now** —
+not the fullest scope you can honestly justify. `PLAN.md` records the thinnest
+sketch of what's wanted for a reason: the cycle is meant to keep running,
+indefinitely, tranche after tranche. A reach item you fold into this tranche
+because it might be useful later is scope this tranche didn't need, carried by
+work happening now instead of by a future tranche planned for it — the flow will
+get there on its own.
 
-So at every level: **reach.** Ask what else belongs here that nobody wrote down —
-what the domain implies, what the next tranche will need and would rather have
-early, what a person poking at the result would immediately reach for and not find.
-Add it. Say you added it and why.
+So when you notice something that belongs in the project but isn't this tranche's
+job — a primitive a later tranche will want, a piece of tooling that would help
+down the line — **name it and defer it**, don't fold it in. Record it where the
+relevant future tranche's planner will find it (a note in `PLAN.md`, or a flag in
+this tranche's closeout under "open gaps"). That's a real, tracked commitment to
+build it later, not a decision to drop it.
 
-The counterweight is the round, not the plan: a round is small, and a phase has 30
-minutes. Ambition belongs in the scope you plan; restraint belongs in the slice you
-cut. Do one thing at a time — but know what the one thing is *for*.
+Fold something in now only when the tranche's own intent genuinely can't be met
+without it — not "would benefit from," but "this tranche does not support the
+north star without this." Say explicitly which test you applied when you do.
+
+The counterweight is still the round: a round is small, and a phase has 30
+minutes. Do one thing at a time — and now, do only the thing the tranche actually
+needs.
 
 ---
 
@@ -71,8 +80,11 @@ Output: an intent statement and a list of milestones, written to
 - Restate the tranche's **intent** from `PLAN.md` in your own words, sharpened by
   whatever has been built since it was written, and say how it serves the north
   star.
-- Reach: what does this tranche need that `PLAN.md` doesn't mention? What will the
-  tranches after it wish this one had built?
+- What does this tranche need, beyond what `PLAN.md` mentions, that its own intent
+  genuinely can't be met without? Fold that in, and say why it was necessary, not
+  just useful. Anything a *later* tranche would want but this one doesn't strictly
+  need — name it and defer it (see "Plan only what this tranche needs" above)
+  rather than building it early.
 - Set the tranche's **targets** — measurable, quantifiable, objectively checkable.
   Not "pressure feels right"; "water in a U-pipe levels to within 1 cell across
   both arms and stays there for 5000 steps".

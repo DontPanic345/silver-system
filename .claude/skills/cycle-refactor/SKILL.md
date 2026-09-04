@@ -74,18 +74,28 @@ the default suite is getting expensive, fix it or flag it with a number.
 
 ---
 
-## 3. If the shipped code is wrong
+## 3. Outside your scope isn't outside your reach
 
-You may find that shipped code is incorrect, not merely untidy — a wrong sign, a
-wrong ordering, a conserved quantity that isn't. This is a first-class outcome, not
-an awkward edge case.
+You are meant to be looking past the round's own diff — that's the point of the
+adversarial pass. Two different things turn up out there, and they get different
+treatment:
 
-- If it is inside your scope and you can fix it with evidence, fix it and say what
-  the evidence was.
-- If it is outside your scope or too large for your remaining time, report it as a
-  **correctness finding** with the evidence, and call for the round to cycle again
-  (or for the planner to insert a corrective round). Do not let it pass because it
-  didn't fit the round's story.
+- **Mechanical, self-contained issues** — a clippy lint, a stale doc comment, a
+  dead import, a stray `dbg!`, an obviously-wrong-but-trivial-to-fix line — fix
+  them the moment you see them, wherever they are, whether or not they're in the
+  files this round touched. Deferring a clippy warning just means paying to
+  re-discover it later; fixing it now is cheaper than reporting it. Note what you
+  fixed and where, same as any other change.
+- **Shipped code that's substantively wrong** — a wrong sign, a wrong ordering, a
+  conserved quantity that isn't, anything where the fix requires understanding
+  intent or carries real risk of a further mistake. This is a first-class outcome,
+  not an awkward edge case.
+  - If it is inside your scope and you can fix it with evidence, fix it and say
+    what the evidence was.
+  - If it is outside your scope or too large for your remaining time, report it as
+    a **correctness finding** with the evidence, and call for the round to cycle
+    again (or for the planner to insert a corrective round). Do not let it pass
+    because it didn't fit the round's story.
 
 ---
 

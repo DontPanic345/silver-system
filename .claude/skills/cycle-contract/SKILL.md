@@ -18,7 +18,10 @@ tranche  →  milestone  →  round  →  phase
 - A **phase** is one agent's turn: Red, Green or Refactor. Never call a phase a
   "step" — *step* is reserved for algorithmic steps (a simulation step, a solver
   step).
-- A **round** is one Red → Green → Refactor pass.
+- A **round** is one pass at a goal — a single self-verifying phase by default, or
+  a Red → Green → Refactor triad when `cycle-plan` judges the round risky (see
+  `cycle-plan` §1c). Which shape a round takes is a planning decision, not fixed
+  by the vocabulary.
 - A **milestone** is a group of rounds.
 - A **tranche** is a group of milestones. `PLAN.md` lists them.
 

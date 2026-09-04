@@ -1,16 +1,15 @@
 ---
 name: cycle-tranche
-description: Run a tranche end to end — plan it into milestones, run milestones to their targets, finish with a tranche-scope refactor pass, and chain forward to the next tranche. This is the top of the cycle — there is no fixed end; the system runs until PLAN.md itself is exhausted, at which point planning decides what the world needs next. Use to drive the whole build, or a single named tranche.
+description: Run a tranche end to end — plan it into milestones, run milestones to their targets, and finish with a tranche-scope refactor pass. Stops and reports at the tranche boundary by default; chains forward into the next tranche only under an explicit standing instruction to keep going. Use to drive a single named tranche, or a whole continuous run when asked.
 user-invocable: true
 ---
 
-# cycle-tranche — run a tranche, then keep going
+# cycle-tranche — run a tranche, then stop and report
 
-Read `cycle-contract` first. You are the orchestrator for the tranche, and — unless
-told to stop after one — for everything after it too. This is the top of the
-hierarchy in daily use: nothing above it hard-stops the system, by design. Only
-when the big universe is sufficiently full will the small world be believable, and
-that is not a single sitting's work.
+Read `cycle-contract` first. You are the orchestrator for the tranche. Unless the
+user has given a standing instruction to keep going across tranche boundaries (see
+§5), your job ends when this tranche is closed out and reported — you are not the
+top of an unsupervised, indefinitely-running hierarchy by default.
 
 ---
 
@@ -66,10 +65,22 @@ Mark the tranche closed in `PLAN.md`.
 
 ---
 
-## 5. Chain forward — this is the part that makes it indefinite
+## 5. Stop and report — chain forward only when told to
 
-Do not stop here unless told to. The system runs continuously; a tranche finishing
-is a milestone in the larger sense, not a terminus.
+**Default: stop here.** Report the tranche's closeout to the user and wait. This
+is not the system's permanent shape — indefinite chaining (below) is the intent
+once the cycle has earned enough trust that a tranche closing out cleanly is a
+reliable signal on its own. It hasn't yet: this whole system was drafted once from
+a single dictation dump and run for a full tranche before anyone reviewed it, so
+the default posture is a human checks in at each tranche boundary, not the system
+running on unsupervised.
+
+Chain straight into the next tranche (skip the stop) **only** when the user has
+said, for this run, to keep going without stopping at tranche boundaries — a
+standing instruction for the whole run, not implied by having been told to run
+"tranche 0" or any single named tranche.
+
+When you are told to chain forward:
 
 - **If `PLAN.md` has a next tranche**, go to step 1 with it. Fold this tranche's
   closeout forward the same way a round's report gets folded into the next round's
@@ -81,8 +92,8 @@ is a milestone in the larger sense, not a terminus.
   let it decide: a new tranche entirely, a return pass deepening an earlier one now
   that later tranches reveal what it should have supported, or something the
   dictated plan never anticipated. Say explicitly that you've reached this point —
-  it's worth the user knowing, even though no approval is required to keep going.
+  it's worth the user knowing even under a standing keep-going instruction.
 
-Report to the user at the end of each tranche's closeout regardless of whether you
-continue automatically or were asked to run one tranche at a time — a closeout is
+Report to the user at the end of every tranche's closeout regardless of whether
+you stop there or chain forward under a standing instruction — a closeout is
 worth seeing, not just logging.
