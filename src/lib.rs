@@ -77,6 +77,14 @@ pub mod scenario;
 // build on it directly.
 pub mod measure;
 
+// M1.1 round 4: the renderer, the second of `Scenario`'s two consumers —
+// paints the same Scenario/Grid value's current state to pixels, no
+// browser/DOM dependency, mirroring this file's own M0.1 render_frame
+// shape. See src/render.rs. `pub` for the same reason measure/scenario/
+// grid/material are: `src/bin/native_viewer.rs` and integration tests build
+// on it directly.
+pub mod render;
+
 use math::Scalar;
 use timestep::FixedTimestep;
 
@@ -140,6 +148,15 @@ pub const RECT_X: u32 = 20;
 pub const RECT_Y: u32 = 20;
 pub const RECT_W: u32 = 60;
 pub const RECT_H: u32 = 40;
+
+/// The on-screen pixel size of one grid cell used by both
+/// `src/bin/native_viewer.rs`'s `scenario.png` and `www/scenario.html`'s
+/// `paint_scenario` call — single source of truth (round 2's own naming for
+/// this exact pattern) so the native and wasm rendering paths, and any test
+/// reading pixels back, never disagree on cell size. See `src/render.rs`'s
+/// module doc comment for why this is a plain screen-pixel integer, not
+/// `Scenario::cell_size`'s world-space unit.
+pub const SCENARIO_CELL_PX: u32 = 20;
 
 /// Looks up the canvas element by `canvas_id`, gets its 2D rendering context,
 /// and fills a `RECT_W` x `RECT_H` rectangle at `(RECT_X, RECT_Y)` in
@@ -264,6 +281,70 @@ pub fn render_frame(tick: u32, width: u32, height: u32) -> Vec<u8> {
     buf
 }
 
+/// Paints a `Scenario`'s current grid state to a named canvas element — the
+/// "watchable" half of milestone target 2 (round 4 goal 2). Reuses
+/// [`paint_rect`]'s established get-canvas-by-id/get-2d-context/draw
+/// pattern, but paints a whole grid of cells (via
+/// [`render::render_grid_to_rgb8`]) as a single `putImageData` call rather
+/// than one `fill_rect` per cell — see [`paint_rgb8_to_canvas`].
+///
+/// Builds and paints `scenario::stone_and_water_pool()` (round 2's fixture)
+/// specifically — the same `Scenario` value round 3's `run_headless`
+/// measures, per round 4 goal 5 ("one definition, two consumers"). `cell_px`
+/// is the on-screen pixel size of one grid cell (see `src/render.rs`'s
+/// module doc comment for why this is decoupled from `Scenario::cell_size`'s
+/// world-space unit); the canvas element is resized to fit the rendered
+/// image exactly.
+#[wasm_bindgen]
+pub fn paint_scenario(canvas_id: &str, cell_px: u32) {
+    let scenario = scenario::stone_and_water_pool();
+    let grid = scenario.build_grid();
+    let buf = render::render_grid_to_rgb8(&grid, &scenario.materials, cell_px);
+    let (width_px, height_px) = render::render_dimensions_px(&grid, cell_px);
+    paint_rgb8_to_canvas(canvas_id, &buf, width_px, height_px);
+}
+
+/// Looks up the canvas element by `canvas_id`, resizes it to `width` x
+/// `height`, and paints `rgb` (a flat RGB8 buffer, `width * height * 3`
+/// bytes — [`render::render_grid_to_rgb8`]'s own output shape) to it via a
+/// single `putImageData` call.
+///
+/// Canvas `ImageData` requires RGBA (`Uint8ClampedArray`), so this expands
+/// `rgb` by inserting a fully-opaque alpha byte after every 3 colour bytes
+/// before handing it to the canvas — the one piece of new plumbing
+/// [`paint_rect`]'s per-rectangle `fill_rect` pattern didn't need.
+fn paint_rgb8_to_canvas(canvas_id: &str, rgb: &[u8], width: u32, height: u32) {
+    let window = web_sys::window().expect("no global `window` exists");
+    let document = window.document().expect("window has no document");
+    let canvas = document
+        .get_element_by_id(canvas_id)
+        .unwrap_or_else(|| panic!("no element with id `{canvas_id}`"))
+        .dyn_into::<web_sys::HtmlCanvasElement>()
+        .expect("element is not an HtmlCanvasElement");
+    canvas.set_width(width);
+    canvas.set_height(height);
+    let ctx = canvas
+        .get_context("2d")
+        .expect("get_context(\"2d\") failed")
+        .expect("canvas has no 2d context")
+        .dyn_into::<CanvasRenderingContext2d>()
+        .expect("context is not a CanvasRenderingContext2d");
+
+    let mut rgba = Vec::with_capacity(rgb.len() / 3 * 4);
+    for chunk in rgb.as_chunks::<3>().0 {
+        rgba.extend_from_slice(chunk);
+        rgba.push(255);
+    }
+    let image_data = web_sys::ImageData::new_with_u8_clamped_array_and_sh(
+        wasm_bindgen::Clamped(&rgba),
+        width,
+        height,
+    )
+    .expect("failed to build ImageData");
+    ctx.put_image_data(&image_data, 0.0, 0.0)
+        .expect("put_image_data failed");
+}
+
 /// Runs automatically when the wasm module is instantiated in the browser
 /// (see the `#[wasm_bindgen(start)]` attribute). Paints tick 0; the running
 /// page (`www/index.html`) is responsible for calling [`tick_and_draw`] on
@@ -317,6 +398,49 @@ pub fn rect_color_rgb_alt() -> Vec<u8> {
 #[wasm_bindgen]
 pub fn tick_interval_ms() -> u32 {
     TICK_INTERVAL_MS
+}
+
+// --- Getters: the single source of truth for an e2e test of paint_scenario ---
+//
+// Same discipline as the block above (round 2's fix for round 1's
+// hand-duplicated constants), applied to round 4's scenario renderer: a JS
+// test reads a placed material's expected colour straight off the same
+// `MaterialTable::reference()` `paint_scenario` itself paints from, rather
+// than re-declaring the RGB literals and risking silent drift if the
+// reference table's values ever change.
+
+/// The on-screen pixel size of one grid cell `paint_scenario` is called
+/// with in `www/scenario.html` — read by the e2e test to compute which
+/// canvas pixel to sample for a given grid cell, instead of hardcoding it.
+#[wasm_bindgen]
+pub fn scenario_cell_px() -> u32 {
+    SCENARIO_CELL_PX
+}
+
+/// `stone_and_water_pool()`'s material table (`MaterialTable::reference()`)
+/// air/water/stone colours, as 8-bit sRGB — the same values
+/// [`render::render_grid_to_rgb8`] reads via `Material::colour` when
+/// `paint_scenario` paints. `MaterialId`s 0/1/2 respectively, per
+/// `src/scenario.rs`'s `stone_and_water_pool` doc comment.
+#[wasm_bindgen]
+pub fn scenario_air_colour_rgb() -> Vec<u8> {
+    material_colour_rgb(0)
+}
+
+#[wasm_bindgen]
+pub fn scenario_water_colour_rgb() -> Vec<u8> {
+    material_colour_rgb(1)
+}
+
+#[wasm_bindgen]
+pub fn scenario_stone_colour_rgb() -> Vec<u8> {
+    material_colour_rgb(2)
+}
+
+fn material_colour_rgb(id: u16) -> Vec<u8> {
+    let materials = material::MaterialTable::reference();
+    let (r, g, b) = materials.get(material::MaterialId::new(id)).colour;
+    vec![r, g, b]
 }
 
 #[cfg(test)]

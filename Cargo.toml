@@ -19,6 +19,7 @@ features = [
   "HtmlCanvasElement",
   "CanvasRenderingContext2d",
   "Window",
+  "ImageData",
 ]
 
 # M0.3 native fallback: only the native binary (src/bin/native_viewer.rs)

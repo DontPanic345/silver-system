@@ -12,11 +12,20 @@
 //! `native-fallback-out/` in the current directory). Writes `tick-0.png`,
 //! `tick-1.png`, `tick-2.png` — enough ticks for the three-sample check
 //! `tests/native_fallback.rs` runs (two samples can't tell "advancing" from
-//! "stuck at tick 1", per M0.1's round 2 finding).
+//! "stuck at tick 1", per M0.1's round 2 finding) — and, since M1.1 round 4,
+//! `scenario.png`: `scenario::stone_and_water_pool()`'s current grid state
+//! rendered via `viewer::render::render_grid_to_rgb8`, the native-binary
+//! fallback path for round 4 goal 3. Both share this one binary rather than
+//! splitting into two, since both are "render something pure to a PNG on
+//! disk" and the M0.1 rectangle path already proved the `image` crate
+//! plumbing this reuses unchanged.
 
 use std::path::PathBuf;
 
+use viewer::render::render_dimensions_px;
 use viewer::render_frame;
+use viewer::scenario::stone_and_water_pool;
+use viewer::{render, scenario, SCENARIO_CELL_PX};
 
 const WIDTH: u32 = 200;
 const HEIGHT: u32 = 150;
@@ -37,4 +46,17 @@ fn main() {
             .unwrap_or_else(|e| panic!("failed to write {path:?}: {e}"));
         println!("wrote {}", path.display());
     }
+
+    // Round 4 goal 3: the same `stone_and_water_pool()` Scenario round 3's
+    // headless runner measures, painted here via the round's new pure
+    // grid-to-pixels function — goal 5's "one definition, two consumers"
+    // demonstrated concretely against the native fallback path.
+    let scenario: scenario::Scenario = stone_and_water_pool();
+    let grid = scenario.build_grid();
+    let buf = render::render_grid_to_rgb8(&grid, &scenario.materials, SCENARIO_CELL_PX);
+    let (width_px, height_px) = render_dimensions_px(&grid, SCENARIO_CELL_PX);
+    let path = out_dir.join("scenario.png");
+    image::save_buffer(&path, &buf, width_px, height_px, image::ColorType::Rgb8)
+        .unwrap_or_else(|e| panic!("failed to write {path:?}: {e}"));
+    println!("wrote {}", path.display());
 }
