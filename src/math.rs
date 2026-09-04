@@ -113,6 +113,77 @@ impl Vec2 {
 /// `up_convention_pins_math_physics_y_up_not_canvas_y_down` below.
 pub const UP: Vec2 = Vec2 { x: 0.0, y: 1.0 };
 
+/// An integer `(i, j)` grid-cell coordinate.
+///
+/// ## Indexing convention: cell-center, not corner
+///
+/// **Decision (M0.4 round 2): index `(i, j)` denotes a specific grid
+/// *cell*, and that cell's world-space position — the value
+/// [`GridIndex::center`] returns — is the cell's *center*, not any of its
+/// corners.**
+///
+/// Concretely, under a uniform `cell_size`, cell `(i, j)`'s center sits at
+/// world position:
+///
+/// ```text
+/// x = (i as Scalar + 0.5) * cell_size
+/// y = (j as Scalar + 0.5) * cell_size
+/// ```
+///
+/// So cell `(0, 0)`'s center is offset **half a cell** from the world
+/// origin in both axes — not coincident with it. The world origin
+/// `(0.0, 0.0)` is cell `(0, 0)`'s bottom-left *corner* under this
+/// convention, never returned by `center` itself. This is the grid-origin
+/// convention this milestone pins: cell `(0, 0)` is the cell whose
+/// lower-value corner touches the world origin.
+///
+/// `j` increases in the `+y` direction, matching this module's math/physics
+/// `+y`-is-up convention (see [`Vec2`]'s doc comment and [`UP`]) — not the
+/// canvas's `+y`-is-down convention used in `src/lib.rs`. Anything that maps
+/// a `GridIndex` onto the canvas later must account for both that flip and
+/// this type's own cell-size scaling explicitly.
+///
+/// ## Cell-center is a default, not the only layout
+///
+/// Physics quantities this crate will accumulate (density, temperature,
+/// pressure) are conventionally stored cell-centered, which is why this is
+/// the default M0.4 ships. A staggered/compact grid — where some
+/// quantities (e.g. velocity components in a MAC grid) live on cell faces
+/// or corners instead — is a later, *additive* decision explicitly deferred
+/// to M1.4 (see `PLAN.md`), to be made there on evidence from the solver
+/// that needs it. `GridIndex` and `center` below do not need to anticipate
+/// that decision; a staggered variant can be added alongside this one
+/// without changing what this one guarantees.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GridIndex {
+    pub i: i32,
+    pub j: i32,
+}
+
+impl GridIndex {
+    /// Builds a grid index from its integer cell coordinates. Plain field
+    /// construction, no decision to make, so implemented directly rather
+    /// than stubbed (same reasoning `Vec2::new` applies to itself).
+    pub fn new(i: i32, j: i32) -> Self {
+        GridIndex { i, j }
+    }
+
+    /// Converts this grid index to the world-space position of its cell's
+    /// *center*, under a uniform `cell_size` and the cell-center convention
+    /// documented on [`GridIndex`] itself.
+    ///
+    /// This is the round's new *decision made concrete as arithmetic* (the
+    /// convention doc comment says what should happen; this is where it
+    /// actually happens), so it is left as a stub for Green.
+    pub fn center(self, cell_size: Scalar) -> Vec2 {
+        todo!(
+            "return Vec2::new((self.i as Scalar + 0.5) * cell_size, \
+             (self.j as Scalar + 0.5) * cell_size) per the cell-center \
+             convention documented on GridIndex"
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,5 +293,87 @@ mod tests {
         let a = Vec2::new(1.5, -2.0);
         let b = Vec2::new(-3.0, 4.0);
         assert_eq!(a.dot(b), b.dot(a));
+    }
+
+    // --- GridIndex: convention pins (durable scenarios, cross-cutting) ---
+
+    /// Pins the cell-*center* (not corner) convention stated in
+    /// `GridIndex`'s doc comment: cell `(0, 0)`'s center sits half a cell
+    /// away from the world origin in both axes, not coincident with it. If
+    /// a future change silently switched this to a corner convention (index
+    /// `(0,0)` maps straight to world `(0,0)`), this is what would catch
+    /// it, not just the doc comment.
+    #[test]
+    fn grid_zero_zero_center_is_offset_half_a_cell_from_world_origin() {
+        let cell_size = 2.0;
+        let center = GridIndex::new(0, 0).center(cell_size);
+        assert_eq!(
+            center,
+            Vec2::new(1.0, 1.0),
+            "cell (0,0)'s center should sit at (cell_size/2, cell_size/2) \
+             under the cell-center convention, not at the world origin \
+             (which would imply a corner convention instead)"
+        );
+        assert_ne!(
+            center,
+            Vec2::new(0.0, 0.0),
+            "cell (0,0)'s center must not coincide with the world origin — \
+             that would be a corner convention, not this module's pinned \
+             cell-center one"
+        );
+    }
+
+    /// Scenario: stepping the grid index by one cell along `i` moves the
+    /// cell-center position by exactly one `cell_size` along world `x`, and
+    /// leaves `y` unchanged — the "index spacing equals cell size" property
+    /// goal 4 asks to be pinned, exercised along the `i`/`x` axis.
+    #[test]
+    fn adjacent_indices_along_i_are_exactly_one_cell_size_apart_in_x() {
+        let cell_size = 3.0;
+        let here = GridIndex::new(4, 4).center(cell_size);
+        let one_over = GridIndex::new(5, 4).center(cell_size);
+        assert_eq!(one_over.sub(here), Vec2::new(cell_size, 0.0));
+    }
+
+    /// Scenario: stepping the grid index by one cell along `j` moves the
+    /// cell-center position by exactly one `cell_size` along world `y`, in
+    /// the `+y` direction — pinning both the spacing and that `j` follows
+    /// this module's `+y`-up convention (not the canvas's `+y`-down one).
+    #[test]
+    fn adjacent_indices_along_j_are_exactly_one_cell_size_apart_in_plus_y() {
+        let cell_size = 3.0;
+        let here = GridIndex::new(4, 4).center(cell_size);
+        let one_up = GridIndex::new(4, 5).center(cell_size);
+        let step = one_up.sub(here);
+        assert_eq!(step, Vec2::new(0.0, cell_size));
+        assert!(
+            step.y > 0.0,
+            "incrementing j should move the center in +y (this module's \
+             'up'), matching Vec2's pinned y-up convention"
+        );
+    }
+
+    // --- GridIndex: disposable unit tests ---
+
+    /// Disposable: a different cell size scales the center position
+    /// linearly, exercised at a cell size other than the round numbers used
+    /// above, and at a non-origin index.
+    #[test]
+    fn center_scales_linearly_with_cell_size_away_from_the_origin_cell() {
+        let idx = GridIndex::new(2, 3);
+        assert_eq!(idx.center(1.0), Vec2::new(2.5, 3.5));
+        assert_eq!(idx.center(10.0), Vec2::new(25.0, 35.0));
+    }
+
+    /// Disposable: negative indices (cells "below"/"left of" the origin
+    /// cell) still follow the same `(i + 0.5) * cell_size` rule, with no
+    /// special-casing around zero.
+    #[test]
+    fn center_handles_negative_indices_consistently() {
+        let cell_size = 2.0;
+        assert_eq!(
+            GridIndex::new(-1, -1).center(cell_size),
+            Vec2::new(-1.0, -1.0)
+        );
     }
 }
