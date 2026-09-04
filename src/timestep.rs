@@ -213,7 +213,10 @@ mod tests {
     fn a_short_frame_produces_no_step_yet() {
         let mut ts = FixedTimestep::new(0.1);
         let steps = ts.advance(0.05);
-        assert_eq!(steps, 0, "half a dt's worth of time should not yet elapse a step");
+        assert_eq!(
+            steps, 0,
+            "half a dt's worth of time should not yet elapse a step"
+        );
     }
 
     /// Scenario: feeding frames whose durations sum to exactly one `dt`,
@@ -226,7 +229,10 @@ mod tests {
         let first = ts.advance(0.05);
         let second = ts.advance(0.05);
         assert_eq!(first, 0, "first half-dt frame should not step");
-        assert_eq!(second, 1, "second half-dt frame should complete exactly one step");
+        assert_eq!(
+            second, 1,
+            "second half-dt frame should complete exactly one step"
+        );
     }
 
     /// Scenario: an irregular stream of frame durations (some longer, some
@@ -406,7 +412,10 @@ mod tests {
         let mut calls = 0;
         let reported = ts.step_with(0.35, || calls += 1);
         assert_eq!(reported, 3, "0.35 / 0.1 should elapse 3 whole steps");
-        assert_eq!(calls, 3, "the callback should run exactly once per elapsed step");
+        assert_eq!(
+            calls, 3,
+            "the callback should run exactly once per elapsed step"
+        );
     }
 
     // --- Disposable unit tests (may be deleted if the implementation changes shape) ---

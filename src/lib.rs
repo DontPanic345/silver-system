@@ -62,8 +62,8 @@ mod timestep;
 // `pub` so later rounds/milestones and integration tests (tests/*.rs) can
 // build on them, the same way RECT_COLOR_RGB etc. below are `pub` for
 // tests/native_fallback.rs.
-pub mod material;
 pub mod grid;
+pub mod material;
 
 // M1.1 round 2: `Scenario`, the "one definition, two consumers" type round
 // 3 (headless runner) and round 4 (renderer) will both build a Grid from —
@@ -526,10 +526,26 @@ mod tests {
 
     #[test]
     fn color_for_tick_alternates_by_parity() {
-        assert_eq!(color_for_tick(0), RECT_COLOR_RGB, "tick 0 should be the base colour");
-        assert_eq!(color_for_tick(1), RECT_COLOR_RGB_ALT, "tick 1 should be the alt colour");
-        assert_eq!(color_for_tick(2), RECT_COLOR_RGB, "tick 2 should be back to the base colour");
-        assert_eq!(color_for_tick(3), RECT_COLOR_RGB_ALT, "tick 3 should be the alt colour");
+        assert_eq!(
+            color_for_tick(0),
+            RECT_COLOR_RGB,
+            "tick 0 should be the base colour"
+        );
+        assert_eq!(
+            color_for_tick(1),
+            RECT_COLOR_RGB_ALT,
+            "tick 1 should be the alt colour"
+        );
+        assert_eq!(
+            color_for_tick(2),
+            RECT_COLOR_RGB,
+            "tick 2 should be back to the base colour"
+        );
+        assert_eq!(
+            color_for_tick(3),
+            RECT_COLOR_RGB_ALT,
+            "tick 3 should be the alt colour"
+        );
     }
 
     // --- Round 4 retrofit: advance_tick (the FixedTimestep-driven replacement
