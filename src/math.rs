@@ -74,28 +74,33 @@ impl Vec2 {
     /// Vector addition: combines two displacements (or a point and a
     /// displacement) into one.
     pub fn add(self, other: Vec2) -> Vec2 {
-        let _ = other;
-        unimplemented!("component-wise addition of self and other")
+        Vec2 {
+            x: self.x + other.x,
+            y: self.y + other.y,
+        }
     }
 
     /// Vector subtraction: the displacement from `other` to `self`.
     pub fn sub(self, other: Vec2) -> Vec2 {
-        let _ = other;
-        unimplemented!("component-wise subtraction of other from self")
+        Vec2 {
+            x: self.x - other.x,
+            y: self.y - other.y,
+        }
     }
 
     /// Scalar multiplication: uniformly scales both components by `s`.
     pub fn scale(self, s: Scalar) -> Vec2 {
-        let _ = s;
-        unimplemented!("component-wise multiplication of self by s")
+        Vec2 {
+            x: self.x * s,
+            y: self.y * s,
+        }
     }
 
     /// Dot product: `self.x * other.x + self.y * other.y`. Positive when the
     /// two vectors point in a broadly similar direction, zero when they are
     /// perpendicular, negative when broadly opposed.
     pub fn dot(self, other: Vec2) -> Scalar {
-        let _ = other;
-        unimplemented!("dot product of self and other")
+        self.x * other.x + self.y * other.y
     }
 }
 

@@ -194,3 +194,61 @@ shows all 5 pre-existing `tests::*` tests in `src/lib.rs`
 `color_for_tick_alternates_by_parity`, plus the crate's implicit doctest
 count of zero) passing, unaffected by this round's addition.
 
+---
+
+## Round 1 — Green — 2026-09-05T03:19:01+12:00 → 2026-09-05T03:22:00+12:00 (~3 min)
+
+**What I did.**
+
+Filled in the four stub method bodies in `src/math.rs` — `add`, `sub`,
+`scale`, `dot` — with straightforward component-wise arithmetic, exactly as
+their doc comments and the intent describe. No other line of the file
+changed: `Scalar`, `Vec2`'s struct/derives, `new`, `UP`, and all doc comments
+were left exactly as Red wrote them.
+
+- `add`: `Vec2 { x: self.x + other.x, y: self.y + other.y }`
+- `sub`: `Vec2 { x: self.x - other.x, y: self.y - other.y }`
+- `scale`: `Vec2 { x: self.x * s, y: self.y * s }`
+- `dot`: `self.x * other.x + self.y * other.y`
+
+None of Red's four signatures needed changing — took them as given.
+
+**Commands run and results.**
+
+- `cargo test --lib math::` → `test result: ok. 9 passed; 0 failed; 0
+  ignored; 0 measured; 4 filtered out`. All 8 previously-failing tests now
+  pass, plus the one that was already green
+  (`up_convention_pins_math_physics_y_up_not_canvas_y_down`).
+- `cargo test --lib` (full suite) → `test result: ok. 13 passed; 0 failed; 0
+  ignored; 0 measured; 0 filtered out` — the 9 `math::tests::*` plus 4
+  `tests::*` from `src/lib.rs` (`rectangle_fits_within_canvas`,
+  `getters_expose_the_same_constants_js_reads`,
+  `render_frame_paints_rect_in_tick_colour`,
+  `color_for_tick_alternates_by_parity`). Note: Red's report said "5
+  pre-existing `tests::*` tests" in `lib.rs`; the actual count, confirmed by
+  `grep -n '#\[test\]' src/lib.rs` and by this run, is 4. Flagging the
+  discrepancy for the record — not a regression, just a miscount in the Red
+  report, and `src/lib.rs` itself was not touched by this phase.
+
+**Files touched.** `src/math.rs` only (the four method bodies).
+
+**Signature changes from Red's skeleton.** None.
+
+**Numbers proposed.** None — no thresholds or constants needed changing;
+this was pure arithmetic filling in already-decided signatures.
+
+**What I noticed but left for Refactor.** Red's own flagged compromises
+stand as Red left them (no operator-overload traits, `Vec2` not yet used by
+any caller outside its own tests, expected `dead_code` warnings should now
+be gone since the methods are exercised by tests) — none of that is in
+Green's lane to change. Self-diff (`git diff -- src/math.rs`) confirms the
+change is exactly the four method bodies: no dead compute, no stray doc
+drift, no leftover experiment code.
+
+**Self-diff.** Read the full diff before finishing (`git diff -- src/math.rs`):
+four hunks, one per method, each replacing a `let _ = ...; unimplemented!(...)`
+stub with the method's real body. Nothing else changed.
+
+**Committed.** `git add src/math.rs` followed by one commit for this phase's
+work (see git log).
+
