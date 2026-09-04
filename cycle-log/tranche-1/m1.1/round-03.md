@@ -238,3 +238,49 @@ of its own, no hard-to-reverse public interface (nothing outside this
 round calls `measure.rs` yet), blast radius contained to this still-in-
 flight milestone. Self-verified by re-reading the full diff cold against
 all 5 goals before committing; found nothing to revise.
+
+## Round 3 — orchestrator close-out
+
+**Verdict:** Advance. Independently re-ran `cargo test --lib`: 62 passed, 0
+failed, 0.01s — matches the pass's own report. `git status --short` clean
+apart from the unrelated untracked `test/` directory. `cargo fmt --check`
+reconfirmed as unchanged pre-existing drift only, not touched by this round.
+
+**Goals — met:**
+1. Native headless runner (`run_headless`), no wasm-bindgen dependency,
+   builds a `Grid` from a `Scenario` and steps it with a fixed per-call
+   `dt`. Met.
+2. JSON measurement (`Measurement::to_json`) with mass per material, cell
+   counts per material, tick count. Met — hand-rolled JSON, reasoned choice
+   over `serde` given the small fully-known shape.
+3. Exact-value test against `stone_and_water_pool()`, both as a struct and
+   as the literal JSON string, hand-derived (not implementation-echoed).
+   Met.
+4. Conservation smoke check: 0-step vs. 100-step run of the same fixture
+   produce exactly equal `materials`. Met.
+5. Fully programmatic, no-human-in-the-loop path test. Met.
+
+This closes milestone target 1 ("a scenario runs headless and emits JSON
+measurements, and a test asserts on them without a human in the loop") —
+first target of the milestone fully met and independently verified.
+
+**Timing roll-up (Round 3):** single pass, ~10 min including all reading
+per the pass's own report; well inside budget. Orchestrator verification
+~5 min.
+
+**Gaps/flags carried forward:**
+- `total_mass`'s unit is still whatever round 1's unpinned `density` unit
+  is — needs pinning before any round asserts a real numeric conservation
+  tolerance against it (M1.2+).
+- Hand-rolled JSON has no string-escaping; fine while every field is
+  numeric, revisit the day a string field is added.
+- `run_headless` assumes its `dt` argument matches its internal
+  `FixedTimestep`'s `dt` exactly (true by construction here); a future
+  caller wanting genuinely irregular per-call durations needs a different
+  entry point.
+- Unchanged from earlier rounds: out-of-bounds panic contract provisional;
+  `Scenario`'s owned `MaterialTable`; stray untracked `test/` dir; whole-
+  crate `cargo fmt` adoption deferred to the milestone-scope Refactor pass.
+
+Round 3 closed. Proceeding to re-plan round 4 (minimal renderer) per
+`cycle-milestone` §2.
