@@ -65,6 +65,32 @@ best move. Choose it.
 
 ---
 
+## 3a. Orchestrator self-dispatch, across long sessions
+
+A `cycle-tranche` or `cycle-milestone` run can itself run long enough that the
+orchestrating agent's own context becomes the bottleneck. When you need to hand
+a whole milestone (or tranche) off to isolate it from your own growing context,
+dispatch it as a **fresh, cold `Agent` call** (e.g. `subagent_type: "claude"`),
+not `subagent_type: "fork"`.
+
+This was learned the hard way, twice (tranche 0, M0.2 and M0.3): a forked agent
+inherits the caller's context, but it **cannot itself spawn further subagents**.
+Handed a whole milestone, it has no way to give `cycle-round`'s Red/Green/Refactor
+their own fresh, isolated `Agent` calls — the one thing `cycle-round` exists to
+guarantee — so it collapses the milestone into one continuous, unisolated pass.
+That silently throws away the cold-Refactor-catches-Green's-blind-spot property
+the whole phase design rests on.
+
+A cold agent has no such restriction: it can plan, then dispatch true isolated
+Red/Green/Refactor phases underneath itself exactly as `cycle-round` describes.
+It costs a short, self-contained prompt (point it at `PLAN.md`, the relevant
+`cycle-log/**` files, and which `cycle-*` skills to read) instead of free
+inherited context — a real cost, but a small one, and it buys back the phase
+isolation a fork quietly loses. Prefer it for any milestone- or tranche-level
+self-dispatch.
+
+---
+
 ## 4. Timing protocol
 
 At the very start of your phase, run `date -Is` and record it. Check the clock
