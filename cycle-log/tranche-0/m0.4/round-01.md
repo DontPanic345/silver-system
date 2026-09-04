@@ -252,3 +252,143 @@ stub with the method's real body. Nothing else changed.
 **Committed.** `git add src/math.rs` followed by one commit for this phase's
 work (see git log).
 
+---
+
+## Round 1 — Refactor — 2026-09-05T03:20:02+12:00 → 2026-09-05T03:21:30+12:00 (~2 min)
+
+**What I did.**
+
+Read `src/math.rs` cold (no memory of Red's or Green's reasoning), then
+`src/lib.rs` for context on the canvas convention it references. Ran
+`cargo test --lib`, `cargo build --lib`, `cargo build --bin native_viewer`,
+and `cargo clippy --lib`. Checked the doc comment/test agreement on the
+coordinate convention, the genuineness of the `Scalar` reasoning, and did an
+adversarial pass on the four arithmetic methods (semantics of `sub`'s
+"displacement from other to self" against its actual test, commutativity of
+`dot`, sign handling in `scale`, whether the convention-pin test would
+actually fail on a flipped convention). Made no code changes — the module
+already meets the round's goals and I found nothing worth changing within
+scope.
+
+**Successes.**
+
+Everything checked out:
+
+- **Convention pin vs. test agreement (focus a).** The doc comment states
+  `+y` is up (math/physics), explicitly contrasted with `src/lib.rs`'s `+y`
+  is down (canvas), and cross-references `UP`. The test
+  `up_convention_pins_math_physics_y_up_not_canvas_y_down` asserts
+  `UP.y > 0.0` and `UP == Vec2::new(0.0, 1.0)`. I checked this is a real
+  tripwire, not a tautology dressed as one: flipping `UP` to `(0.0, -1.0)`
+  (the exact silent-flip scenario the goal describes) fails both assertions
+  immediately. `moving_up_by_the_pinned_up_vector_increases_y` backs the same
+  pin with real `add` arithmetic rather than a static constant alone. Doc and
+  test genuinely agree — this is the one thing this milestone exists to get
+  right, and it's right.
+- **`Scalar` reasoning genuineness (focus b).** The doc comment's four bullet
+  points each tie to a specific stated project fact
+  (`CLAUDE.md`'s GPU direction, "determinism is architecture-contingent",
+  "conservation to a stated tolerance") rather than a generic "f32 is
+  faster/smaller" claim. It also states what would overturn the decision (a
+  measured `f32` drift past a tolerance) rather than treating it as
+  unrevisable. This reads as real engineering reasoning against this
+  project's actual direction, not a rationalization for whatever was fastest
+  to type.
+- **Arithmetic correctness (focus c).** Re-derived each method by hand
+  against its tests: `add`/`sub` are plain component-wise ops and correctly
+  inverse (`start.add(end.sub(start)) == end`, verified both symbolically and
+  by the passing test); `sub`'s doc ("displacement from `other` to `self`")
+  matches its own test's use (`end.sub(start)` is exactly the displacement
+  you'd add to `start` to reach `end`); `scale` handles positive, fractional,
+  and negative factors correctly (checked by hand against
+  `scale_stretches_both_components_uniformly`); `dot` is commutative by
+  construction (`x1*x2 + y1*y2`) and correctly signed for perpendicular
+  (`(1,0)·(0,1) = 0`) and aligned (`(2,0)·(3,0) = 6`) cases. No sign
+  inversions, no swapped operands, no off-by-one in either derived value.
+- Full suite green: `cargo test --lib` → **13 passed, 0 failed** (9
+  `math::tests::*` + 4 `tests::*` in `lib.rs`). Both `cargo build --lib` and
+  `cargo build --bin native_viewer` compile clean apart from the expected
+  `dead_code` warnings on `Vec2`/`Scalar`/`UP`/the four methods — expected
+  and already flagged by both prior phases, since nothing outside
+  `math`'s own test module calls any of it yet (goal 2/3 only asked for the
+  type to exist, not for a caller). `cargo clippy --lib` adds nothing new on
+  `src/math.rs` beyond the same dead-code warnings; its one substantive
+  finding (`tick % 2 == 0` → `tick.is_multiple_of(2)`) is in `src/lib.rs`,
+  outside this round's scope.
+
+**What was difficult, and where the time went.**
+
+Nothing was difficult — this was a clean read. Most of the ~2 minutes went
+into hand-deriving the arithmetic against each test (rather than trusting
+"the test passed" alone) and into deliberately trying to construct a flipped-
+convention scenario in my head to confirm the pin test would actually catch
+it, per the round's stated focus.
+
+**Compromises I made.**
+
+None — I made no changes.
+
+**Gaps and flags.**
+
+- `dead_code` warnings on all of `math.rs`'s public surface are expected
+  right now and will resolve once a later round (fixed-timestep harness or a
+  grid primitive, per Red's own flag) gives `Vec2`/`Scalar` a real caller.
+  Not a defect of this round; flagging again only so a future Refactor
+  doesn't mistake newly-*introduced* dead code for this same expected case.
+- No operator-overload traits (`Add`/`Sub`/`Mul`) — Red's compromise, and I
+  agree it's correctly out of this round's scope (the goal names the
+  operations, not a calling convention). Left as a call for whichever later
+  round first wants `a + b` ergonomics.
+- Outside my scope: `cargo clippy --lib` flags `src/lib.rs:124`
+  (`tick % 2 == 0` → `.is_multiple_of(2)`) — a real, harmless style
+  suggestion in a file this round's scope excludes. Noting for whichever
+  phase next touches `lib.rs`.
+- No correctness findings anywhere in `src/math.rs`.
+
+**General comments.**
+
+Adversarial pass tried and found nothing: hand-derivation of all four
+arithmetic methods against their tests; deliberately imagining the
+convention-flip failure mode the goal describes and confirming the test
+structure actually catches it (not just documents it); checking `dot`'s
+commutativity and sign behaviour by construction rather than trusting the
+one property test; re-running the full suite plus `clippy` rather than
+relying on Green's reported numbers. That is useful information for the next
+planner: this module is small enough, and was built carefully enough, that a
+30-minute adversarial pass over it surfaces nothing — the milestone's "small,
+boring substrate, got right once" framing held.
+
+**The verdict: Advance.**
+
+All three round goals are met to a sufficient standard:
+
+1. `Scalar = f32` is decided with genuine, project-specific reasoning in a
+   doc comment (not a silent default) — verified against focus (b).
+2. `Vec2` has `add`, `sub`, `scale`, `dot`, all arithmetically correct and
+   tested with both scenario and property tests.
+3. The math/physics `+y`-up convention is pinned in a doc comment stated
+   explicitly in relation to `src/lib.rs`'s `+y`-down canvas convention, and
+   backed by a test (`up_convention_pins_math_physics_y_up_not_canvas_y_down`)
+   that would genuinely fail if the convention were silently flipped —
+   verified against focus (a), the exact bug class this milestone exists to
+   prevent.
+
+Suite is green (13/13), both build targets compile clean modulo expected
+dead-code warnings, and I found no correctness issues in the arithmetic. I
+made no changes because none were needed — folding-in and adversarial
+passes both came up clean. Recommend proceeding to whatever the milestone
+plan has next for M0.4 (the fixed-timestep harness and/or a grid primitive,
+per the milestone's own framing).
+
+**Suite runtime.** `cargo test --lib` runs in ~0.00s reported (13 tests,
+trivial arithmetic — no performance concern). Acceptable; nothing to
+collapse or flag.
+
+**What I would have done with another 30 minutes.** Nothing further inside
+this round's scope — I'd instead look one round ahead: sketch what the
+fixed-timestep harness's first test needs from `Vec2` (does it need `Vec2`
+constructed from a grid index, a `length`/`length_squared`, or is add/scale
+alone enough for a first Euler-integration step?) so the next Red isn't
+guessing at `Vec2`'s surface from scratch. Left undone since it's next
+round's planning work, not this round's refactor.
+
