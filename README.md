@@ -15,6 +15,13 @@ a phase is one agent's turn. The cycle is defined by the skills in
 is the top of it — it runs indefinitely, chaining from tranche to tranche once
 `PLAN.md`'s are done. Round logs live under `cycle-log/`.
 
+## Live deploy
+
+Every push to `main` builds the `viewer` crate to wasm and publishes `www/` to
+GitHub Pages via `.github/workflows/deploy-pages.yml`:
+
+**https://dontpanic345.github.io/silver-system/**
+
 ## Building and running the `viewer` crate
 
 `viewer` (M0.1, the toolchain proving ground) compiles to wasm32, loads in a
