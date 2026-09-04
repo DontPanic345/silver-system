@@ -2,64 +2,92 @@
 //!
 //! Round 1 proved the chain from `cargo build --target wasm32-unknown-unknown`
 //! through `wasm-bindgen` to a real browser canvas: a single static coloured
-//! rectangle. Round 2's job is to prove the chain also carries a *running*
-//! program — the rectangle must visibly change once per fixed tick — and to
-//! remove the hand-duplicated constants Round 1's Refactor flagged forward.
+//! rectangle. Round 2 proved the chain also carries a *running* program — the
+//! rectangle visibly changes once per fixed tick — and removed the
+//! hand-duplicated constants Round 1's Refactor flagged forward.
 //!
 //! Rendering approach unchanged from round 1: canvas 2D via
 //! `wasm-bindgen`/`web-sys`. See `cycle-log/tranche-0/m0.1/round-01.md` for
 //! why.
 //!
-//! ## Round 2 tick mechanism (decided in Red; Green fills in the marked stubs)
+//! ## Round 4 retrofit: the tick is now driven by `FixedTimestep`
 //!
-//! JS owns the wall-clock timer (a plain `setInterval` in `www/index.html`);
-//! Rust owns the tick counter and the decision of what the rectangle should
-//! look like at a given tick. Every timer fire calls the exported
-//! [`tick_and_draw`], which is expected to advance a crate-local counter,
-//! decide the colour for the new tick via [`color_for_tick`], repaint via
-//! [`paint_rect`], and return the new count so JS (and the headless test) can
-//! observe it advancing. This is explicitly NOT the shared M0.4
-//! fixed-timestep harness — that harness doesn't exist yet and will retrofit
-//! this crate later; this is a small, local, throwaway-if-need-be counter.
+//! Round 2 shipped this with an ad-hoc `TICK: Cell<u32>` counter, incremented
+//! by exactly one on every call to [`tick_and_draw`] — a known, flagged
+//! shortcut (see the milestone's round-04 log for why). M0.4 round 3 built
+//! the shared [`timestep::FixedTimestep`] accumulator harness precisely to
+//! replace throwaway counters like that one; this round wires it in.
+//!
+//! JS still owns the wall-clock timer (`setInterval` in `www/index.html`),
+//! but it now measures the real elapsed time between fires (via
+//! `performance.now()` deltas) and passes that duration, in seconds, to
+//! [`tick_and_draw`]. Rust feeds the duration to a crate-local
+//! [`timestep::FixedTimestep`] via [`advance_tick`], which decides — per the
+//! harness's own accumulator semantics — how many fixed steps (0, 1, or more)
+//! have elapsed since the last call, and advances the tick count by that many
+//! (not by a bare `+1`). [`color_for_tick`] and [`paint_rect`] are unchanged;
+//! only the mechanism deciding *how far* the tick count moves per call is
+//! new.
+//!
+//! [`advance_tick`] is deliberately free of any DOM/`web-sys` dependency —
+//! same reasoning as `timestep.rs` itself — so it is unit-testable directly
+//! under `cargo test --lib`, with no browser involved. [`tick_and_draw`] is
+//! the thin `#[wasm_bindgen]` wrapper that calls it and then repaints.
 //!
 //! ## Single source of truth for shared constants (round 2, goal 2)
 //!
 //! Round 1 left the expected colour/coordinate values hand-duplicated as
 //! literals in both this file and `tests/e2e/canvas_rectangle.test.mjs`. Fixed
-//! here by exporting plain `#[wasm_bindgen]` getter functions for every value
-//! the JS test needs (`rect_x`, `rect_y`, `rect_w`, `rect_h`,
-//! `rect_color_rgb`, `rect_color_rgb_alt`, `tick_interval_ms`). The JS test
-//! calls these on the already-loaded wasm module at runtime instead of
-//! re-declaring the numbers — there is exactly one place these values are
-//! written down. The getters are plumbing (a return statement, no decision to
-//! make), so they are implemented for real here rather than stubbed; the
-//! genuinely new *logic* (which colour a given tick gets, how the counter
-//! advances) is left as `todo!()` for Green.
+//! by exporting plain `#[wasm_bindgen]` getter functions for every value the
+//! JS test needs (`rect_x`, `rect_y`, `rect_w`, `rect_h`, `rect_color_rgb`,
+//! `rect_color_rgb_alt`, `tick_interval_ms`). The JS test calls these on the
+//! already-loaded wasm module at runtime instead of re-declaring the
+//! numbers — there is exactly one place these values are written down.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 // M0.4: shared math primitives (Scalar, Vec2). Not used by this file's own
 // canvas logic yet — see src/math.rs for what it is and why.
 mod math;
 
 // M0.4 round 3: fixed-timestep accumulator harness (Scalar dt in, step
-// count out). Not wired into this file's own tick loop yet — see
-// src/timestep.rs for what it is and why; a later round retrofits this
-// file's ad-hoc TICK counter to use it.
+// count out). Round 4 wires this into tick_and_draw via advance_tick below
+// — see src/timestep.rs for what it is and why.
 mod timestep;
+
+use math::Scalar;
+use timestep::FixedTimestep;
 
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::CanvasRenderingContext2d;
 
 thread_local! {
-    /// Crate-local tick counter driving [`tick_and_draw`]. Wasm in a browser
-    /// tab is single-threaded, so a `thread_local!` `Cell` is sufficient —
-    /// this is explicitly the small, local, throwaway-if-need-be counter
-    /// described in the module doc comment, not the shared M0.4
-    /// fixed-timestep harness.
+    /// The crate-local tick count driving [`tick_and_draw`]'s colour
+    /// decision. Wasm in a browser tab is single-threaded, so a
+    /// `thread_local!` `Cell` is sufficient. Unlike round 2's ad-hoc
+    /// counter, this is never incremented directly by a call —
+    /// [`advance_tick`] advances it by whatever step count
+    /// [`FixedTimestep::advance`] reports (0, 1, or occasionally more),
+    /// never by a bare `+1` per call.
     static TICK: Cell<u32> = const { Cell::new(0) };
+
+    /// The shared M0.4 fixed-timestep accumulator driving [`advance_tick`].
+    /// Built with `dt` equal to [`TICK_INTERVAL_MS`] converted to seconds, so
+    /// the harness's fixed step cadence matches the cadence the rectangle was
+    /// already animating at pre-retrofit — the externally-observable
+    /// behaviour (colour alternates roughly every `TICK_INTERVAL_MS`) is
+    /// preserved, even though the *mechanism* deciding when a step elapses is
+    /// now real elapsed-time accounting rather than "one step per call".
+    static TIMESTEP: RefCell<FixedTimestep> =
+        RefCell::new(FixedTimestep::new(DT_SECONDS));
 }
+
+/// [`TICK_INTERVAL_MS`] expressed in seconds — the fixed step size `dt` fed
+/// to [`TIMESTEP`]'s [`FixedTimestep`]. `Scalar` (`f32`) division of small
+/// constants like this is exact enough that no tolerance is needed when
+/// comparing against it directly.
+pub const DT_SECONDS: Scalar = TICK_INTERVAL_MS as Scalar / 1000.0;
 
 /// The colour painted on even ticks (including tick 0), as 8-bit sRGB.
 pub const RECT_COLOR_RGB: (u8, u8, u8) = (200, 60, 60);
@@ -141,27 +169,49 @@ pub fn draw(canvas_id: &str) {
     paint_rect(canvas_id, color_for_tick(0));
 }
 
-/// Advances the crate-local tick counter by one, repaints the rectangle for
-/// the new tick via [`color_for_tick`] and [`paint_rect`], and returns the
-/// new tick count.
+/// Feeds `frame_duration_secs` of real elapsed time to the crate-local
+/// [`FixedTimestep`] (`TIMESTEP`) and advances the crate-local tick count
+/// (`TICK`) by however many fixed steps the harness reports elapsed — zero,
+/// one, or (per the harness's own spiral-of-death-capped accumulator
+/// semantics from round 3) occasionally more than one. Returns the tick
+/// count *after* advancing.
 ///
-/// Called by `www/index.html` on a fixed `setInterval` (period
-/// [`TICK_INTERVAL_MS`], read via [`tick_interval_ms`]) — this function is
-/// what turns the artifact into proof of a *running* program rather than a
-/// single paint call. The tick counter itself (its storage — a `Cell`,
-/// `AtomicU32`, or similar — is Green's choice) is crate-local state, not the
-/// shared M0.4 fixed-timestep harness.
+/// This is the round 4 retrofit's core new decision: unlike round 2's ad-hoc
+/// counter (which advanced by exactly one on every call regardless of how
+/// much time had actually passed), the tick count here only moves as far as
+/// real elapsed time honestly earns, and a call with too little elapsed time
+/// advances it by zero.
 ///
-/// Left as a stub for Green: both the counter's storage and the
-/// increment-then-paint sequence are new logic this round, not existing
+/// Deliberately free of any DOM/`web-sys` dependency (unlike
+/// [`tick_and_draw`], which wraps this and then repaints) so it is directly
+/// unit-testable under `cargo test --lib` — see the `tests` module below and
+/// `src/timestep.rs`'s own tests for the same pattern.
+///
+/// Left as a stub for Green: the decision of how the harness's step count
+/// turns into the new tick count is new logic this round, not existing
 /// plumbing.
+fn advance_tick(_frame_duration_secs: Scalar) -> u32 {
+    todo!(
+        "feed `frame_duration_secs` to TIMESTEP.advance(...) to get a step \
+         count, advance TICK by that many steps (not by a bare +1), and \
+         return the new tick count"
+    )
+}
+
+/// Advances the tick count via [`advance_tick`] from `frame_duration_secs` of
+/// real elapsed time, repaints the rectangle for the resulting tick via
+/// [`color_for_tick`] and [`paint_rect`], and returns the new tick count.
+///
+/// Called by `www/index.html` once per timer/frame fire, now passing the
+/// real elapsed time (in seconds) since the previous call — measured via
+/// `performance.now()` deltas in JS — rather than being called on a bare
+/// per-tick assumption. This function is thin plumbing (wire
+/// [`advance_tick`]'s result into [`paint_rect`]); the actual decision logic
+/// lives in [`advance_tick`], which is why it is implemented for real here
+/// while [`advance_tick`] is left as a stub.
 #[wasm_bindgen]
-pub fn tick_and_draw(canvas_id: &str) -> u32 {
-    let new_tick = TICK.with(|t| {
-        let new_tick = t.get() + 1;
-        t.set(new_tick);
-        new_tick
-    });
+pub fn tick_and_draw(canvas_id: &str, frame_duration_secs: f32) -> u32 {
+    let new_tick = advance_tick(frame_duration_secs);
     paint_rect(canvas_id, color_for_tick(new_tick));
     new_tick
 }
@@ -328,5 +378,81 @@ mod tests {
         assert_eq!(color_for_tick(1), RECT_COLOR_RGB_ALT, "tick 1 should be the alt colour");
         assert_eq!(color_for_tick(2), RECT_COLOR_RGB, "tick 2 should be back to the base colour");
         assert_eq!(color_for_tick(3), RECT_COLOR_RGB_ALT, "tick 3 should be the alt colour");
+    }
+
+    // --- Round 4 retrofit: advance_tick (the FixedTimestep-driven replacement
+    // for round 2's ad-hoc `TICK += 1` per call). No browser/DOM involved —
+    // these exercise advance_tick directly, the same way src/timestep.rs's
+    // own tests exercise FixedTimestep directly. Currently red: advance_tick
+    // is a todo!() stub. ---
+
+    /// Scenario (durable, restates round 4 goal 1's "a duration less than one
+    /// dt does not advance the tick"): a call carrying less than one fixed
+    /// step's worth of real elapsed time must not advance the tick count —
+    /// proof this is now honest elapsed-time accounting, not a bare +1 per
+    /// call.
+    #[test]
+    fn advance_tick_with_duration_under_one_dt_does_not_advance_the_tick() {
+        let tick = advance_tick(DT_SECONDS / 2.0);
+        assert_eq!(
+            tick, 0,
+            "half a dt's worth of elapsed time should not yet advance the tick count"
+        );
+    }
+
+    /// Scenario (durable, restates round 4 goal 1's "several dts advances the
+    /// tick count correctly and the colour matches the new parity"): a single
+    /// call carrying several fixed steps' worth of real elapsed time advances
+    /// the tick count by that many steps in one call (not by 1), and
+    /// `color_for_tick` of the resulting tick is what JS/the e2e test would
+    /// see painted.
+    #[test]
+    fn advance_tick_with_several_dts_advances_by_that_many_steps_and_colour_matches_parity() {
+        let tick = advance_tick(DT_SECONDS * 3.0);
+        assert_eq!(
+            tick, 3,
+            "three dts' worth of elapsed time in one call should advance the tick by 3, not 1"
+        );
+        assert_eq!(
+            color_for_tick(tick),
+            RECT_COLOR_RGB_ALT,
+            "tick 3 is odd, so the alt colour should be what gets painted"
+        );
+    }
+
+    /// Scenario (durable, restates round 4 goal 1's "0, 1, or occasionally
+    /// more than 1 step per call, per the harness's own accumulator
+    /// semantics"): real elapsed time arriving in several small,
+    /// sub-dt-sized calls — the same pattern `www/index.html`'s
+    /// `setInterval` produces — still accumulates correctly across calls: no
+    /// steps until enough real time has actually passed, and exactly one
+    /// once it has.
+    #[test]
+    fn advance_tick_accumulates_partial_durations_across_calls_until_a_full_dt_elapses() {
+        let half_dt = DT_SECONDS / 2.0;
+        assert_eq!(
+            advance_tick(half_dt),
+            0,
+            "first half-dt call should not yet advance the tick"
+        );
+        assert_eq!(
+            advance_tick(half_dt),
+            1,
+            "second half-dt call completes one full dt, so the tick should now be 1"
+        );
+    }
+
+    /// Green guard test (pins a relationship, not a behaviour): `DT_SECONDS`
+    /// is `TICK_INTERVAL_MS` converted to seconds, not an independently
+    /// chosen number — the fixed-step cadence must match the cadence
+    /// `www/index.html` and the e2e test already agree on via
+    /// `tick_interval_ms()`.
+    #[test]
+    fn dt_seconds_matches_tick_interval_ms_converted_to_seconds() {
+        let expected = TICK_INTERVAL_MS as Scalar / 1000.0;
+        assert!(
+            (DT_SECONDS - expected).abs() < 1e-6,
+            "expected DT_SECONDS ({DT_SECONDS}) to equal TICK_INTERVAL_MS/1000 ({expected})"
+        );
     }
 }
