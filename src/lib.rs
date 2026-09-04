@@ -70,6 +70,13 @@ pub mod grid;
 // see src/scenario.rs.
 pub mod scenario;
 
+// M1.1 round 3: the headless runner, the first of `Scenario`'s two
+// consumers — builds a Grid from a Scenario, steps it, and measures it to
+// JSON with no browser/DOM involved. See src/measure.rs. `pub` for the same
+// reason material/grid/scenario are: later rounds and integration tests
+// build on it directly.
+pub mod measure;
+
 use math::Scalar;
 use timestep::FixedTimestep;
 
