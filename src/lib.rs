@@ -42,6 +42,12 @@ use std::cell::Cell;
 // canvas logic yet — see src/math.rs for what it is and why.
 mod math;
 
+// M0.4 round 3: fixed-timestep accumulator harness (Scalar dt in, step
+// count out). Not wired into this file's own tick loop yet — see
+// src/timestep.rs for what it is and why; a later round retrofits this
+// file's ad-hoc TICK counter to use it.
+mod timestep;
+
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::CanvasRenderingContext2d;
