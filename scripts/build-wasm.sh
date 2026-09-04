@@ -8,7 +8,11 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-cargo build --release --target wasm32-unknown-unknown
+# --lib only: M0.3 added a native-only binary (src/bin/native_viewer.rs,
+# behind a `cfg(not(target_arch = "wasm32"))` dependency) that doesn't build
+# for this target and doesn't need to — the wasm-bindgen step below only
+# ever reads the library's cdylib output.
+cargo build --release --lib --target wasm32-unknown-unknown
 
 # wasm-bindgen-cli's version must match the `wasm-bindgen` crate version
 # resolved in Cargo.lock, or the generated glue will refuse to load at

@@ -156,6 +156,31 @@ pub fn tick_and_draw(canvas_id: &str) -> u32 {
     new_tick
 }
 
+/// Renders one tick's frame as a flat RGB8 buffer (`width * height * 3`
+/// bytes, row-major, no padding) — the native-binary fallback's equivalent of
+/// [`paint_rect`], but pure (no DOM, no canvas) so it works on any target,
+/// wasm or native. Fills the whole frame with black, then the rectangle at
+/// `(RECT_X, RECT_Y)` in [`color_for_tick`]'s colour for `tick`, using the
+/// same coordinate convention pinned above (origin top-left, y grows down).
+///
+/// M0.3's native fallback (`src/bin/native_viewer.rs`) is the only caller;
+/// kept here rather than in the binary so the geometry/colour constants and
+/// `color_for_tick` stay the single source of truth for both the wasm and
+/// native rendering paths.
+pub fn render_frame(tick: u32, width: u32, height: u32) -> Vec<u8> {
+    let (r, g, b) = color_for_tick(tick);
+    let mut buf = vec![0u8; (width * height * 3) as usize];
+    for y in RECT_Y..(RECT_Y + RECT_H).min(height) {
+        for x in RECT_X..(RECT_X + RECT_W).min(width) {
+            let i = ((y * width + x) * 3) as usize;
+            buf[i] = r;
+            buf[i + 1] = g;
+            buf[i + 2] = b;
+        }
+    }
+    buf
+}
+
 /// Runs automatically when the wasm module is instantiated in the browser
 /// (see the `#[wasm_bindgen(start)]` attribute). Paints tick 0; the running
 /// page (`www/index.html`) is responsible for calling [`tick_and_draw`] on
@@ -264,6 +289,29 @@ mod tests {
     /// that makes the rectangle's change visible — even ticks (including
     /// tick 0) get `RECT_COLOR_RGB`, odd ticks get `RECT_COLOR_RGB_ALT`.
     /// Currently red: `color_for_tick` is a stub.
+    /// M0.3 (native fallback): `render_frame` paints the rectangle at the
+    /// pinned geometry in `color_for_tick`'s colour for that tick, and
+    /// leaves the rest of the frame black — pins the pure buffer format
+    /// `src/bin/native_viewer.rs` relies on, independent of any PNG codec.
+    #[test]
+    fn render_frame_paints_rect_in_tick_colour() {
+        let (w, h) = (200u32, 150u32);
+        let frame = render_frame(0, w, h);
+        assert_eq!(frame.len(), (w * h * 3) as usize);
+        let px = |x: u32, y: u32| {
+            let i = ((y * w + x) * 3) as usize;
+            (frame[i], frame[i + 1], frame[i + 2])
+        };
+        assert_eq!(px(RECT_X, RECT_Y), RECT_COLOR_RGB, "tick 0 rect pixel");
+        assert_eq!(px(0, 0), (0, 0, 0), "outside the rect should stay black");
+        let frame1 = render_frame(1, w, h);
+        let px1 = |x: u32, y: u32| {
+            let i = ((y * w + x) * 3) as usize;
+            (frame1[i], frame1[i + 1], frame1[i + 2])
+        };
+        assert_eq!(px1(RECT_X, RECT_Y), RECT_COLOR_RGB_ALT, "tick 1 rect pixel");
+    }
+
     #[test]
     fn color_for_tick_alternates_by_parity() {
         assert_eq!(color_for_tick(0), RECT_COLOR_RGB, "tick 0 should be the base colour");

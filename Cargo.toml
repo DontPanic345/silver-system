@@ -21,5 +21,11 @@ features = [
   "Window",
 ]
 
+# M0.3 native fallback: only the native binary (src/bin/native_viewer.rs)
+# needs a PNG encoder, and only on a non-wasm target — keeping it
+# target-specific means it never touches the wasm32 build.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+
 [profile.release]
 opt-level = "s"
