@@ -1,11 +1,12 @@
 //! Shared math primitives for world-space / physics quantities: the scalar
-//! numeric type and a 2D vector built on it.
+//! numeric type, a 2D vector, and an integer grid-cell index built on them.
 //!
 //! This module is M0.4's "small, boring substrate" (see the milestone's
 //! intent in `cycle-log/tranche-0/m0.4/plan.md`): later tranches reach for
-//! `Scalar` and `Vec2` rather than each inventing their own. Nothing here is
-//! wired into rendering yet — `src/lib.rs`'s canvas code is untouched by this
-//! module and still works entirely in its own pixel coordinates.
+//! `Scalar`, `Vec2` and `GridIndex` rather than each inventing their own.
+//! Nothing here is wired into rendering yet — `src/lib.rs`'s canvas code is
+//! untouched by this module and still works entirely in its own pixel
+//! coordinates.
 
 /// The scalar type every world-space / physics quantity in this crate is
 /// expressed in.
@@ -172,9 +173,11 @@ impl GridIndex {
     /// *center*, under a uniform `cell_size` and the cell-center convention
     /// documented on [`GridIndex`] itself.
     ///
-    /// This is the round's new *decision made concrete as arithmetic* (the
-    /// convention doc comment says what should happen; this is where it
-    /// actually happens), so it is left as a stub for Green.
+    /// `cell_size` is assumed to be a positive world-space cell dimension.
+    /// This function does not validate that assumption (no other primitive
+    /// in this module validates its inputs either); a zero or negative
+    /// `cell_size` produces arithmetically-consistent but physically
+    /// meaningless output rather than a panic.
     pub fn center(self, cell_size: Scalar) -> Vec2 {
         Vec2::new(
             (self.i as Scalar + 0.5) * cell_size,
