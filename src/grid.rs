@@ -614,4 +614,72 @@ mod tests {
             );
         }
     }
+
+    // --- Reference grid / performance budget (M1.1 round 5) ---
+
+    /// Timing measurement, not a correctness scenario — `#[ignore]`d by
+    /// default per the fast-path convention (`README.md`'s "Test tagging /
+    /// fast path" section: a timing run is not "fast" in the unit-test
+    /// sense). Run it explicitly with:
+    ///
+    /// ```sh
+    /// cargo test --lib -- --ignored reference_grid_step_timing --nocapture
+    /// ```
+    ///
+    /// (add `--release` before `--lib` for an optimized-build number).
+    ///
+    /// Builds the reference grid — `REFERENCE_GRID_WIDTH` x
+    /// `REFERENCE_GRID_HEIGHT` cells — and times `MEASURED_STEPS` calls to
+    /// the existing, unmodified `Grid::step`/`FixedTimestep` path, after
+    /// `WARMUP_STEPS` untimed steps to let allocator/cache effects settle.
+    /// Reports the average wall-clock time per step to stdout.
+    ///
+    /// See `cycle-log/tranche-1/m1.1/round-05.md` for the chosen grid size's
+    /// reasoning and the measured number this run produced on the dev
+    /// machine at the time this round closed — this test is what makes that
+    /// number reproducible/re-derivable, not a restatement of it. The only
+    /// assertion here is a generous sanity ceiling, not the recorded budget
+    /// itself: this stays a measurement harness a later round can re-run to
+    /// check for a real regression, not a brittle timing-dependent pass/fail
+    /// gate tied to one dev machine's exact number.
+    const REFERENCE_GRID_WIDTH: usize = 1024;
+    const REFERENCE_GRID_HEIGHT: usize = 1024;
+
+    #[test]
+    #[ignore]
+    fn reference_grid_step_timing() {
+        use std::time::Instant;
+
+        const WARMUP_STEPS: u32 = 5;
+        const MEASURED_STEPS: u32 = 50;
+        const DT: Scalar = 1.0 / 60.0;
+
+        let mut grid = Grid::new(REFERENCE_GRID_WIDTH, REFERENCE_GRID_HEIGHT, AIR);
+        let mut timestep = FixedTimestep::new(DT);
+
+        for _ in 0..WARMUP_STEPS {
+            grid.step(&mut timestep, DT);
+        }
+
+        let start = Instant::now();
+        for _ in 0..MEASURED_STEPS {
+            grid.step(&mut timestep, DT);
+        }
+        let elapsed = start.elapsed();
+        let per_step = elapsed / MEASURED_STEPS;
+
+        println!(
+            "reference grid {REFERENCE_GRID_WIDTH}x{REFERENCE_GRID_HEIGHT} \
+             ({} cells): {MEASURED_STEPS} measured steps (after {WARMUP_STEPS} \
+             warm-up steps) in {elapsed:?} total, average {per_step:?} per step",
+            REFERENCE_GRID_WIDTH * REFERENCE_GRID_HEIGHT
+        );
+
+        assert!(
+            per_step.as_secs_f64() < 1.0,
+            "reference-grid step took {per_step:?} on average — far beyond a sane \
+             sanity ceiling, suggesting a real regression rather than ordinary \
+             machine variance"
+        );
+    }
 }

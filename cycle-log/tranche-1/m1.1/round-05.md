@@ -78,3 +78,228 @@ Fresh cold `Agent` (`subagent_type: "claude"`), given: this round file,
 milestone plan (`cycle-log/tranche-1/m1.1/plan.md`), and Round 1-4's
 close-outs for context (grid representation, the identity step, existing
 fast-path convention).
+
+## Round 5 — single-pass — 2026-09-05T11:00:47+12:00 → 2026-09-05T11:04:30+12:00 (~4 min)
+
+**What I did.**
+
+Read `CLAUDE.md`, `cycle-contract`, `cycle-plan`, `cycle-round`, `cycle-green`,
+this round file, the milestone plan, `src/grid.rs` (including all four prior
+rounds' tests), `src/timestep.rs`, `src/scenario.rs`, `src/measure.rs`,
+Round 1's full close-out (for the grid/material shape and the fast-path
+convention's origin), and `README.md`'s "Test tagging / fast path" section.
+
+Added one new, `#[ignore]`d test to `src/grid.rs`'s existing `#[cfg(test)]
+mod tests` — `reference_grid_step_timing` — plus two `const`s
+(`REFERENCE_GRID_WIDTH`, `REFERENCE_GRID_HEIGHT`) naming the reference grid
+size. No other file touched; `Grid::step`, `Grid::step_once`, `FixedTimestep`,
+`Scenario`, and `measure.rs` are all byte-for-byte unchanged — confirmed by
+`git diff --stat` showing only `src/grid.rs`, and by the diff itself being
+purely additive (new test + two consts appended at the end of the existing
+`mod tests` block, nothing removed or reordered).
+
+**Why an in-crate `#[ignore]`d test, not a new binary or an integration
+test under `tests/`:** `FixedTimestep` (`src/lib.rs` line 58: `mod
+timestep;`, not `pub mod`) is crate-private — an integration test in
+`tests/` or a `src/bin/` binary is a separate crate from `viewer`'s
+perspective and cannot name `FixedTimestep` to build one itself. Rather than
+loosen that module's visibility (a real, if small, production-code change,
+and out of this round's additive-only scope) just to relocate a test, I put
+the timing test inside `src/grid.rs` itself, where `Grid::step`'s existing
+tests already construct `FixedTimestep` values directly. This keeps the
+round's diff to "add a test", not "add a test and change a visibility
+boundary".
+
+## Reference grid / performance budget
+
+**Reference grid size: 1024 x 1024 cells (1,048,576 cells total).**
+
+**Reasoning.** Large enough to be a meaningful stand-in for "the large
+universe" the north star names — several orders of magnitude past a toy
+grid (the milestone's own fixture, `stone_and_water_pool`, is 6x4 = 24
+cells; a 1024x1024 grid is ~43,700x that), and past what any single on-screen
+"terrarium" view plausibly renders 1:1 at once, so the number this round
+records is honestly a budget for the *underlying* substrate, not for
+whatever window onto it a later renderer actually draws. Small enough that:
+(a) it is a round power-of-two, easy to reason about and to scale up/down
+from later without arithmetic surprises; (b) even at this milestone's
+identity-only step cost, timing it stays comfortably inside a fast dev-loop
+budget (worst case observed below, ~15ms/step debug, ~2ms/step release —
+both far under a single test's or a single interactive frame's budget); (c)
+it is small enough that a future, much heavier per-cell physics step (M1.2+)
+will not make this same reference size unusable as a benchmark — there is
+headroom before 1024x1024 itself becomes the bottleneck rather than the
+per-cell work.
+
+**Methodology.** A native (no wasm/browser), in-crate `#[test]`,
+`reference_grid_step_timing` in `src/grid.rs`, `#[ignore]`d by default
+(matches Round 1's fast-path convention — a timing run is not "fast" in the
+unit-test sense). Run explicitly with:
+
+```sh
+cargo test --lib -- --ignored reference_grid_step_timing --nocapture
+# or, for the optimized-build number:
+cargo test --release --lib -- --ignored reference_grid_step_timing --nocapture
+```
+
+Builds a `Grid::new(1024, 1024, AIR)`, a `FixedTimestep::new(1.0 / 60.0)`,
+takes **5 warm-up steps** (untimed, via the existing, unmodified
+`Grid::step`) to let allocator/cache effects settle, then times **50
+measured steps** via `Grid::step` calls (each fed `dt = 1.0 / 60.0`, so each
+call elapses exactly one step) wrapped in `std::time::Instant::now()` /
+`.elapsed()`, and reports `elapsed / 50` as the average per-step time. The
+stepping mechanism exercised is exactly `Grid::step` → `Grid::step_once`
+(identity transform, unmodified this round) → `FixedTimestep::advance` — the
+same path every other round in this milestone already tests, not a
+special-cased fast loop.
+
+**Machine context.** This dev container: 16 logical CPUs, Intel(R) Core(TM)
+Ultra 9 285H, 15Gi RAM. A dev container, not dedicated/isolated benchmarking
+hardware — this number is a budget stand-in for later milestones to hold
+themselves to, not a marketing claim, and is expected to vary run-to-run and
+machine-to-machine (see the numbers below, which already show ~10-15%
+variance run-to-run on identical code).
+
+**Measured numbers** (`viewer 0.1.0`, `1024x1024` = 1,048,576 cells, 50
+measured steps after 5 warm-up steps):
+
+| Build              | Total (50 steps) | Average per step |
+|---------------------|-------------------|-------------------|
+| debug (`cargo test --lib`)          | 742.87ms | 14.86ms |
+| debug (`cargo test --lib`, rerun)   | 662.02ms | 13.24ms |
+| release (`cargo test --release --lib`) | 109.46ms | 2.19ms |
+| release (`cargo test --release --lib`, rerun) | 95.30ms | 1.91ms |
+
+**Recorded per-step budget for M1.7 to cite: ~2.0ms/step (release build) at
+the 1024x1024 reference grid, on this dev container**, with the debug-build
+number (~14ms/step) recorded alongside for anyone iterating without
+`--release`. Both numbers are for this milestone's **identity-only** step —
+they measure the stepping *mechanism's* overhead (loop + double-buffer
+swap + `FixedTimestep` accounting), not any real per-cell physics cost, since
+M1.1 deliberately has none yet (see `src/grid.rs`'s `step_once` doc comment).
+Real per-material behaviour arriving in M1.2+ will add to this baseline, not
+replace it — this number is the floor, not the whole later budget.
+
+**Test results.**
+
+- `cargo test --lib`: 65 passed, 1 ignored (the new timing test, by design),
+  0 failed, 0.01s.
+- `cargo test`: all of the above plus `tests/native_fallback.rs` and
+  `tests/render_native.rs` (both native-subprocess integration tests) pass;
+  doc-tests: 0 (none exist), 0 failed.
+- `cargo build --lib --target wasm32-unknown-unknown`: compiles clean, no
+  errors, no warnings, in 0.34s (incremental).
+- `cargo test --lib -- --ignored reference_grid_step_timing --nocapture`
+  (both debug and `--release`): confirmed passing, output captured above.
+
+**Per-goal — met/not-met.**
+
+1. **Choose and record a reference grid size, with reasoning.** Met —
+   1024x1024, reasoning above.
+2. **Time a step of that reference grid using the existing
+   `Grid::step`/`FixedTimestep` path (unmodified), native only.** Met —
+   `reference_grid_step_timing` calls `Grid::step` exactly as every other
+   round's tests do; no wasm/browser timing attempted; `Grid::step`,
+   `Grid::step_once`, and `FixedTimestep` are byte-for-byte unchanged
+   (`git diff` shows only additions).
+3. **Record the number and how it was measured** (machine context,
+   methodology, resulting per-step budget). Met — this section.
+4. **A test or checked-in fixture makes the timing reproducible.** Met —
+   `reference_grid_step_timing`, `#[ignore]`d, checked into `src/grid.rs`,
+   re-runnable with the documented command; not a one-off number that only
+   exists as prose.
+5. **No production behaviour changes.** Met — the diff is one new
+   `#[ignore]`d test plus two `const`s, nothing else; `Grid::step`'s
+   identity/no-op semantics are untouched (confirmed both by reading the
+   diff and by the identity-transform tests in the same file, already
+   present before this round, still passing unchanged).
+
+**Successes.**
+
+- All five goals met, independently verifiable by anyone re-running the
+  documented command — the number in this report is not the only place it
+  exists.
+- Found a real constraint (`FixedTimestep`'s crate-private visibility) that
+  would have silently forced either a production-code visibility change or a
+  broken external-test approach, and resolved it the additive-only way
+  (in-crate test) rather than the path that touches `src/lib.rs`.
+- Confirmed run-to-run variance directly (two runs each for debug and
+  release) rather than reporting a single, possibly-lucky sample — the
+  ~10-15% spread is now visible and honestly reported, not hidden behind one
+  number.
+
+**What was difficult, and where the time went.**
+
+Nothing structurally difficult; this was a small, additive round. Most of
+the time went to: (a) reading all four prior rounds' worth of `src/grid.rs`
+content and this milestone's plan before writing anything, per "do one thing
+at a time"; (b) working out the `FixedTimestep`-visibility constraint above
+and deciding the in-crate-test resolution rather than reaching for the more
+obvious-looking (but scope-violating) `pub mod timestep` fix; (c) running the
+timing test four times (two builds x two runs each) to get a defensible,
+non-single-sample number rather than reporting the first run seen.
+
+**Compromises I made.**
+
+- The timing test's only assertion is a generous sanity ceiling
+  (`per_step.as_secs_f64() < 1.0`, i.e. under 1 full second) — it does not
+  assert against the specific ~2ms/~15ms numbers recorded above. This is
+  deliberate: hard-coding this dev container's exact number into the test
+  itself would make the test fail on any other machine's ordinary,
+  non-regressive variance (a slower CI runner, a different core count), which
+  is exactly the kind of "loosen a threshold to make CI pass" trap
+  `cycle-green` warns against in the other direction. The sanity ceiling
+  still catches a genuine regression (e.g. an accidental O(n²) bug) while
+  leaving the *specific* budget number to live in this report, where M1.7
+  can cite it as a target to hold future work to, rather than as a test
+  assertion this round has no authority to freeze for a machine it doesn't
+  control.
+- I recorded both a debug and a release number rather than picking one as
+  "the" figure, and named release (~2.0ms/step) as the one for M1.7 to
+  cite — release is the build that matters for an actual running
+  simulation's frame budget; debug is recorded alongside only because it's
+  what `cargo test --lib` runs by default and a future reader timing things
+  informally via the fast path will see debug-speed numbers first.
+
+**Token usage.** Not visible to me — no context/usage indicator or
+final-turn summary surfaced by this harness.
+
+**Gaps and flags.**
+
+- This round's number describes only the identity-step's own overhead — the
+  loop-and-swap mechanism, not any real physics. M1.2 onward will need to
+  re-measure (or extend this same test) once real per-cell behaviour exists,
+  and the "floor, not the whole budget" framing above should carry forward
+  so nobody mistakes this milestone's number for a promise about a
+  physics-bearing step.
+- I did not add a release-mode variant of the `#[ignore]`d test itself (e.g.
+  two separate tests, one implicitly meant for `--release`) — the single
+  test's own doc comment tells a future runner to add `--release` for the
+  optimized number, rather than the suite maintaining two near-duplicate
+  tests for one measurement. If a later round wants both numbers asserted
+  automatically rather than read from stdout, that's a genuine follow-up,
+  not assumed done here.
+- The stray, untracked `test/` directory (PNG output from ad-hoc native-binary
+  runs) is still present in the working tree, as multiple prior rounds have
+  already noted — untouched by this round, still worth someone's decision to
+  `.gitignore` or delete it outside any single round's scope.
+- I did not touch `src/scenario.rs` or `src/measure.rs` at all, despite both
+  being listed in this round's dispatch context — read them for context
+  (confirming `Scenario`/`run_headless` don't need to be involved in a raw
+  `Grid`-level timing measurement) but found no genuine need to build the
+  reference grid via a `Scenario` rather than `Grid::new` directly, since the
+  round's goal is timing the stepping mechanism itself, not a specific named
+  scenario's content. Flagging this choice explicitly in case a future
+  reader expected the reference grid to be `Scenario`-shaped.
+
+**General comments.**
+
+Single-pass was the right shape call for this round, matching the plan's
+own reasoning: no shared primitive changed, no conservation/determinism
+target at stake (wall-clock cost, not physical correctness), no interface or
+data-format change, and no prior exit ramp on this goal. The round closed in
+well under the 30-minute budget with no need for a second pass.
+
+**Elapsed:** ~4 minutes (2026-09-05T11:00:47+12:00 →
+2026-09-05T11:04:30+12:00, per the two `date -Is` checks taken during this
+phase), well inside the 30-minute decision point.
