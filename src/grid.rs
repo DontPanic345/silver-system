@@ -515,10 +515,7 @@ mod tests {
         // `irregular_frame_durations_total_the_expected_step_count` pins for
         // `FixedTimestep::advance` directly.
         let durations = [0.03, 0.12, 0.02, 0.11, 0.22];
-        let total_steps: u32 = durations
-            .iter()
-            .map(|&d| grid.step(&mut timestep, d))
-            .sum();
+        let total_steps: u32 = durations.iter().map(|&d| grid.step(&mut timestep, d)).sum();
 
         assert_eq!(
             total_steps, 5,
@@ -542,7 +539,10 @@ mod tests {
 
         let steps = grid.step(&mut timestep, 0.05);
 
-        assert_eq!(steps, 0, "half a dt's worth of time should not yet elapse a step");
+        assert_eq!(
+            steps, 0,
+            "half a dt's worth of time should not yet elapse a step"
+        );
         assert_eq!(
             grid.get(idx),
             WATER,
@@ -602,7 +602,10 @@ mod tests {
         // single step, not just after one big jump.
         for _ in 0..5 {
             let steps = grid.step(&mut timestep, 0.1);
-            assert_eq!(steps, 1, "each 0.1s call at dt=0.1 should elapse exactly one step");
+            assert_eq!(
+                steps, 1,
+                "each 0.1s call at dt=0.1 should elapse exactly one step"
+            );
             assert_eq!(
                 snapshot(&grid),
                 before,
