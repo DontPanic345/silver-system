@@ -195,3 +195,46 @@ detour.
 permeation → tranche 2 (§2 above, and PLAN.md M2.5 already states it). GPU
 backend work beyond groundwork → left to whichever future tranche's evidence
 demands it (CLAUDE.md's own standing rule, restated in §2 above).
+
+## 7. Between-milestone re-plan — after M1.1
+
+Read `cycle-log/tranche-1/m1.1/closeout.md` in full. M1.1 closed clean: all 5
+milestone targets met and independently re-verified by the milestone
+orchestrator (not taken on a dispatched agent's word), no exit ramps, no
+`cycle-*` skill defect found this time (unlike tranche 0's two). Substrate is
+now settled: SoA double-buffered `Grid` addressed by `GridIndex` throughout
+(closing the tranche-0 gap honestly), data-driven `MaterialTable`, a
+`Scenario` harness consumed by both headless measurement and rendering,
+reference grid fixed at 1024×1024 with a recorded ~2.0ms/step budget
+(release build, this dev machine) — tranche target 6's number now exists.
+`Grid::step` is still an identity transform; no physics has landed yet, which
+is correct — M1.2 is where real per-material behaviour starts.
+
+**Tranche targets status after M1.1** (targets numbered per §3 above):
+1. U-pipe — not yet, needs M1.4.
+2. Mass conservation (0.1%/10k steps) — mechanism exists and is exercised
+   (M1.1's 100-step exact-conservation smoke test on a static scenario) but
+   the target itself needs real transport (M1.2+) to be a meaningful check,
+   not just an identity-step scenario. Not yet met, correctly deferred.
+3. Energy conservation — not yet, needs M1.6.
+4. Resting stability — not yet, needs real matter that can rest (M1.2+).
+5. Every primitive scenario passes headless — harness exists and proven with
+   one fixture; population of real scenarios starts M1.2. Not yet met.
+6. Performance budget — **met for now**: reference grid and per-step budget
+   recorded (1024×1024, ~2.0ms/step release). Re-checked at M1.7 once real
+   physics adds cost to the identity-step floor.
+
+**Folded forward into M1.2's dispatch:** the one named gap worth a future
+planner's attention — `density`/`heat_capacity`'s unit mismatch in
+`MaterialTable::reference()`, currently harmless but M1.2's gravity/settling
+work is the first candidate to need a real answer if it starts reasoning
+numerically about density. M1.2's dispatch prompt should carry this forward
+explicitly rather than let M1.2 rediscover it. Also folding forward the one
+process note (no skill defect, but a personal-process gap): ask each
+single-pass round to log explicit `date -Is` start/end timestamps in its
+report, the way M1.1 Round 5 did, so the milestone timing roll-up doesn't
+have gaps.
+
+**No change to the milestone breakdown or tranche targets.** M1.1 executed
+within its planned shape; PLAN.md needed no edits (confirmed in the
+closeout's own §6). Proceeding to M1.2 as planned in §4 above.

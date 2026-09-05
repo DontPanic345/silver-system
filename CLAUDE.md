@@ -16,7 +16,6 @@ tranche states how it serves them.
 - **Only when the big universe is sufficiently full will the small world be believable.**
 - **The only way to go fast is to go well.**
 - **Do one thing at a time.**
-- **Trust and verify.**
 
 ## How work is organised
 
