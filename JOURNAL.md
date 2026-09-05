@@ -64,3 +64,16 @@ lost for good. Started this journal so the next pivot doesn't disappear the
 same way. Drafted a one-shot kickoff prompt for the next experiment
 (deliberately with no north star handed to it up front, per
 `NORTH_STARS.md`'s own "Next" section) — not yet run.
+
+**2026-09-06 — Metrics for the one-shot prompt.** stable-fluids had a
+`## Cycle debug` instruction appended to every phase prompt (see
+`stable-fluids/WATER_SIM_AC.md`) that worked well: a handful of blunt
+bullets, collected at close-out into one improvement summary. Under
+night-shift it drifted into an unfiltered, everything-that-happened log
+instead. Rebuilt it in two parts for `ONE_SHOT_PROMPT.md`: a
+`## Session metrics` section pulled verbatim from the harness's own
+per-session `cost-state` tracking via the new `scripts/session-metrics.py`
+(wall-clock time, model/tool time, token usage, cost, lines changed — no
+self-reporting, so it's actually comparable across experiments), plus a
+`## Debug notes` section that reinstates stable-fluids' original bounded,
+blunt-bullets discipline for whatever isn't quantifiable.
