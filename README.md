@@ -6,10 +6,12 @@ reactions), in the spirit of Oxygen Not Included and Noita.
 
 The language is Rust. The Rust code below was built under the `night-shift`
 cycle experiment (now shelved, see below) and is kept as substrate for whatever
-runs next — see [`NORTH_STARS.md`](NORTH_STARS.md) for that experiment's stated
-goal and why it was retired, [`night-shift/CLOSEOUT.md`](night-shift/CLOSEOUT.md)
-for the full retrospective, and [`JOURNAL.md`](JOURNAL.md) for the dated,
-narrative thread connecting every pivot this repo has made.
+runs next — see [`JOURNAL.md`](JOURNAL.md) for the dated, narrative thread
+connecting every pivot this repo has made (including that experiment's stated
+goal and why it ended), [`night-shift/CLOSEOUT.md`](night-shift/CLOSEOUT.md)
+for its full retrospective, [`NORTH_STARS.md`](NORTH_STARS.md) for the
+aspirational statements this and every experiment has served, and
+[`PRINCIPLES.md`](PRINCIPLES.md) for the aphorisms distilled along the way.
 
 ## Live deploy — the path actually in use
 

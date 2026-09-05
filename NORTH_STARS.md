@@ -1,95 +1,73 @@
-# A constellation of stale North Stars
+# North Stars
 
-Every experiment run in this repo has opened by stating what it was for. None of
-those statements has survived contact with what actually got learned running it —
-not because the statements were wrong, but because each experiment ended for
-reasons the statement itself couldn't see coming (a structural limitation, a
-process that ate its own budget, a scope that turned out to be someone else's
-job). This file collects them, retired, in order, so the next one doesn't quietly
-restate a framing that's already been tried without knowing it.
+Vague, aspirational statements of what this project is *for* — dictation
+dumps, capstone visions, the long version someone typed out once and meant.
+Each one below captures a sliver of the same underlying motivation, in
+whatever words it was stated in at the time. None of these is a tactical
+goal, and none of them "completes" or gets abandoned the way an experiment
+does — see `JOURNAL.md` for the dated history of what got tried, and
+`PRINCIPLES.md` for the aphorisms distilled along the way. A north star can
+be narrowed, restated more sharply, or have a piece of it explicitly walked
+back (noted inline below when that happened) — but it isn't retired just
+because the experiment that was chasing it stopped.
 
-Read this before writing a new north star. If what you're about to write is
-already here in different words, that's worth knowing before, not after.
+Read this before writing a new one. If what you're about to write already
+captures the same sliver as something below, restate it there instead of
+starting a new entry.
 
 ---
 
-## 1. Terrarium (2026-09-01)
+## 1. The long-term interest (2026-09-02)
 
-> A small system that can run itself indefinitely once sealed — not just a
-> prettier sandbox.
+> A small world that is part of a much larger universe — emergent physical
+> behaviour from simple interacting rules (fluids, materials, temperature,
+> pressure, reactions), in the spirit of Oxygen Not Included and Noita.
 
-A browser falling-sand sim: fractional-mixture cells (sand/clay/biomass/water +
-a gas headspace), growing toward a sealed glass jar with a day/night cycle and a
-closed water cycle (evaporate → condense → rain), nothing added or lost once
-sealed.
-
-**Status:** shelved 2026-09-02 as a successful test. Phase 0 (jar + light cycle)
-and Phase 1 (closed water cycle, conserved by construction) both done. Phase 2
-(plants — the real design risk) never started. Kept under `terrarium/`.
+**Original context:** first stated at the repo root the day the JS terrarium
+was shelved, framing what came next — commit `7aaa69b` ("Shelve the JS
+terrarium under `terrarium/`; reset root for the next experiment"),
+`README.md` at that commit. Still active — restated in the current
+`README.md` and (more tersely) `CLAUDE.md` unchanged since.
 
 ## 2. The GPU-native vision doc (2026-09-02)
 
-> Don't script interesting outcomes — build simple interacting physical systems
-> (materials, fluids, temperature, pressure, reactions) and let behaviour emerge.
+> Don't script interesting outcomes — build simple interacting physical
+> systems (materials, fluids, temperature, pressure, reactions) and let
+> behaviour emerge.
 
-A reconstructed development-handoff doc (Oxygen Not Included + Noita inspiration),
-explicit that it was a first pass at capturing an idea, not settled design:
-data-driven materials, GPU compute as foundational architecture (not a later
-optimisation), determinism as an explicit goal, Rust floated as the core
-language, phased physics → chemistry → biology → game layer.
+**Original context:** a reconstructed development-handoff doc (Oxygen Not
+Included + Noita inspiration), explicit at the time that it was a first pass
+at capturing an idea, not settled design. No separate file survives — this
+paraphrase, written when this entry was first added, is the only remaining
+record of it.
 
-**Status:** never built directly. Partially adopted into the Rust pivot below
-(the emergent-behaviour framing, Rust, the tranche ordering); GPU-as-foundational
-and determinism-as-a-standing-requirement were explicitly dropped — see
-`night-shift/skills/cycle-contract`'s framing of determinism as
-architecture-contingent, not standing.
+**Status:** partially adopted into night-shift's north star below (the
+emergent-behaviour framing, Rust, the tranche ordering); two pieces of it
+were explicitly walked back rather than carried forward: GPU compute as
+*foundational* architecture (not a later optimisation) and determinism as a
+standing requirement. Both are now treated as architecture-contingent
+decisions to make later, if a real need arises — see `src/math.rs`'s
+`Scalar` doc comment for where that reasoning currently lives in code.
 
-## 3. stable-fluids (2026-09-02)
+## 3. A believable small world inside a large universe (2026-09-05)
 
-> A closed water cycle driven by physics — heat the water and it boils, the
-> vapour rises, cools, condenses, and rains back down. Mass and energy go round
-> the loop and are conserved to a good approximation.
+> **A believable small world inside a large universe.**
+>
+> **A terrarium people can see on their screens and interact with.**
 
-A dependency-free browser fluid sim: Stam-style stable fluids, Jacobi pressure
-projection, MUSCL advection, temperature + buoyancy, water/vapour/air phase
-change. Built test-first over named rounds against a frozen acceptance-criteria
-doc.
+Two statements of the same goal, stated as both a standard (believability
+comes from the universe underneath being genuinely full — see
+`PRINCIPLES.md`'s first entry, which is this standard restated as a rule of
+thumb) and a deliverable (a thing on a screen a person opens, watches,
+reaches into, and comes back to).
 
-**Status:** shelved 2026-09-05. Rounds 1–6 of 7 passed; Round 7 halted on a
-structural limitation — a checkerboard null mode in the colocated pressure
-projection that needed a staggered or compact `project()` rewrite nobody
-returned to build. Its retrospective (`stable-fluids/tdd-cycle-closeout.md`) is
-where most of the next experiment's design came from.
+**Original context:** `night-shift`'s `CLAUDE.md` and `PLAN.md` (long
+version), commit `d83f3b0` ("Flesh out the plan; state the north star; tell
+planners to reach"). `night-shift/PLAN.md` and
+`night-shift/skills/cycle-contract/SKILL.md` still carry it verbatim, kept
+for reference under the shelved experiment.
 
-## 4. night-shift (2026-09-05)
-
-> A believable small world inside a large universe. A terrarium people can see
-> on their screens and interact with.
-
-The Rust restart: a `tranche → milestone → round → phase` cycle of
-self-planning, self-dispatching agents, meant to run indefinitely across four
-content tranches (mathematics/tooling, physics, chemistry, biology, the glass
-pane) without a human re-briefing it at every step.
-
-**Status:** shelved 2026-09-05. Tranche 0 closed out in full; tranche 1's first
-milestone (M1.1) closed out before the run stopped. Genuinely proved out the
-things it was built to prove — a cold Refactor pass catches what a continuous
-pass misses, planning that folds the last round forward beats stable-fluids'
-memoryless churn — but the process itself (built once from a single dictation
-dump, run for a full tranche before anyone reviewed it) was found to be spending
-a large share of its own budget on ceremony rather than the work: ~12 lines of
-process log per line of shipped logic, ~1.7 comment lines per line of actual
-code, and a real session usage limit hit one milestone into a seven-milestone,
-four-tranche plan. See `night-shift/CLOSEOUT.md` for the full retrospective. The
-Rust code it produced (`src/`, `www/`, `tests/`) is kept; the process and the
-plan built around this statement are not.
-
----
-
-## Next
-
-A one-shot prompt, deliberately without a stated north star handed to it up
-front, kept the Rust substrate above as its starting material. Whatever comes
-out of that run — including whether it needs a north star at all, or arrives at
-one on its own — is the yardstick every future structure in this repo gets
-calibrated against, rather than another single unreviewed dictation dump.
+**Status:** the process built to chase this (`night-shift`'s
+tranche/milestone/round/phase cycle) was shelved — see `JOURNAL.md` — but
+this is a sharper restatement of #1, not a competing or abandoned one. Still
+live.
