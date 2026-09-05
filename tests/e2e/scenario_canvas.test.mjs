@@ -1,18 +1,17 @@
-// Scenario (durable): "A person opens www/scenario.html in a real browser
-// tab and watches stone_and_water_pool()'s grid rendered as a coloured
-// image on a canvas" — round 4 goal 4's wasm/Playwright headless empirical
-// check (the native/PNG path is also exercised, in tests/render_native.rs;
-// both are used this round, see round-04.md for why).
+// Scenario: "A person opens www/scenario.html in a real browser tab and
+// watches stone_and_water_pool()'s grid rendered as a coloured image on a
+// canvas" — a wasm/Playwright headless empirical check (the native/PNG path
+// is also exercised, in tests/render_native.rs; both are used, one per
+// build target).
 //
 // Reads real canvas pixel data with getImageData at specific coordinates,
-// mirroring tests/e2e/canvas_rectangle.test.mjs's established approach —
-// per the round's explicit must-not-break condition, that existing file is
-// untouched; this is a second, parallel e2e test.
+// mirroring tests/e2e/canvas_rectangle.test.mjs's established approach;
+// that existing file is untouched — this is a second, parallel e2e test.
 //
 // Expected colours/cell size are read at runtime from the already-loaded
 // wasm module via window.__wasm (scenario_cell_px, scenario_*_colour_rgb),
 // not hardcoded here — same "single source of truth" discipline
-// canvas_rectangle.test.mjs already established for the M0.1 rectangle.
+// canvas_rectangle.test.mjs already established for the rectangle.
 //
 // Prerequisite: the wasm build must already exist at www/pkg/ (see
 // canvas_rectangle.test.mjs's header for the build commands).

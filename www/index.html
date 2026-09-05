@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>M0.1 canvas proving ground</title>
+  <title>Canvas proving ground</title>
 </head>
 <body>
   <!--
@@ -14,10 +14,9 @@
     import init, * as wasm from './pkg/viewer.js';
 
     // #[wasm_bindgen(start)] in src/lib.rs runs `main()` (which paints tick
-    // 0) automatically as part of `init()`. If it panics (e.g. on Green's
-    // not-yet-implemented stub), `init()` rejects and we record that on
-    // `window` so the headless test can see it rather than just hanging or
-    // reporting an opaque timeout.
+    // 0) automatically as part of `init()`. If it panics, `init()` rejects
+    // and we record that on `window` so the headless test can see it rather
+    // than just hanging or reporting an opaque timeout.
     window.__viewerReady = false;
     window.__viewerError = null;
     window.__tickCount = 0;
@@ -26,23 +25,22 @@
       .then(() => {
         window.__viewerReady = true;
 
-        // Exposed so the headless test can read round 2's shared constants
+        // Exposed so the headless test can read the shared constants
         // (colour, geometry, tick interval) straight off the loaded wasm
         // module instead of re-declaring them as JS literals — the single
-        // source of truth for round 2's goal 2 (see
-        // cycle-log/tranche-0/m0.1/round-02.md).
+        // source of truth.
         window.__wasm = wasm;
 
-        // Round 4 retrofit: this page still owns the wall-clock timer, but
-        // Rust's tick count is now driven by the shared M0.4 FixedTimestep
-        // harness (src/timestep.rs), not incremented by a bare +1 per call.
-        // That harness decides how many fixed steps have elapsed from a real
-        // elapsed-time duration, so this page must measure and pass one —
-        // the actual gap since the previous fire (performance.now() deltas),
-        // not a value hardcoded to always equal exactly one dt. setInterval
-        // fires are themselves not perfectly regular (the browser can run
-        // one late), so this duration is honest, variable elapsed time, the
-        // same kind of irregular input FixedTimestep's own tests exercise.
+        // This page owns the wall-clock timer, but Rust's tick count is
+        // driven by the shared FixedTimestep harness (src/timestep.rs), not
+        // incremented by a bare +1 per call. That harness decides how many
+        // fixed steps have elapsed from a real elapsed-time duration, so
+        // this page must measure and pass one — the actual gap since the
+        // previous fire (performance.now() deltas), not a value hardcoded
+        // to always equal exactly one dt. setInterval fires are themselves
+        // not perfectly regular (the browser can run one late), so this
+        // duration is honest, variable elapsed time, the same kind of
+        // irregular input FixedTimestep's own tests exercise.
         const intervalMs = wasm.tick_interval_ms();
         let lastFireMs = performance.now();
         setInterval(() => {

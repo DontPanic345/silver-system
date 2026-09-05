@@ -2,13 +2,10 @@
 //! no browser, no DOM, no human reading a screenshot, and get back numbers a
 //! test can assert on directly.
 //!
-//! This module is M1.1 round 3's job (see
-//! `cycle-log/tranche-1/m1.1/round-03.md`): round 1 gave cells a shape,
-//! round 2 gave stepping and `Scenario` a shape, and this round is the first
-//! of the two consumers `Scenario`'s module doc comment named — a headless
-//! runner (round 4's renderer is the other, and does not exist yet). The
-//! whole point is that nothing here requires a human in the loop: build a
-//! scenario, run it, measure it, assert on the result, all inside one
+//! This is the first of `Scenario`'s two consumers named in its module doc
+//! comment — a headless runner (`src/render.rs`'s renderer is the other).
+//! The whole point is that nothing here requires a human in the loop: build
+//! a scenario, run it, measure it, assert on the result, all inside one
 //! `cargo test --lib`-reachable test.
 //!
 //! ## JSON: hand-rolled, not `serde`
@@ -18,22 +15,21 @@
 //! `serde`/`serde_json` dependency would pull in derive machinery and a
 //! general-purpose parser/writer for a handful of fields this module already
 //! knows the exact layout of. Hand-rolling keeps the output format under
-//! this module's direct control (useful for round 3 goal 3's "assert exact
-//! values" requirement — the string is exactly what [`Measurement::to_json`]
-//! says it is, not whatever a derive macro's field-ordering happens to
-//! produce) and adds no dependency, so there is nothing new to check against
-//! the `wasm32-unknown-unknown` build. If a later round's measurement shape
-//! grows enough that hand-rolling becomes the wrong trade (nested/optional
-//! fields, real escaping needs), that round can revisit this call.
+//! this module's direct control (an "assert exact values" requirement — the
+//! string is exactly what [`Measurement::to_json`] says it is, not whatever
+//! a derive macro's field-ordering happens to produce) and adds no
+//! dependency, so there is nothing new to check against the
+//! `wasm32-unknown-unknown` build. If the measurement shape later grows
+//! enough that hand-rolling becomes the wrong trade (nested/optional
+//! fields, real escaping needs), that is worth revisiting then.
 //!
-//! ## Units: consistent with, not resolving, round 1's open flag
+//! ## Units: consistent with, not resolving, an open flag
 //!
 //! `total_mass` here is `cell_count * Material::density`, and `density` is
-//! still round 1's Refactor-flagged unpinned unit (see `src/material.rs`).
-//! This round does not invent a unit system — per its own goal 2, it sums
-//! whatever `density` values exist, consistently, and leaves the unit
-//! question open for whichever later round first needs `total_mass` to mean
-//! something in a real physical unit.
+//! still an unpinned unit, flagged in `src/material.rs`. This module does
+//! not invent a unit system — it sums whatever `density` values exist,
+//! consistently, and leaves the unit question open for whichever later code
+//! first needs `total_mass` to mean something in a real physical unit.
 
 use crate::grid::Grid;
 use crate::material::{MaterialId, MaterialTable};
@@ -46,7 +42,7 @@ use crate::timestep::FixedTimestep;
 ///
 /// Plain data, in a fixed field order — [`Measurement::to_json`] writes
 /// these fields in exactly the order declared here, so this order *is* the
-/// JSON shape later rounds/milestones read.
+/// JSON shape later readers rely on.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MaterialMeasurement {
     /// The raw [`MaterialId`] value this record describes.
@@ -62,9 +58,9 @@ pub struct MaterialMeasurement {
 /// [`MaterialMeasurement`] per material in the scenario's table, ordered by
 /// ascending [`MaterialId`].
 ///
-/// This is round 3's goal 2 minimum: "total mass per material..., cell
-/// counts per material, and the tick count reached" — plus [`Measurement::to_json`]
-/// to serialize it, since goal 2 also asks for JSON specifically.
+/// Holds "total mass per material..., cell counts per material, and the
+/// tick count reached" — plus [`Measurement::to_json`] to serialize it as
+/// JSON.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Measurement {
     /// The number of fixed steps [`run_headless`] actually applied — not
@@ -84,9 +80,8 @@ impl Measurement {
     /// `{"ticks":<u32>,"materials":[{"material_id":<u16>,"cell_count":<usize>,"total_mass":<f32>},...]}`.
     ///
     /// Field order and names are fixed (see each field's doc comment above)
-    /// — this is the shape round 4's renderer context and later milestones'
-    /// conservation tests read without guessing at field names, per this
-    /// round's stated focus. `total_mass` is written via `{:?}` (Rust's
+    /// — this is the shape any later conservation tests read without
+    /// guessing at field names. `total_mass` is written via `{:?}` (Rust's
     /// float `Debug`), which always includes a decimal point (`2.0`, not
     /// `2`) so a reader can tell at a glance it is a float field, not an
     /// integer one — the same reasoning applies to `cell_count`/`ticks`
@@ -115,7 +110,7 @@ impl Measurement {
 /// [`MaterialMeasurement`] per material `materials` knows about (by table
 /// position, i.e. ascending [`MaterialId`]), counting cells and summing mass
 /// with a single pass over [`Grid::cells`] — read-only use of `Grid`'s
-/// existing public API, per this round's scope.
+/// existing public API.
 fn measure(grid: &Grid, materials: &MaterialTable, ticks: u32) -> Measurement {
     let mut counts = vec![0usize; materials.len()];
     for &id in grid.cells() {
@@ -139,11 +134,10 @@ fn measure(grid: &Grid, materials: &MaterialTable, ticks: u32) -> Measurement {
     Measurement { ticks, materials }
 }
 
-/// The headless runner round 3 goal 1 asks for: builds `scenario`'s
-/// [`Grid`], steps it `num_steps` times (each call feeding `dt` as the
-/// elapsed real duration — a headless run has no browser clock, so it feeds
-/// a fixed `dt` per call rather than any real wall-clock reading, exactly
-/// what the goal specifies), and returns the resulting [`Measurement`].
+/// The headless runner: builds `scenario`'s [`Grid`], steps it `num_steps`
+/// times (each call feeding `dt` as the elapsed real duration — a headless
+/// run has no browser clock, so it feeds a fixed `dt` per call rather than
+/// any real wall-clock reading), and returns the resulting [`Measurement`].
 ///
 /// Uses a fresh [`FixedTimestep`] built with the same `dt`, so each of the
 /// `num_steps` calls carries exactly one fixed step's worth of time and
@@ -169,12 +163,12 @@ mod tests {
     use super::*;
     use crate::scenario::stone_and_water_pool;
 
-    // --- Scenario: a headless runner exists and is genuinely headless (goal 1) ---
+    // --- Scenario: a headless runner exists and is genuinely headless ---
 
     /// Scenario: `run_headless` runs `stone_and_water_pool()` for a small,
     /// stated number of steps and reports exactly that many ticks reached —
     /// pins that the runner is real elapsed-time-driven stepping (via
-    /// `FixedTimestep`, per goal 1), not a bare loop that ignores timing.
+    /// `FixedTimestep`), not a bare loop that ignores timing.
     #[test]
     fn run_headless_reaches_exactly_the_requested_tick_count() {
         let scenario = stone_and_water_pool();
@@ -182,13 +176,13 @@ mod tests {
         assert_eq!(measurement.ticks, 3);
     }
 
-    // --- Scenario: exact JSON values, not just "it parsed" (goal 3) ---
+    // --- Scenario: exact JSON values, not just "it parsed" ---
 
     /// Scenario: running the named `stone_and_water_pool()` fixture for 3
     /// steps produces the exact expected mass-per-material and
     /// cell-count-per-material numbers, both as a `Measurement` value and as
-    /// the JSON string `to_json` produces — round 3 goal 3's core pin. The
-    /// fixture is a 6x4 (24-cell) grid: a 2x2 (4-cell) stone lump, a 2-cell
+    /// the JSON string `to_json` produces. The fixture is a 6x4 (24-cell)
+    /// grid: a 2x2 (4-cell) stone lump, a 2-cell
     /// water pool, and the remaining 18 cells air background (see
     /// `src/scenario.rs`'s `stone_and_water_pool` doc comment). Air density
     /// is 0.0, water 1.0, stone 2.5 (`MaterialTable::reference`), so:
@@ -232,18 +226,18 @@ mod tests {
         );
     }
 
-    // --- Scenario: conservation smoke check (goal 4) ---
+    // --- Scenario: conservation smoke check ---
 
-    /// Scenario: because M1.1's step is identity-only (round 2), total mass
-    /// and every material's cell count must be *exactly* unchanged after any
-    /// number of steps — not to 0.1%-tolerance (that is M1.2+'s job, once
-    /// matter actually moves), but exactly, since nothing physical happens
-    /// yet. Runs `stone_and_water_pool()` for 100 steps and asserts the
-    /// post-run measurement is bit-for-bit identical to the pre-run one
+    /// Scenario: because the current step is identity-only, total mass and
+    /// every material's cell count must be *exactly* unchanged after any
+    /// number of steps — not to 0.1%-tolerance (that is later work's job,
+    /// once matter actually moves), but exactly, since nothing physical
+    /// happens yet. Runs `stone_and_water_pool()` for 100 steps and asserts
+    /// the post-run measurement is bit-for-bit identical to the pre-run one
     /// (measured directly off the freshly built grid, step count 0),
     /// proving the measurement path itself can prove "nothing moved, so
-    /// nothing changed" — the scaffolding later milestones' real
-    /// conservation targets build their own assertions on top of.
+    /// nothing changed" — the scaffolding any later real conservation
+    /// targets build their own assertions on top of.
     #[test]
     fn stone_and_water_pool_mass_and_cell_counts_are_exactly_unchanged_after_100_steps() {
         let scenario = stone_and_water_pool();
@@ -269,9 +263,9 @@ mod tests {
         );
     }
 
-    // --- Scenario: no human in the loop (goal 5) ---
+    // --- Scenario: no human in the loop ---
     //
-    // Every test above is itself this goal's proof: build scenario, run,
+    // Every test above is itself proof of this: build scenario, run,
     // measure, assert — reachable by `cargo test --lib` alone, no manual
     // step, no screenshot, nothing printed for a person to read and judge.
     // Named here explicitly so the property is visible in the test list,

@@ -2,14 +2,13 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>M1.1 round 4 scenario renderer</title>
+  <title>Scenario renderer</title>
 </head>
 <body>
   <!--
-    Round 4's "watchable" half: paints `stone_and_water_pool()`'s grid state
-    via `paint_scenario`, the wasm export mirroring index.html's `draw`/
-    `tick_and_draw` pattern (see src/lib.rs). Canvas convention unchanged:
-    (0,0) top-left, x right, y down.
+    Paints `stone_and_water_pool()`'s grid state via `paint_scenario`, the
+    wasm export mirroring index.html's `draw`/`tick_and_draw` pattern (see
+    src/lib.rs). Canvas convention unchanged: (0,0) top-left, x right, y down.
   -->
   <canvas id="canvas"></canvas>
   <script type="module">

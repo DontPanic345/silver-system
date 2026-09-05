@@ -1,4 +1,4 @@
-//! M0.3 — proves the native fallback end to end: runs the actual compiled
+//! Proves the native fallback end to end: runs the actual compiled
 //! `native_viewer` binary as a subprocess (not just calling `render_frame`
 //! in-process — that would only prove the pure function, not that the
 //! binary really writes readable files), then decodes the PNGs it wrote and
@@ -6,9 +6,9 @@
 //! it on faith" discipline `tests/e2e/canvas_rectangle.test.mjs` applies to
 //! the browser canvas.
 //!
-//! Three samples (ticks 0, 1, 2), not two — per M0.1 round 2's finding that
-//! a two-sample "differs from tick 0" check can't tell a genuinely
-//! advancing sequence from one that changed once and froze.
+//! Three samples (ticks 0, 1, 2), not two — a two-sample "differs from tick
+//! 0" check can't tell a genuinely advancing sequence from one that changed
+//! once and froze.
 
 use std::process::Command;
 

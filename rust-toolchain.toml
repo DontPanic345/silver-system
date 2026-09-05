@@ -4,10 +4,6 @@
 # this directory) rather than silently drifting onto whatever "stable"
 # happens to resolve to that day.
 #
-# Flagged as a real gap by tranche 0's own planning
-# (night-shift/cycle-log/tranche-0/plan.md §2) and left undone by every milestone until
-# this tranche-scope refactor pass closed it.
-#
 # CI (.github/workflows/deploy-pages.yml) deliberately does NOT read this
 # file — it uses `dtolnay/rust-toolchain@stable`, which always resolves to
 # whatever the latest stable release is at the time the workflow runs. That

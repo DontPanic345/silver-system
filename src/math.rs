@@ -1,24 +1,15 @@
 //! Shared math primitives for world-space / physics quantities: the scalar
 //! numeric type, a 2D vector, and an integer grid-cell index built on them.
 //!
-//! This module is M0.4's "small, boring substrate" (see the milestone's
-//! intent in `cycle-log/tranche-0/m0.4/plan.md`): later tranches reach for
+//! This is small, boring substrate deliberately: later code reaches for
 //! `Scalar`, `Vec2` and `GridIndex` rather than each inventing their own.
 //!
-//! **Update, M1.1 round 1:** `Vec2` and `GridIndex` now have a real caller —
-//! `src/grid.rs`'s `Grid`, which is addressed by `GridIndex` throughout and
-//! whose `Grid::cell_center` delegates to `GridIndex::center` (returning a
-//! `Vec2`). Until this round they were called only by their own unit tests
-//! below; `Scalar` and `FixedTimestep` (`src/timestep.rs`) were already
-//! exercised by real code (`src/lib.rs`'s `tick_and_draw`). This was found
-//! and named, not silently dropped, in tranche 0's tranche-scope refactor
-//! pass: forcing a grid-cell index into M0.1's static two-colour rectangle
-//! to technically satisfy the target would have been exactly the kind of
-//! artificial, paper-exercise wiring the tranche's own reach notes
-//! (`cycle-log/tranche-0/plan.md` §2) warned against for the hello-world's
-//! *animation* — `GridIndex` needed a real grid to be a genuine use, and
-//! M1.1 is that grid. The `#[allow(dead_code)]` attributes that recorded
-//! the old, unused state are removed below accordingly.
+//! `Vec2` and `GridIndex` have a real caller — `src/grid.rs`'s `Grid`, which
+//! is addressed by `GridIndex` throughout and whose `Grid::cell_center`
+//! delegates to `GridIndex::center` (returning a `Vec2`). Forcing a
+//! grid-cell index into a static rectangle demo just to exercise this type
+//! would have been artificial, paper-exercise wiring — `GridIndex` needed a
+//! real grid to be a genuine use, and `Grid` is that grid.
 
 /// The scalar type every world-space / physics quantity in this crate is
 /// expressed in.
@@ -27,28 +18,21 @@
 ///
 /// Reasoning, not a default:
 ///
-/// - `CLAUDE.md` states GPU execution is the intended direction for this
-///   project. `f32` is the GPU-native float: GPUs (and WebGPU/WGSL in
-///   particular, the path a wasm/browser target like this crate would take)
-///   either lack `f64` support or run it far slower than `f32` — choosing
-///   `f64` now would mean re-deciding this later under migration pressure
-///   instead of once, here.
-/// - `CLAUDE.md` also states bit-identical determinism is
-///   architecture-contingent, not a standing requirement, and that
-///   conservation only needs to hold to a *stated tolerance*. That is exactly
-///   the deal `f32` asks for: it does not offer `f64`'s extra headroom, but
-///   nothing in this project's current requirements spends that headroom.
+/// - GPU execution (WebGPU/WGSL, the path a wasm/browser target like this
+///   crate would take) either lacks `f64` support or runs it far slower than
+///   `f32` — choosing `f64` now would mean re-deciding this later under
+///   migration pressure instead of once, here, if this ever moves to the
+///   GPU.
 /// - Fixed-point buys deterministic cross-platform reproducibility at the
 ///   cost of range, ergonomics, and every downstream library (rendering,
-///   eventually a physics/GPU pipeline) expecting floats. Nothing in the
-///   current plan asks for that trade; it can be revisited if a later
-///   tranche's target specifically demands it.
-/// - `f32` halves the memory traffic of `f64` for the same data, which matters
-///   once this substrate is under a "sufficiently full" large universe (the
-///   north star) rather than a handful of values.
+///   eventually a physics/GPU pipeline) expecting floats. Nothing here needs
+///   that trade; it can be revisited if a real requirement demands it.
+/// - `f32` halves the memory traffic of `f64` for the same data, which
+///   matters once this substrate is under a large, dense world rather than a
+///   handful of values.
 ///
-/// If a later milestone's target needs `f64`'s precision (e.g. an
-/// accumulating quantity over a very long run proves `f32` drifts past its
+/// If something later needs `f64`'s precision (e.g. an accumulating
+/// quantity over a very long run proves `f32` drifts past an acceptable
 /// tolerance), that is a new decision to make there, in the open, against a
 /// measured failure — not a silent reversal of this one.
 pub type Scalar = f32;
@@ -124,17 +108,16 @@ impl Vec2 {
 /// `src/lib.rs`, where `+y` is down. Exists specifically so the convention
 /// pinned above is backed by something a test can assert on: see
 /// `up_convention_pins_math_physics_y_up_not_canvas_y_down` below.
-#[allow(dead_code)] // see the module doc comment: real production use lands in M1.
+#[allow(dead_code)] // not yet used by any running code, only its own test.
 pub const UP: Vec2 = Vec2 { x: 0.0, y: 1.0 };
 
 /// An integer `(i, j)` grid-cell coordinate.
 ///
 /// ## Indexing convention: cell-center, not corner
 ///
-/// **Decision (M0.4 round 2): index `(i, j)` denotes a specific grid
-/// *cell*, and that cell's world-space position — the value
-/// [`GridIndex::center`] returns — is the cell's *center*, not any of its
-/// corners.**
+/// **Decision: index `(i, j)` denotes a specific grid *cell*, and that
+/// cell's world-space position — the value [`GridIndex::center`] returns —
+/// is the cell's *center*, not any of its corners.**
 ///
 /// Concretely, under a uniform `cell_size`, cell `(i, j)`'s center sits at
 /// world position:
@@ -147,9 +130,8 @@ pub const UP: Vec2 = Vec2 { x: 0.0, y: 1.0 };
 /// So cell `(0, 0)`'s center is offset **half a cell** from the world
 /// origin in both axes — not coincident with it. The world origin
 /// `(0.0, 0.0)` is cell `(0, 0)`'s bottom-left *corner* under this
-/// convention, never returned by `center` itself. This is the grid-origin
-/// convention this milestone pins: cell `(0, 0)` is the cell whose
-/// lower-value corner touches the world origin.
+/// convention, never returned by `center` itself: cell `(0, 0)` is the cell
+/// whose lower-value corner touches the world origin.
 ///
 /// `j` increases in the `+y` direction, matching this module's math/physics
 /// `+y`-is-up convention (see [`Vec2`]'s doc comment and [`UP`]) — not the
@@ -161,13 +143,12 @@ pub const UP: Vec2 = Vec2 { x: 0.0, y: 1.0 };
 ///
 /// Physics quantities this crate will accumulate (density, temperature,
 /// pressure) are conventionally stored cell-centered, which is why this is
-/// the default M0.4 ships. A staggered/compact grid — where some
-/// quantities (e.g. velocity components in a MAC grid) live on cell faces
-/// or corners instead — is a later, *additive* decision explicitly deferred
-/// to M1.4 (see `PLAN.md`), to be made there on evidence from the solver
-/// that needs it. `GridIndex` and `center` below do not need to anticipate
-/// that decision; a staggered variant can be added alongside this one
-/// without changing what this one guarantees.
+/// the default here. A staggered/compact grid — where some quantities (e.g.
+/// velocity components in a MAC grid) live on cell faces or corners instead
+/// — is a later, *additive* decision, to be made on evidence from the
+/// solver that needs it. `GridIndex` and `center` below do not need to
+/// anticipate that decision; a staggered variant can be added alongside
+/// this one without changing what this one guarantees.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GridIndex {
     pub i: i32,
@@ -203,7 +184,7 @@ impl GridIndex {
 mod tests {
     use super::*;
 
-    // --- Convention pin (durable scenario, cross-cutting) ---
+    // --- Convention pin (cross-cutting) ---
 
     /// Pins the coordinate convention itself, independent of the arithmetic
     /// below: `UP` must point in `+y`. If a future change silently flipped
@@ -242,7 +223,7 @@ mod tests {
         );
     }
 
-    // --- Arithmetic scenarios (durable: restate the round's goal 2) ---
+    // --- Arithmetic scenarios ---
 
     /// Scenario: two displacements in sequence combine into one displacement
     /// equal to their sum — the everyday use `add` exists for.
@@ -268,7 +249,7 @@ mod tests {
 
     /// Scenario: scaling a displacement by a factor stretches (or shrinks,
     /// or reverses) it uniformly in both components — the behaviour later
-    /// tranches rely on for things like "half the velocity" or "double the
+    /// code relies on for things like "half the velocity" or "double the
     /// force".
     #[test]
     fn scale_stretches_both_components_uniformly() {
@@ -279,7 +260,7 @@ mod tests {
     }
 
     /// Scenario: perpendicular vectors have zero dot product — the
-    /// "unrelated directions" case later tranches will use `dot` to detect
+    /// "unrelated directions" case later code will use `dot` to detect
     /// (e.g. is this force doing any work along this direction of motion?).
     #[test]
     fn dot_is_zero_for_perpendicular_vectors() {
@@ -290,7 +271,7 @@ mod tests {
 
     /// Scenario: two vectors pointing the same way have a positive dot
     /// product equal to the product of their lengths along that shared
-    /// axis — the "aligned" case later tranches will use `dot` to detect.
+    /// axis — the "aligned" case later code will use `dot` to detect.
     #[test]
     fn dot_is_positive_for_aligned_vectors() {
         let a = Vec2::new(2.0, 0.0);
@@ -316,7 +297,7 @@ mod tests {
         assert_eq!(a.dot(b), b.dot(a));
     }
 
-    // --- GridIndex: convention pins (durable scenarios, cross-cutting) ---
+    // --- GridIndex: convention pins (cross-cutting) ---
 
     /// Pins the cell-*center* (not corner) convention stated in
     /// `GridIndex`'s doc comment: cell `(0, 0)`'s center sits half a cell
@@ -346,8 +327,8 @@ mod tests {
 
     /// Scenario: stepping the grid index by one cell along `i` moves the
     /// cell-center position by exactly one `cell_size` along world `x`, and
-    /// leaves `y` unchanged — the "index spacing equals cell size" property
-    /// goal 4 asks to be pinned, exercised along the `i`/`x` axis.
+    /// leaves `y` unchanged — the "index spacing equals cell size" property,
+    /// exercised along the `i`/`x` axis.
     #[test]
     fn adjacent_indices_along_i_are_exactly_one_cell_size_apart_in_x() {
         let cell_size = 3.0;

@@ -2,7 +2,7 @@
 name = "viewer"
 version = "0.1.0"
 edition = "2021"
-description = "M0.1 toolchain proving ground: draws a rectangle to an HTML canvas from Rust/wasm."
+description = "Toolchain proving ground: draws a rectangle to an HTML canvas from Rust/wasm."
 publish = false
 
 [lib]
@@ -22,7 +22,7 @@ features = [
   "ImageData",
 ]
 
-# M0.3 native fallback: only the native binary (src/bin/native_viewer.rs)
+# Native fallback: only the native binary (src/bin/native_viewer.rs)
 # needs a PNG encoder, and only on a non-wasm target — keeping it
 # target-specific means it never touches the wasm32 build.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

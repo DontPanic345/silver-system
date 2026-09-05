@@ -1,88 +1,72 @@
-//! M0.1 toolchain proving ground.
+//! Wasm/canvas toolchain proving ground.
 //!
-//! Round 1 proved the chain from `cargo build --target wasm32-unknown-unknown`
+//! Proves the chain from `cargo build --target wasm32-unknown-unknown`
 //! through `wasm-bindgen` to a real browser canvas: a single static coloured
-//! rectangle. Round 2 proved the chain also carries a *running* program — the
-//! rectangle visibly changes once per fixed tick — and removed the
-//! hand-duplicated constants Round 1's Refactor flagged forward.
+//! rectangle that changes colour once per fixed tick, driven from Rust.
 //!
-//! Rendering approach unchanged from round 1: canvas 2D via
-//! `wasm-bindgen`/`web-sys`. See `cycle-log/tranche-0/m0.1/round-01.md` for
-//! why.
+//! Rendering approach: canvas 2D via `wasm-bindgen`/`web-sys`.
 //!
-//! ## Round 4 retrofit: the tick is now driven by `FixedTimestep`
+//! ## The tick is driven by `FixedTimestep`
 //!
-//! Round 2 shipped this with an ad-hoc `TICK: Cell<u32>` counter, incremented
-//! by exactly one on every call to [`tick_and_draw`] — a known, flagged
-//! shortcut (see the milestone's round-04 log for why). M0.4 round 3 built
-//! the shared [`timestep::FixedTimestep`] accumulator harness precisely to
-//! replace throwaway counters like that one; this round wires it in.
-//!
-//! JS still owns the wall-clock timer (`setInterval` in `www/index.html`),
-//! but it now measures the real elapsed time between fires (via
-//! `performance.now()` deltas) and passes that duration, in seconds, to
-//! [`tick_and_draw`]. Rust feeds the duration to a crate-local
-//! [`timestep::FixedTimestep`] via [`advance_tick`], which decides — per the
-//! harness's own accumulator semantics — how many fixed steps (0, 1, or more)
-//! have elapsed since the last call, and advances the tick count by that many
-//! (not by a bare `+1`). [`color_for_tick`] and [`paint_rect`] are unchanged;
-//! only the mechanism deciding *how far* the tick count moves per call is
-//! new.
+//! JS owns the wall-clock timer (`setInterval` in `www/index.html`), but it
+//! measures the real elapsed time between fires (via `performance.now()`
+//! deltas) and passes that duration, in seconds, to [`tick_and_draw`]. Rust
+//! feeds the duration to a crate-local [`timestep::FixedTimestep`] via
+//! [`advance_tick`], which decides — per the harness's own accumulator
+//! semantics — how many fixed steps (0, 1, or more) have elapsed since the
+//! last call, and advances the tick count by that many (not by a bare `+1`).
+//! [`color_for_tick`] and [`paint_rect`] don't need to know any of this;
+//! only the mechanism deciding *how far* the tick count moves per call cares.
 //!
 //! [`advance_tick`] is deliberately free of any DOM/`web-sys` dependency —
 //! same reasoning as `timestep.rs` itself — so it is unit-testable directly
 //! under `cargo test --lib`, with no browser involved. [`tick_and_draw`] is
 //! the thin `#[wasm_bindgen]` wrapper that calls it and then repaints.
 //!
-//! ## Single source of truth for shared constants (round 2, goal 2)
+//! ## Single source of truth for shared constants
 //!
-//! Round 1 left the expected colour/coordinate values hand-duplicated as
-//! literals in both this file and `tests/e2e/canvas_rectangle.test.mjs`. Fixed
-//! by exporting plain `#[wasm_bindgen]` getter functions for every value the
-//! JS test needs (`rect_x`, `rect_y`, `rect_w`, `rect_h`, `rect_color_rgb`,
+//! The expected colour/coordinate values are not hand-duplicated as literals
+//! in both this file and `tests/e2e/canvas_rectangle.test.mjs`. Instead, plain
+//! `#[wasm_bindgen]` getter functions export every value the JS test needs
+//! (`rect_x`, `rect_y`, `rect_w`, `rect_h`, `rect_color_rgb`,
 //! `rect_color_rgb_alt`, `tick_interval_ms`). The JS test calls these on the
 //! already-loaded wasm module at runtime instead of re-declaring the
 //! numbers — there is exactly one place these values are written down.
 
 use std::cell::{Cell, RefCell};
 
-// M0.4: shared math primitives (Scalar, Vec2, GridIndex). Not used by this
-// file's own canvas logic (M0.1's rectangle) — see src/math.rs for what it
-// is and why. M1.1 round 1's grid module below is GridIndex's/Vec2's first
-// real caller.
+// Shared math primitives (Scalar, Vec2, GridIndex). Not used by this file's
+// own canvas logic (the rectangle) — see src/math.rs for what it is and why.
+// The grid module below is GridIndex's/Vec2's first real caller.
 mod math;
 
-// M0.4 round 3: fixed-timestep accumulator harness (Scalar dt in, step
-// count out). Round 4 wires this into tick_and_draw via advance_tick below
-// — see src/timestep.rs for what it is and why.
+// Fixed-timestep accumulator harness (Scalar dt in, step count out), wired
+// into tick_and_draw via advance_tick below — see src/timestep.rs for what
+// it is and why.
 mod timestep;
 
-// M1.1 round 1: material representation (Material, MaterialTable) and the
-// grid (Grid) they're stored in — see src/material.rs and src/grid.rs.
-// `pub` so later rounds/milestones and integration tests (tests/*.rs) can
-// build on them, the same way RECT_COLOR_RGB etc. below are `pub` for
-// tests/native_fallback.rs.
+// Material representation (Material, MaterialTable) and the grid (Grid)
+// they're stored in — see src/material.rs and src/grid.rs. `pub` so
+// integration tests (tests/*.rs) can build on them, the same way
+// RECT_COLOR_RGB etc. below are `pub` for tests/native_fallback.rs.
 pub mod grid;
 pub mod material;
 
-// M1.1 round 2: `Scenario`, the "one definition, two consumers" type round
-// 3 (headless runner) and round 4 (renderer) will both build a Grid from —
-// see src/scenario.rs.
+// `Scenario`, the "one definition, two consumers" type the headless runner
+// and the renderer both build a Grid from — see src/scenario.rs.
 pub mod scenario;
 
-// M1.1 round 3: the headless runner, the first of `Scenario`'s two
-// consumers — builds a Grid from a Scenario, steps it, and measures it to
-// JSON with no browser/DOM involved. See src/measure.rs. `pub` for the same
-// reason material/grid/scenario are: later rounds and integration tests
-// build on it directly.
+// The headless runner, the first of `Scenario`'s two consumers — builds a
+// Grid from a Scenario, steps it, and measures it to JSON with no
+// browser/DOM involved. See src/measure.rs. `pub` for the same reason
+// material/grid/scenario are: integration tests build on it directly.
 pub mod measure;
 
-// M1.1 round 4: the renderer, the second of `Scenario`'s two consumers —
-// paints the same Scenario/Grid value's current state to pixels, no
-// browser/DOM dependency, mirroring this file's own M0.1 render_frame
-// shape. See src/render.rs. `pub` for the same reason measure/scenario/
-// grid/material are: `src/bin/native_viewer.rs` and integration tests build
-// on it directly.
+// The renderer, the second of `Scenario`'s two consumers — paints the same
+// Scenario/Grid value's current state to pixels, no browser/DOM dependency,
+// mirroring this file's own render_frame shape. See src/render.rs. `pub`
+// for the same reason measure/scenario/grid/material are:
+// `src/bin/native_viewer.rs` and integration tests build on it directly.
 pub mod render;
 
 use math::Scalar;
@@ -102,7 +86,7 @@ thread_local! {
     /// never by a bare `+1` per call.
     static TICK: Cell<u32> = const { Cell::new(0) };
 
-    /// The shared M0.4 fixed-timestep accumulator driving [`advance_tick`].
+    /// The shared fixed-timestep accumulator driving [`advance_tick`].
     /// Built with `dt` equal to [`TICK_INTERVAL_MS`] converted to seconds, so
     /// the harness's fixed step cadence matches the cadence the rectangle was
     /// already animating at pre-retrofit — the externally-observable
@@ -162,10 +146,8 @@ pub const SCENARIO_CELL_PX: u32 = 20;
 /// and fills a `RECT_W` x `RECT_H` rectangle at `(RECT_X, RECT_Y)` in
 /// `color`.
 ///
-/// This is round 1's proven `draw` body, unchanged apart from taking the
-/// colour as a parameter instead of always using `RECT_COLOR_RGB` — it is
-/// existing, already-verified plumbing (see round-01 log), not new logic, so
-/// it is implemented here rather than stubbed.
+/// Takes the colour as a parameter instead of always using `RECT_COLOR_RGB`
+/// so both tick colours share one drawing path.
 fn paint_rect(canvas_id: &str, color: (u8, u8, u8)) {
     let window = web_sys::window().expect("no global `window` exists");
     let document = window.document().expect("window has no document");
@@ -190,9 +172,6 @@ fn paint_rect(canvas_id: &str, color: (u8, u8, u8)) {
 /// `RECT_COLOR_RGB` on even ticks (including tick 0), `RECT_COLOR_RGB_ALT` on
 /// odd ticks. Pure — no drawing, no shared state — so it can be unit tested
 /// directly without a DOM.
-///
-/// This is the round's new *decision*, not plumbing: left as a stub for
-/// Green.
 fn color_for_tick(tick: u32) -> (u8, u8, u8) {
     if tick.is_multiple_of(2) {
         RECT_COLOR_RGB
@@ -212,23 +191,18 @@ pub fn draw(canvas_id: &str) {
 /// [`FixedTimestep`] (`TIMESTEP`) and advances the crate-local tick count
 /// (`TICK`) by however many fixed steps the harness reports elapsed — zero,
 /// one, or (per the harness's own spiral-of-death-capped accumulator
-/// semantics from round 3) occasionally more than one. Returns the tick
-/// count *after* advancing.
+/// semantics) occasionally more than one. Returns the tick count *after*
+/// advancing.
 ///
-/// This is the round 4 retrofit's core new decision: unlike round 2's ad-hoc
-/// counter (which advanced by exactly one on every call regardless of how
-/// much time had actually passed), the tick count here only moves as far as
-/// real elapsed time honestly earns, and a call with too little elapsed time
-/// advances it by zero.
+/// The tick count only moves as far as real elapsed time honestly earns: a
+/// call with too little elapsed time advances it by zero, rather than
+/// advancing by exactly one on every call regardless of how much time
+/// actually passed.
 ///
 /// Deliberately free of any DOM/`web-sys` dependency (unlike
 /// [`tick_and_draw`], which wraps this and then repaints) so it is directly
 /// unit-testable under `cargo test --lib` — see the `tests` module below and
 /// `src/timestep.rs`'s own tests for the same pattern.
-///
-/// Left as a stub for Green: the decision of how the harness's step count
-/// turns into the new tick count is new logic this round, not existing
-/// plumbing.
 fn advance_tick(frame_duration_secs: Scalar) -> u32 {
     let steps = TIMESTEP.with(|timestep| timestep.borrow_mut().advance(frame_duration_secs));
     TICK.with(|tick| {
@@ -263,7 +237,7 @@ pub fn tick_and_draw(canvas_id: &str, frame_duration_secs: f32) -> u32 {
 /// `(RECT_X, RECT_Y)` in [`color_for_tick`]'s colour for `tick`, using the
 /// same coordinate convention pinned above (origin top-left, y grows down).
 ///
-/// M0.3's native fallback (`src/bin/native_viewer.rs`) is the only caller;
+/// The native fallback (`src/bin/native_viewer.rs`) is the only caller;
 /// kept here rather than in the binary so the geometry/colour constants and
 /// `color_for_tick` stay the single source of truth for both the wasm and
 /// native rendering paths.
@@ -282,19 +256,18 @@ pub fn render_frame(tick: u32, width: u32, height: u32) -> Vec<u8> {
 }
 
 /// Paints a `Scenario`'s current grid state to a named canvas element — the
-/// "watchable" half of milestone target 2 (round 4 goal 2). Reuses
-/// [`paint_rect`]'s established get-canvas-by-id/get-2d-context/draw
-/// pattern, but paints a whole grid of cells (via
-/// [`render::render_grid_to_rgb8`]) as a single `putImageData` call rather
-/// than one `fill_rect` per cell — see [`paint_rgb8_to_canvas`].
+/// watchable counterpart to the headless runner. Reuses [`paint_rect`]'s
+/// established get-canvas-by-id/get-2d-context/draw pattern, but paints a
+/// whole grid of cells (via [`render::render_grid_to_rgb8`]) as a single
+/// `putImageData` call rather than one `fill_rect` per cell — see
+/// [`paint_rgb8_to_canvas`].
 ///
-/// Builds and paints `scenario::stone_and_water_pool()` (round 2's fixture)
-/// specifically — the same `Scenario` value round 3's `run_headless`
-/// measures, per round 4 goal 5 ("one definition, two consumers"). `cell_px`
-/// is the on-screen pixel size of one grid cell (see `src/render.rs`'s
-/// module doc comment for why this is decoupled from `Scenario::cell_size`'s
-/// world-space unit); the canvas element is resized to fit the rendered
-/// image exactly.
+/// Builds and paints `scenario::stone_and_water_pool()` specifically — the
+/// same `Scenario` value `run_headless` measures, so both consumers agree on
+/// one definition. `cell_px` is the on-screen pixel size of one grid cell
+/// (see `src/render.rs`'s module doc comment for why this is decoupled from
+/// `Scenario::cell_size`'s world-space unit); the canvas element is resized
+/// to fit the rendered image exactly.
 #[wasm_bindgen]
 pub fn paint_scenario(canvas_id: &str, cell_px: u32) {
     let scenario = scenario::stone_and_water_pool();
@@ -358,8 +331,7 @@ pub fn main() {
 //
 // Plain accessors, no decision-making — implemented for real (not stubbed).
 // The JS test calls these on the loaded wasm module instead of re-declaring
-// the numbers, which is round 2's fix for the duplication round 1's
-// Refactor flagged forward.
+// the numbers, so Rust and JS can never silently drift apart.
 
 #[wasm_bindgen]
 pub fn rect_x() -> u32 {
@@ -402,8 +374,7 @@ pub fn tick_interval_ms() -> u32 {
 
 // --- Getters: the single source of truth for an e2e test of paint_scenario ---
 //
-// Same discipline as the block above (round 2's fix for round 1's
-// hand-duplicated constants), applied to round 4's scenario renderer: a JS
+// Same discipline as the block above, applied to the scenario renderer: a JS
 // test reads a placed material's expected colour straight off the same
 // `MaterialTable::reference()` `paint_scenario` itself paints from, rather
 // than re-declaring the RGB literals and risking silent drift if the
@@ -472,10 +443,9 @@ mod tests {
         );
     }
 
-    /// Green guard test (already green, pins it so a later round can't
-    /// quietly break it): the getters round 2 adds to remove the
-    /// Rust/JS constant duplication actually expose the same values the
-    /// constants hold, not stale or miscopied ones.
+    /// Guard test: the getters that remove the Rust/JS constant duplication
+    /// actually expose the same values the constants hold, not stale or
+    /// miscopied ones.
     #[test]
     fn getters_expose_the_same_constants_js_reads() {
         assert_eq!(rect_x(), RECT_X);
@@ -497,14 +467,10 @@ mod tests {
         assert_eq!(tick_interval_ms(), TICK_INTERVAL_MS);
     }
 
-    /// Disposable unit test (not a scenario): pins the tick-to-colour rule
-    /// that makes the rectangle's change visible — even ticks (including
-    /// tick 0) get `RECT_COLOR_RGB`, odd ticks get `RECT_COLOR_RGB_ALT`.
-    /// Currently red: `color_for_tick` is a stub.
-    /// M0.3 (native fallback): `render_frame` paints the rectangle at the
-    /// pinned geometry in `color_for_tick`'s colour for that tick, and
-    /// leaves the rest of the frame black — pins the pure buffer format
-    /// `src/bin/native_viewer.rs` relies on, independent of any PNG codec.
+    /// `render_frame` paints the rectangle at the pinned geometry in
+    /// `color_for_tick`'s colour for that tick, and leaves the rest of the
+    /// frame black — pins the pure buffer format `src/bin/native_viewer.rs`
+    /// relies on, independent of any PNG codec.
     #[test]
     fn render_frame_paints_rect_in_tick_colour() {
         let (w, h) = (200u32, 150u32);
@@ -548,17 +514,13 @@ mod tests {
         );
     }
 
-    // --- Round 4 retrofit: advance_tick (the FixedTimestep-driven replacement
-    // for round 2's ad-hoc `TICK += 1` per call). No browser/DOM involved —
-    // these exercise advance_tick directly, the same way src/timestep.rs's
-    // own tests exercise FixedTimestep directly. Currently red: advance_tick
-    // is a todo!() stub. ---
+    // --- advance_tick: the FixedTimestep-driven tick counter. No
+    // browser/DOM involved — these exercise advance_tick directly, the same
+    // way src/timestep.rs's own tests exercise FixedTimestep directly. ---
 
-    /// Scenario (durable, restates round 4 goal 1's "a duration less than one
-    /// dt does not advance the tick"): a call carrying less than one fixed
-    /// step's worth of real elapsed time must not advance the tick count —
-    /// proof this is now honest elapsed-time accounting, not a bare +1 per
-    /// call.
+    /// Scenario: a call carrying less than one fixed step's worth of real
+    /// elapsed time must not advance the tick count — proof this is honest
+    /// elapsed-time accounting, not a bare +1 per call.
     #[test]
     fn advance_tick_with_duration_under_one_dt_does_not_advance_the_tick() {
         let tick = advance_tick(DT_SECONDS / 2.0);
@@ -568,9 +530,8 @@ mod tests {
         );
     }
 
-    /// Scenario (durable, restates round 4 goal 1's "several dts advances the
-    /// tick count correctly and the colour matches the new parity"): a single
-    /// call carrying several fixed steps' worth of real elapsed time advances
+    /// Scenario: a single call carrying several fixed steps' worth of real
+    /// elapsed time advances
     /// the tick count by that many steps in one call (not by 1), and
     /// `color_for_tick` of the resulting tick is what JS/the e2e test would
     /// see painted.
@@ -588,13 +549,10 @@ mod tests {
         );
     }
 
-    /// Scenario (durable, restates round 4 goal 1's "0, 1, or occasionally
-    /// more than 1 step per call, per the harness's own accumulator
-    /// semantics"): real elapsed time arriving in several small,
-    /// sub-dt-sized calls — the same pattern `www/index.html`'s
-    /// `setInterval` produces — still accumulates correctly across calls: no
-    /// steps until enough real time has actually passed, and exactly one
-    /// once it has.
+    /// Scenario: real elapsed time arriving in several small, sub-dt-sized
+    /// calls — the same pattern `www/index.html`'s `setInterval` produces —
+    /// still accumulates correctly across calls: no steps until enough real
+    /// time has actually passed, and exactly one once it has.
     #[test]
     fn advance_tick_accumulates_partial_durations_across_calls_until_a_full_dt_elapses() {
         let half_dt = DT_SECONDS / 2.0;
@@ -610,7 +568,7 @@ mod tests {
         );
     }
 
-    /// Green guard test (pins a relationship, not a behaviour): `DT_SECONDS`
+    /// Guard test (pins a relationship, not a behaviour): `DT_SECONDS`
     /// is `TICK_INTERVAL_MS` converted to seconds, not an independently
     /// chosen number — the fixed-step cadence must match the cadence
     /// `www/index.html` and the e2e test already agree on via

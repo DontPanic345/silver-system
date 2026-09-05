@@ -1,22 +1,18 @@
 //! Fixed-timestep accumulator harness.
 //!
-//! This module is M0.4's third piece of "small, boring substrate" (see the
-//! milestone's intent in `cycle-log/tranche-0/m0.4/plan.md`): every later
-//! tranche that runs a simulation loop needs to decide how many fixed-size
-//! physics steps have elapsed given an irregular stream of real frame
-//! durations (wall-clock in a browser `requestAnimationFrame`, or anything
-//! else irregular in a native/headless harness). Get the accumulator logic
-//! and the spiral-of-death guard right once, here, rather than reinvented
-//! per-tranche.
+//! This is small, boring substrate deliberately: any code that runs a
+//! simulation loop needs to decide how many fixed-size physics steps have
+//! elapsed given an irregular stream of real frame durations (wall-clock in
+//! a browser `requestAnimationFrame`, or anything else irregular in a
+//! native/headless harness). Get the accumulator logic and the
+//! spiral-of-death guard right once, here, rather than reinvented per
+//! caller.
 //!
 //! Deliberately has no dependency on `web-sys`, `wasm-bindgen`, or any
 //! rendering concept — it consumes a plain [`Scalar`] duration and either
 //! returns a step count or drives a caller-supplied callback, so the exact
 //! same type runs under `cargo test` on the native target and, later, inside
-//! the wasm build. `src/lib.rs`'s existing tick counter is explicitly a
-//! separate, throwaway thing (see its module doc comment) — this harness
-//! does not replace it this round; a later round retrofits `lib.rs` to call
-//! this instead.
+//! the wasm build. `src/lib.rs`'s `tick_and_draw` is the current caller.
 //!
 //! ## Design decision: clamp the *input duration*, not just the step count
 //!
@@ -116,9 +112,8 @@ impl FixedTimestep {
     ///
     /// `#[allow(dead_code)]`: an introspection getter, not yet called by any
     /// running code (only its own test) — same deliberate, temporary state
-    /// as `src/math.rs`'s `Vec2`/`GridIndex`, named there in tranche 0's
-    /// tranche-scope refactor pass. `advance`, the harness's actual
-    /// production method, is exercised by `src/lib.rs`.
+    /// as `src/math.rs`'s `Vec2`/`GridIndex`. `advance`, the harness's
+    /// actual production method, is exercised by `src/lib.rs`.
     #[allow(dead_code)]
     pub fn dt(&self) -> Scalar {
         self.dt
@@ -204,7 +199,7 @@ impl FixedTimestep {
 mod tests {
     use super::*;
 
-    // --- Scenarios (durable: restate the round's goals) ---
+    // --- Scenarios ---
 
     /// Scenario: a frame duration smaller than `dt` should not produce a
     /// step yet — the harness is meant to accumulate, not step on every
@@ -221,8 +216,8 @@ mod tests {
 
     /// Scenario: feeding frames whose durations sum to exactly one `dt`,
     /// split across two calls, elapses exactly one step in total, and the
-    /// remainder does not leak a spurious extra step — goal 1's "carries
-    /// remainder time forward across calls" restated as the minimal case.
+    /// remainder does not leak a spurious extra step — carrying remainder
+    /// time forward across calls, in its minimal case.
     #[test]
     fn two_short_frames_summing_to_one_dt_elapse_exactly_one_step() {
         let mut ts = FixedTimestep::new(0.1);
@@ -239,7 +234,7 @@ mod tests {
     /// shorter than `dt`, none a clean multiple) still yields, in total,
     /// the number of steps implied by the total elapsed time — the harness
     /// must work for genuinely variable, real (not synthetic, round-number)
-    /// frame durations, per goal 1.
+    /// frame durations.
     #[test]
     fn irregular_frame_durations_total_the_expected_step_count() {
         let mut ts = FixedTimestep::new(0.1);
@@ -254,14 +249,15 @@ mod tests {
     /// total number of elapsed steps — the accumulator's job is to track
     /// total elapsed time regardless of call granularity.
     ///
-    /// This invariant and goal 3's guard are only simultaneously satisfiable
-    /// when `total_time` fits within what a *single* call can honestly turn
-    /// into steps, i.e. `total_time <= max_steps_per_call * dt` (here `0.5`
-    /// with the default cap). Beyond that bound the properties are mutually
-    /// exclusive by design: the guard's whole point (see the module doc
-    /// comment) is that a single oversized call permanently loses time a
-    /// finer chunking would not have lost — chunking-dependence there is the
-    /// guard working, not a bug. That boundary case is exercised separately
+    /// This invariant and the spiral-of-death guard are only simultaneously
+    /// satisfiable when `total_time` fits within what a *single* call can
+    /// honestly turn into steps, i.e. `total_time <= max_steps_per_call *
+    /// dt` (here `0.5` with the default cap). Beyond that bound the
+    /// properties are mutually exclusive by design: the guard's whole point
+    /// (see the module doc comment) is that a single oversized call
+    /// permanently loses time a finer chunking would not have lost —
+    /// chunking-dependence there is the guard working, not a bug. That
+    /// boundary case is exercised separately
     /// by [`the_guard_does_not_leave_a_debt_for_the_next_call_to_pay_off`]
     /// and [`chunking_invariance_stops_holding_once_a_single_call_exceeds_the_cap`];
     /// this test sticks to `total_time` values a single call can legitimately
@@ -296,9 +292,10 @@ mod tests {
     /// the guard discards the excess for that call — so the same total time,
     /// delivered as one oversized call vs. many small ones that individually
     /// stay under the cap, now legitimately yields *different* total step
-    /// counts. This is goal 3's guard doing its documented job (permanently
-    /// losing simulated time after an oversized call rather than deferring
-    /// it), not a violation of chunking-invariance: that invariant was never
+    /// counts. This is the spiral-of-death guard doing its documented job
+    /// (permanently losing simulated time after an oversized call rather
+    /// than deferring it), not a violation of chunking-invariance: that
+    /// invariant was never
     /// meant to hold across a chunking that changes whether the guard fires.
     #[test]
     fn chunking_invariance_stops_holding_once_a_single_call_exceeds_the_cap() {
@@ -359,7 +356,7 @@ mod tests {
         );
     }
 
-    /// Scenario (spiral-of-death guard, goal 3): an unusually large frame
+    /// Scenario (spiral-of-death guard): an unusually large frame
     /// duration — e.g. a tab backgrounded for several seconds — must not
     /// make the harness try to run an unbounded number of catch-up steps in
     /// one call. With a small explicit cap, a huge duration reports at most
@@ -404,7 +401,7 @@ mod tests {
     }
 
     /// Scenario: the harness is usable via a step callback instead of a raw
-    /// count — goal 2's "or returns a step count" alternative. The callback
+    /// count — the "or returns a step count" alternative. The callback
     /// must run exactly once per elapsed step, matching the returned count.
     #[test]
     fn step_with_invokes_the_callback_once_per_elapsed_step() {

@@ -1,12 +1,9 @@
 //! `Scenario`: a single data value holding everything needed to build and
-//! run a scenario — the "one definition, two consumers" type this
-//! milestone's round 2 exists to shape (see
-//! `cycle-log/tranche-1/m1.1/round-02.md`, goal 2). Round 3 (a headless
-//! runner) and round 4 (a renderer) will both build a `Grid` from the same
+//! run a scenario — the "one definition, two consumers" shape this module
+//! exists to provide. `src/measure.rs` (a headless runner) and
+//! `src/render.rs` (a renderer) both build a `Grid` from the same
 //! `Scenario` value and then diverge — one measuring, one drawing — without
-//! either owning scenario *definition* itself. Neither consumer exists yet;
-//! this round's job is the shape being genuinely usable by both, not
-//! building either one.
+//! either owning scenario *definition* itself.
 //!
 //! ## Shape chosen: data + an explicit placement list, not a builder/closure
 //!
@@ -23,9 +20,9 @@
 //! a future save/replay format) would have to run it against a real `Grid`
 //! just to find out — an explicit data list can be read, counted, and
 //! compared directly, by both consumers, without executing anything. The
-//! placement list is exactly the same "(index, id) pairs" shape round 1's
-//! own tests already use ad hoc (`grid.set(GridIndex::new(..), ..)` calls);
-//! this just gives that pattern a name and a durable, reusable home.
+//! placement list is exactly the same "(index, id) pairs" shape
+//! `src/grid.rs`'s own tests already use ad hoc (`grid.set(GridIndex::new(..),
+//! ..)` calls); this just gives that pattern a name and a reusable home.
 //!
 //! `MaterialTable` is stored *owned*, not referenced, so a `Scenario` is a
 //! fully self-contained value — a headless runner and a renderer loading
@@ -84,11 +81,11 @@ impl Scenario {
     /// the same cell, the same "last write wins" behaviour `Grid::set`
     /// itself already has.
     ///
-    /// This is the round's one real decision (how a scenario's data becomes
-    /// a grid), so it is content, not plumbing — but it is a short, direct
+    /// This is the one real decision (how a scenario's data becomes a
+    /// grid), so it is content, not plumbing — but it is a short, direct
     /// composition of `Grid::new` and `Grid::set`, both already proven by
-    /// round 1's own tests, so it is implemented directly here rather than
-    /// left as a stub.
+    /// `src/grid.rs`'s own tests, so it is implemented directly here rather
+    /// than left as a stub.
     pub fn build_grid(&self) -> Grid {
         let mut grid = Grid::new(self.width, self.height, self.background);
         for &(index, id) in &self.placements {
@@ -99,12 +96,12 @@ impl Scenario {
 }
 
 /// A small, concrete fixture: a `6x4` grid of air with a lump of stone in
-/// one corner and a pool of water in another — the "small grid with a lump
-/// of stone and a pool of water sitting in air" example this round's goal 3
-/// asks for, named so round 3 (headless runner) and round 4 (renderer) can
-/// both find and reuse it rather than each inventing their own.
+/// one corner and a pool of water in another — a "small grid with a lump of
+/// stone and a pool of water sitting in air" example, named so the headless
+/// runner and the renderer can both find and reuse it rather than each
+/// inventing their own.
 ///
-/// Uses [`MaterialTable::reference`] (air/water/stone, per round 1) as its
+/// Uses [`MaterialTable::reference`] (air/water/stone) as its
 /// material table, air as the background, a 2x2 stone lump in the
 /// bottom-left and a 2x1 water pool along the right edge — chosen only to
 /// be visually/structurally distinct (a lump vs. a pool, different sizes,
@@ -134,7 +131,7 @@ pub fn stone_and_water_pool() -> Scenario {
 mod tests {
     use super::*;
 
-    // --- Scenario: Scenario converts to a runnable Grid (goal 2) ---
+    // --- Scenario: Scenario converts to a runnable Grid ---
 
     /// Scenario: `build_grid` fills every cell with `background` except the
     /// explicitly placed ones, which read back exactly the material they
@@ -186,13 +183,13 @@ mod tests {
         );
     }
 
-    // --- Scenario: the named fixture (goal 3) ---
+    // --- Scenario: the named fixture ---
 
     /// Scenario: `stone_and_water_pool` builds a grid whose dimensions match
     /// what it declares, with air as the background everywhere except its
     /// documented stone lump and water pool — pins the fixture is genuinely
-    /// usable (constructs, has the right shape) so round 3/4 can rely on it
-    /// without re-deriving its layout.
+    /// usable (constructs, has the right shape) so the headless runner and
+    /// renderer can rely on it without re-deriving its layout.
     #[test]
     fn stone_and_water_pool_builds_a_grid_with_air_background_and_both_materials_present() {
         let scenario = stone_and_water_pool();

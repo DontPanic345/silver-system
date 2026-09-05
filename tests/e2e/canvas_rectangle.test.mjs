@@ -1,21 +1,18 @@
-// Scenario (durable): "A person opens the built M0.1 page in a real browser
-// tab and watches the rectangle actually change over time, once per fixed
-// tick — proof this is a running program, not a single paint call."
+// Scenario: "A person opens the built page in a real browser tab and
+// watches the rectangle actually change over time, once per fixed tick —
+// proof this is a running program, not a single paint call."
 //
-// This is the round's headless stand-in for a human looking at a screenshot,
-// per project preference (see memory: verify sims with headless numbers, not
+// This is a headless stand-in for a human looking at a screenshot, per
+// project preference (see memory: verify sims with headless numbers, not
 // screenshots). It serves the built www/ directory over plain HTTP, drives a
 // real headless Chromium via Playwright, and reads back actual canvas pixel
 // data with getImageData at three distinct points in time (tick 0, tick 1,
 // tick 2) and asserts the colour alternates and back — it does not look at a
-// PNG, and it is not a single static-frame check. (Originally two samples in
-// round 1; round 2's Refactor found a two-sample check can't distinguish a
-// genuinely advancing counter from one stuck after its first increment, so a
-// third sample was added — see round-02.md. This comment was left saying
-// "two" until the tranche-0 tranche-scope refactor pass caught the drift.)
+// PNG, and it is not a single static-frame check. Three samples, not two: a
+// two-sample check can't distinguish a genuinely advancing counter from one
+// stuck after its first increment.
 //
-// Round 2 fixes forward the duplication round 1's Refactor flagged: the
-// expected colour/coordinate/tick-interval values are no longer hardcoded
+// The expected colour/coordinate/tick-interval values are not hardcoded
 // here. They are read at runtime from the already-loaded wasm module via
 // `window.__wasm` (see www/index.html), which exposes the same
 // `rect_x`/`rect_y`/`rect_w`/`rect_h`/`rect_color_rgb`/`rect_color_rgb_alt`/
@@ -43,11 +40,11 @@ import { createRequire } from 'node:module';
 
 // Playwright is installed globally under NODE_PATH=/usr/local/lib/node_modules
 // (see .claude/settings.json). Node's ESM loader does NOT consult NODE_PATH
-// for `import`/dynamic `import()` (confirmed round 1 — it resolves fine
-// under CommonJS `require` but throws ERR_MODULE_NOT_FOUND under `import()`
-// with the identical NODE_PATH set). `createRequire` gives us the CJS
-// resolver, which does honour NODE_PATH, without switching this whole file
-// to CommonJS.
+// for `import`/dynamic `import()` (confirmed — it resolves fine under
+// CommonJS `require` but throws ERR_MODULE_NOT_FOUND under `import()` with
+// the identical NODE_PATH set). `createRequire` gives us the CJS resolver,
+// which does honour NODE_PATH, without switching this whole file to
+// CommonJS.
 const require = createRequire(import.meta.url);
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -133,14 +130,13 @@ async function main() {
       fail(
         `FAIL canvas_rectangle: wasm module did not report ready ` +
           `(__viewerError=${viewerError}, pageerror=${JSON.stringify(pageErrors)}). ` +
-          `Expected once Green implements the tick stubs: __viewerReady === true.`
+          `Expected __viewerReady === true.`
       );
       return;
     }
 
-    // Read the round's shared constants straight from the loaded wasm
-    // module — the single source of truth (round 2, goal 2) — rather than
-    // hardcoding them here.
+    // Read the shared constants straight from the loaded wasm module — the
+    // single source of truth — rather than hardcoding them here.
     const constants = await page.evaluate(() => {
       const wasm = window.__wasm;
       return {
@@ -180,8 +176,8 @@ async function main() {
 
     // --- Sample 2: wait for at least one real tick to have fired (real
     // wall-clock interval, not a bypassed/pure-function call — this proves
-    // the actual running loop works end to end, per the milestone intent),
-    // then sample the same point again. ---
+    // the actual running loop works end to end), then sample the same point
+    // again. ---
     const waitTimeoutMs = Math.max(5000, constants.intervalMs * 20);
     let sawTick = true;
     await page.waitForFunction(() => window.__tickCount >= 1, { timeout: waitTimeoutMs }).catch(() => {
@@ -229,9 +225,7 @@ async function main() {
     // tell a genuinely advancing counter from one that computes
     // `current + 1` without ever storing it — such a counter would return 1
     // forever, which still differs from tick 0 and would slip past the
-    // sample-1-vs-sample-2 checks above. Confirmed by deliberately
-    // introducing exactly that bug during round 2's Refactor pass: this
-    // third sample is what caught it (see round-02.md). ---
+    // sample-1-vs-sample-2 checks above. ---
     let sawSecondTick = true;
     await page.waitForFunction(() => window.__tickCount >= 2, { timeout: waitTimeoutMs }).catch(() => {
       sawSecondTick = false;

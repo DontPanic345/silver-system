@@ -2,29 +2,28 @@
 //! grid cell can be made of, and `MaterialTable` is a small, indexable
 //! collection of such data.
 //!
-//! This module is M1.1 round 1's goal 2 (see
-//! `cycle-log/tranche-1/m1.1/round-01.md`): every later milestone in
-//! tranche 1 (granular solids, liquids, pressure, gases, temperature) adds
-//! *behaviour* keyed off a cell's material, and that behaviour must read as
-//! "look up this material's data and act on it generically" — never as a
-//! per-material `if material == Water { ... } else if material == Stone
-//! { ... }` chain hard-coded into the simulation step. Getting `Material` a
-//! real, growable shape now is what keeps that promise honest later.
+//! Every later grid behaviour (granular solids, liquids, pressure, gases,
+//! temperature) adds *behaviour* keyed off a cell's material, and that
+//! behaviour must read as "look up this material's data and act on it
+//! generically" — never as a per-material `if material == Water { ... }
+//! else if material == Stone { ... }` chain hard-coded into the simulation
+//! step. Getting `Material` a real, growable shape now is what keeps that
+//! promise honest later.
 //!
 //! Deliberately has no dependency on `web-sys`/`wasm-bindgen`, `grid`, or
 //! any rendering concept — same reasoning `src/math.rs` and
 //! `src/timestep.rs` give for their own independence: a material is data,
 //! usable identically from native `cargo test`, a future wasm build, and
-//! whatever GPU-side representation M1.7 eventually needs.
+//! whatever GPU-side representation a future physics pipeline needs.
 
 use crate::math::Scalar;
 
-/// A material's physical phase. At minimum `Solid`/`Liquid`/`Gas`, per this
-/// round's goal 2 — this is not a place for per-material special cases
-/// (that defeats the point of `Material` being data); it exists so later
-/// tranche-1 rounds can branch on *phase-level* behaviour (does this cell
-/// flow, does it settle, does it diffuse heat the way a gas does) without
-/// each caring which specific material a cell holds.
+/// A material's physical phase: `Solid`/`Liquid`/`Gas`. This is not a place
+/// for per-material special cases (that defeats the point of `Material`
+/// being data); it exists so later behaviour can branch on *phase-level*
+/// properties (does this cell flow, does it settle, does it diffuse heat
+/// the way a gas does) without each caring which specific material a cell
+/// holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     Solid,
@@ -33,40 +32,37 @@ pub enum Phase {
 }
 
 /// A material's physical properties, as plain data — never as a
-/// per-material code path. Every later tranche-1 round that needs to know
-/// "how does this cell behave" reads it off a `Material` value looked up
-/// from a [`MaterialTable`], not off a hard-coded match on which material it
-/// is.
+/// per-material code path. Any later code that needs to know "how does this
+/// cell behave" reads it off a `Material` value looked up from a
+/// [`MaterialTable`], not off a hard-coded match on which material it is.
 ///
-/// Fields are round 1's stated minimum (density, viscosity, heat_capacity,
+/// Fields are a stated minimum (density, viscosity, heat_capacity,
 /// conductivity, phase, colour) plus evident room to grow: adding a field
-/// later (e.g. tranche 2's `dissolves_in`/`permeable`, explicitly deferred —
-/// see `cycle-log/tranche-1/m1.1/plan.md` §2) is "add a field and a
-/// constructor argument", not a structural rework.
+/// later (e.g. a `dissolves_in`/`permeable` flag, deliberately not added
+/// yet) is "add a field and a constructor argument", not a structural
+/// rework.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Material {
     /// Mass per unit area (this is a 2D simulation), in the crate's
     /// otherwise-unspecified world units — no specific unit system is
-    /// pinned yet (nothing downstream depends on one this round; the first
-    /// round that measures real mass, M1.1 round 3, is where that would be
-    /// pinned if needed).
+    /// pinned yet (nothing downstream depends on one; that would be pinned
+    /// once real mass is measured, if needed).
     pub density: Scalar,
-    /// Resistance to flow, for later liquid/gas rounds. Meaningless for
+    /// Resistance to flow, for later liquid/gas behaviour. Meaningless for
     /// `Phase::Solid` materials but still present — a uniform field beats a
     /// phase-conditional one.
     pub viscosity: Scalar,
     /// Energy required to raise this material's temperature, for later
-    /// temperature rounds.
+    /// temperature behaviour.
     pub heat_capacity: Scalar,
     /// Rate at which this material conducts heat to neighbouring cells, for
-    /// later temperature rounds.
+    /// later temperature behaviour.
     pub conductivity: Scalar,
     /// This material's phase — see [`Phase`].
     pub phase: Phase,
-    /// The colour this material paints as, for the later renderer (M1.1
-    /// round 4), as 8-bit sRGB — same `(u8, u8, u8)` convention
-    /// `src/lib.rs`'s `RECT_COLOR_RGB` already uses, so the renderer needs
-    /// no new colour representation when it arrives.
+    /// The colour this material paints as, as 8-bit sRGB — same
+    /// `(u8, u8, u8)` convention `src/lib.rs`'s `RECT_COLOR_RGB` already
+    /// uses, so the renderer needs no new colour representation.
     pub colour: (u8, u8, u8),
 }
 
@@ -100,7 +96,7 @@ impl Material {
 ///
 /// Deliberately does not assume anything about how `MaterialTable` stores
 /// its materials internally (direct-index `Vec` vs. something else) — that
-/// mapping is `MaterialTable::get`'s decision, not this type's.
+/// mapping is `MaterialTable::get`'s decision, not this type's decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MaterialId(pub u16);
 
@@ -114,13 +110,13 @@ impl MaterialId {
 }
 
 /// A small, indexable collection of [`Material`] values — the "material
-/// table as data, not per-material code paths" round 1's goal 2 asks for.
+/// table as data, not per-material code paths" shape.
 ///
 /// Deliberately holds owned `Material` values (not references) and exposes
 /// them only through [`MaterialTable::get`] keyed by [`MaterialId`] — this
-/// is the single seam every later round's "look up this cell's material"
-/// operation goes through, so it can be swapped (e.g. for a GPU-resident
-/// table, M1.7) without every caller changing.
+/// is the single seam every "look up this cell's material" operation goes
+/// through, so it can be swapped (e.g. for a GPU-resident table, later)
+/// without every caller changing.
 pub struct MaterialTable {
     materials: Vec<Material>,
 }
@@ -129,9 +125,8 @@ impl MaterialTable {
     /// Builds a table from an explicit list of materials. Plain field
     /// construction, no decision to make, so implemented directly — same
     /// reasoning as `Material::new`. `materials[n]`'s position in the
-    /// vector is that material's [`MaterialId`] under this round's id
-    /// convention — see [`MaterialTable::get`] for why that convention
-    /// itself is left for Green to commit to, not assumed here.
+    /// vector is that material's [`MaterialId`] under the id convention —
+    /// see [`MaterialTable::get`].
     pub fn new(materials: Vec<Material>) -> Self {
         MaterialTable { materials }
     }
@@ -148,33 +143,32 @@ impl MaterialTable {
 
     /// Looks up the material at `id`.
     ///
-    /// This is the round's real decision, left as a stub for Green: how a
-    /// [`MaterialId`] maps to a position in this table's storage (direct
-    /// indexing into the backing `Vec`, or something else) is a choice, not
-    /// plain plumbing — pinned by a test below rather than assumed here.
+    /// How a [`MaterialId`] maps to a position in this table's storage
+    /// (direct indexing into the backing `Vec`, or something else) is a
+    /// choice, not plain plumbing — pinned by a test below.
     ///
     /// Panics if `id` does not name a material in this table.
     pub fn get(&self, id: MaterialId) -> &Material {
         &self.materials[id.0 as usize]
     }
 
-    /// The reference material table this round's goal 2 asks for: at least
-    /// 2-3 distinct materials (e.g. "empty/air", "water", "stone") as data.
+    /// A reference material table: at least 2-3 distinct materials (e.g.
+    /// "empty/air", "water", "stone") as data.
     ///
-    /// Left as a stub for Green: choosing the concrete property values
-    /// (what density water has, what colour stone paints) is this round's
-    /// actual content, not plumbing — the tests below pin the *shape* those
-    /// values must have (distinct phases, at least three entries) without
-    /// pinning the numbers themselves, so Green has real room to choose
-    /// sensible values.
+    /// Choosing the concrete property values (what density water has, what
+    /// colour stone paints) is this function's actual content, not
+    /// plumbing — the tests below pin the *shape* those values must have
+    /// (distinct phases, at least three entries) without pinning the
+    /// numbers themselves, leaving room to choose different sensible values
+    /// later.
     ///
-    /// **Refactor note on units:** these numbers are plausible relative to
+    /// **Note on units:** these numbers are plausible relative to
     /// each other (stone denser than water, water denser than empty/air;
     /// water's `heat_capacity` is its real specific heat in J/(g·K)) but are
     /// **not** drawn from one consistent unit system — `density` is an
     /// unpinned, effectively normalised-to-water quantity (per `Material`'s
     /// own doc comment), while `heat_capacity` borrows a real physical
-    /// constant. A later round computing actual energy (`heat_capacity *
+    /// constant. Any later code computing actual energy (`heat_capacity *
     /// mass`) must not assume these compose dimensionally correctly without
     /// first pinning a real unit system for `density` — that pinning is
     /// still an open decision, not implied by this table.
@@ -190,12 +184,12 @@ impl MaterialTable {
 mod tests {
     use super::*;
 
-    // --- Scenario: material table as data, not per-material code (goal 2) ---
+    // --- Scenario: material table as data, not per-material code ---
 
     /// Scenario: a table built from an explicit list of materials returns
     /// each material, unchanged, when looked up by its position-derived id
     /// — the basic "store data, get the same data back" contract every
-    /// later round's "look up this cell's material" call relies on.
+    /// "look up this cell's material" call relies on.
     #[test]
     fn material_table_get_returns_the_material_stored_at_its_id() {
         let water = Material::new(1.0, 0.5, 4.0, 0.6, Phase::Liquid, (40, 90, 200));
@@ -207,10 +201,10 @@ mod tests {
         assert_eq!(*table.get(MaterialId::new(1)), stone);
     }
 
-    /// Scenario: the reference table round 1's goal 2 asks for holds at
-    /// least three distinct materials — "a small material table... holding
-    /// at least 2-3 distinct materials". Checks the count, not specific
-    /// values (those are Green's to choose).
+    /// Scenario: the reference table holds at least three distinct
+    /// materials — "a small material table... holding at least 2-3 distinct
+    /// materials". Checks the count, not specific values (those are free to
+    /// choose).
     #[test]
     fn reference_table_holds_at_least_three_materials() {
         let table = MaterialTable::reference();
@@ -224,8 +218,8 @@ mod tests {
 
     /// Scenario: the reference table's materials are genuinely distinct
     /// data, not the same material repeated — spans at least a solid and a
-    /// liquid phase, matching the round's own example ("empty/air, water,
-    /// stone"). Checks phase variety, not exact colours/densities.
+    /// liquid phase, matching its own example ("empty/air, water, stone").
+    /// Checks phase variety, not exact colours/densities.
     #[test]
     fn reference_table_spans_at_least_a_solid_and_a_liquid_phase() {
         let table = MaterialTable::reference();

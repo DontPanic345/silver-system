@@ -1,62 +1,55 @@
 //! The grid: a fixed-size, structure-of-arrays, double-buffered collection
 //! of cells, each addressed by `math::GridIndex`.
 //!
-//! This module is M1.1 round 1's goals 1, 3 and 4 (see
-//! `cycle-log/tranche-1/m1.1/round-01.md`) — the shape every later round in
-//! this milestone, and every later milestone in tranche 1 (granular solids,
-//! liquids, pressure, gases, temperature), adds behaviour on top of. This
-//! round adds no behaviour: no step function (round 2's job), no per-cell
-//! physics. Its whole job is the bones being right: a cell is addressed the
-//! way callers will expect, and a step can write a next state without
-//! disturbing the current one.
+//! This is the shape all later grid behaviour (granular solids, liquids,
+//! pressure, gases, temperature) adds on top of. This module itself adds no
+//! per-cell physics — its whole job is the bones being right: a cell is
+//! addressed the way callers will expect, and a step can write a next state
+//! without disturbing the current one.
 //!
 //! ## Structure-of-arrays, and why only one array so far
 //!
 //! Each per-cell field the simulation needs is its own parallel `Vec`,
 //! indexed by the same linear position — not a `Vec<Cell>` of per-cell
-//! structs. Round 1 stores exactly one such field (`MaterialId`), because
-//! that is all this round's goals ask a cell to hold; the SoA shape is
-//! chosen now specifically so a later round (temperature, velocity, ...)
-//! adds a new parallel `Vec<Scalar>` field to `Grid` rather than reshaping
-//! every cell's layout retroactively — the same "get the shape right before
-//! the retrofit tax compounds" reasoning `src/math.rs`'s own module doc
-//! comment gives for `Vec2`/`GridIndex`.
+//! structs. Currently stores exactly one such field (`MaterialId`); the SoA
+//! shape is chosen now specifically so later behaviour (temperature,
+//! velocity, ...) adds a new parallel `Vec<Scalar>` field to `Grid` rather
+//! than reshaping every cell's layout retroactively — the same "get the
+//! shape right before the retrofit tax compounds" reasoning `src/math.rs`'s
+//! own module doc comment gives for `Vec2`/`GridIndex`.
 //!
 //! ## Double buffering
 //!
 //! `Grid` holds two `MaterialId` buffers, `current` and `next`, of identical
 //! size. Reads ([`Grid::get`]) and ad-hoc writes ([`Grid::set`], used by
-//! scenario setup and tests) go through `current`. A step (round 2's job)
-//! writes its results into `next` via [`Grid::set_next`] without disturbing
-//! `current` mid-step — every cell's next state is computed from a
-//! consistent, unchanging view of the current one — and then calls
-//! [`Grid::swap`] once the whole step is done, making the written state the
-//! new `current`. This round does not implement a step; it only makes the
-//! buffer shape exist and be swappable, per the round's stated goal 1.
+//! scenario setup and tests) go through `current`. A step writes its
+//! results into `next` via [`Grid::set_next`] without disturbing `current`
+//! mid-step — every cell's next state is computed from a consistent,
+//! unchanging view of the current one — and then calls [`Grid::swap`] once
+//! the whole step is done, making the written state the new `current`.
 //!
 //! ## Coordinate convention: this is `GridIndex`'s first real caller
 //!
 //! `src/math.rs` pins `GridIndex`'s `(i, j)` convention (`i` maps to world
-//! `x`, `j` maps to world `y`, `+y` up) but had no real caller before this
-//! round — see that module's doc comment. This grid is that caller:
-//! [`Grid::linear_index`] is the new decision this round makes about how a
-//! `GridIndex` maps onto this grid's flat backing storage (row-major, `i`
-//! fastest-varying — i.e. adjacent `i` are adjacent in storage, adjacent `j`
-//! are `width` apart), and [`Grid::cell_center`] delegates to
+//! `x`, `j` maps to world `y`, `+y` up) — see that module's doc comment.
+//! This grid is `GridIndex`'s real caller: [`Grid::linear_index`] decides
+//! how a `GridIndex` maps onto this grid's flat backing storage (row-major,
+//! `i` fastest-varying — i.e. adjacent `i` are adjacent in storage, adjacent
+//! `j` are `width` apart), and [`Grid::cell_center`] delegates to
 //! `GridIndex::center` so a cell's world-space position is available
 //! without this module re-deriving it.
 //!
-//! **Refactor note for a future renderer round:** increasing `j` moves one
-//! full row *forward* in this flat storage (`linear_index` grows), and `j`
-//! increases in world `+y` (up, per `math.rs`). Neither of those facts says
-//! anything about which way is "up" on screen — a canvas row index increases
-//! *downward* (`src/lib.rs`'s own pinned convention). A future round that
-//! walks `Grid::cells()` linearly to fill image rows top-to-bottom must
-//! flip that axis explicitly (row 0 of the image is the *largest* `j`, not
-//! `j == 0`), the same flip `math.rs`'s `Vec2` doc comment already requires
-//! at any world-to-canvas boundary — this is not a new rule, just this
-//! module's own instance of it, named here so it isn't rediscovered as a
-//! bug once a renderer exists.
+//! **Note for any future renderer:** increasing `j` moves one full row
+//! *forward* in this flat storage (`linear_index` grows), and `j` increases
+//! in world `+y` (up, per `math.rs`). Neither of those facts says anything
+//! about which way is "up" on screen — a canvas row index increases
+//! *downward* (`src/lib.rs`'s own pinned convention). Code that walks
+//! `Grid::cells()` linearly to fill image rows top-to-bottom must flip that
+//! axis explicitly (row 0 of the image is the *largest* `j`, not `j == 0`),
+//! the same flip `math.rs`'s `Vec2` doc comment already requires at any
+//! world-to-canvas boundary — this is not a new rule, just this module's own
+//! instance of it, named here so it isn't rediscovered as a bug (see
+//! `src/render.rs`, which does exactly this flip).
 
 use crate::material::MaterialId;
 use crate::math::{GridIndex, Scalar, Vec2};
@@ -66,9 +59,8 @@ use crate::timestep::FixedTimestep;
 /// [`MaterialId`]. See the module doc comment for the structure-of-arrays
 /// and double-buffering shape.
 ///
-/// Dimensions are fixed at construction ([`Grid::new`]) — this round's goal
-/// 1 states this explicitly; resizing a grid after construction is not
-/// supported and no method here attempts it.
+/// Dimensions are fixed at construction ([`Grid::new`]); resizing a grid
+/// after construction is not supported and no method here attempts it.
 pub struct Grid {
     width: usize,
     height: usize,
@@ -80,8 +72,6 @@ impl Grid {
     /// Builds a `width` x `height` grid with every cell, in both buffers,
     /// set to `fill`.
     ///
-    /// Left as a stub for Green: allocating and filling both buffers at the
-    /// chosen size is this round's real content, not plumbing.
     pub fn new(width: usize, height: usize, fill: MaterialId) -> Self {
         let size = width * height;
         Grid {
@@ -109,14 +99,13 @@ impl Grid {
     /// Converts a [`GridIndex`] into this grid's flat backing-storage
     /// position (the same position in both `current` and `next`).
     ///
-    /// This is the round's real convention decision (see the module doc
-    /// comment), left as a stub for Green: the tests below pin what the
-    /// convention must satisfy (agreement with [`Grid::cells`], row-major
-    /// with `i` fastest-varying) without assuming an implementation here.
+    /// This is the storage convention decision (see the module doc
+    /// comment); the tests below pin what the convention must satisfy
+    /// (agreement with [`Grid::cells`], row-major with `i` fastest-varying).
     ///
     /// Panics if `index` names a cell outside this grid's fixed bounds
-    /// (`0 <= i < width`, `0 <= j < height`) — this round's grid does not
-    /// wrap or clamp out-of-bounds access.
+    /// (`0 <= i < width`, `0 <= j < height`) — this grid does not wrap or
+    /// clamp out-of-bounds access.
     pub fn linear_index(&self, index: GridIndex) -> usize {
         assert!(
             index.i >= 0 && (index.i as usize) < self.width,
@@ -132,9 +121,6 @@ impl Grid {
     }
 
     /// Reads the material at `index` from the **current** buffer.
-    ///
-    /// Left as a stub for Green: depends on [`Grid::linear_index`], this
-    /// round's real decision.
     pub fn get(&self, index: GridIndex) -> MaterialId {
         self.current[self.linear_index(index)]
     }
@@ -143,8 +129,6 @@ impl Grid {
     /// — for scenario setup and tests, not for a step's per-cell writes
     /// (those go through [`Grid::set_next`] so a step never observes its
     /// own in-progress results).
-    ///
-    /// Left as a stub for Green: depends on [`Grid::linear_index`].
     pub fn set(&mut self, index: GridIndex, id: MaterialId) {
         let pos = self.linear_index(index);
         self.current[pos] = id;
@@ -152,16 +136,12 @@ impl Grid {
 
     /// Reads the material at `index` from the **next** buffer — mainly for
     /// tests to observe a write before [`Grid::swap`] makes it current.
-    ///
-    /// Left as a stub for Green: depends on [`Grid::linear_index`].
     pub fn get_next(&self, index: GridIndex) -> MaterialId {
         self.next[self.linear_index(index)]
     }
 
     /// Writes the material at `index` into the **next** buffer — the write
-    /// a step (round 2's job) uses so it never disturbs `current` mid-step.
-    ///
-    /// Left as a stub for Green: depends on [`Grid::linear_index`].
+    /// a step uses so it never disturbs `current` mid-step.
     pub fn set_next(&mut self, index: GridIndex, id: MaterialId) {
         let pos = self.linear_index(index);
         self.next[pos] = id;
@@ -169,21 +149,15 @@ impl Grid {
 
     /// Swaps the `current` and `next` buffers, so whatever was just written
     /// into `next` (via [`Grid::set_next`]) becomes the grid's new
-    /// `current` state. This round's job is this swap existing and doing
-    /// exactly a swap (no copying, no partial state) — round 2 decides when
-    /// a step calls it.
-    ///
-    /// Left as a stub for Green: a real swap (`std::mem::swap` or
-    /// equivalent) is one line, but it is still this round's content to
-    /// commit to, not assumed here.
+    /// `current` state — exactly a swap, no copying, no partial state.
     pub fn swap(&mut self) {
         std::mem::swap(&mut self.current, &mut self.next);
     }
 
     /// A read-only view of this grid's **current**-buffer storage, in the
     /// same flat layout [`Grid::linear_index`] addresses into. Exists so
-    /// the grid/storage-agreement convention (this round's goal 4) can be
-    /// pinned by a test: `grid.get(idx) == grid.cells()[grid.linear_index(idx)]`.
+    /// the grid/storage-agreement convention can be pinned by a test:
+    /// `grid.get(idx) == grid.cells()[grid.linear_index(idx)]`.
     ///
     /// Plain plumbing (returns a slice view of the existing field), so
     /// implemented directly rather than stubbed — same reasoning as
@@ -196,8 +170,8 @@ impl Grid {
     /// `cell_size`. Delegates entirely to `GridIndex::center` — no new
     /// decision here, just this grid's first genuine caller of it (closing
     /// the gap `src/math.rs`'s module doc comment names: `GridIndex`/`Vec2`
-    /// existed, tested, but uncalled by real code before this round). Plain
-    /// delegation, so implemented directly rather than stubbed.
+    /// existed, tested, but uncalled by real code). Plain delegation, so
+    /// implemented directly rather than stubbed.
     pub fn cell_center(&self, index: GridIndex, cell_size: Scalar) -> Vec2 {
         index.center(cell_size)
     }
@@ -211,11 +185,10 @@ impl Grid {
     /// spiral-of-death semantics), having applied [`Grid::step_once`] that
     /// many times.
     ///
-    /// This round's goal 1: the *mechanism* of stepping being real
-    /// elapsed-time accounting (not a bare per-call `+1`), wired to the
-    /// existing, unmodified `FixedTimestep`. The per-cell transformation
-    /// each elapsed step applies is deliberately the identity — see
-    /// [`Grid::step_once`].
+    /// The *mechanism* of stepping is real elapsed-time accounting (not a
+    /// bare per-call `+1`), wired to the existing, unmodified
+    /// `FixedTimestep`. The per-cell transformation each elapsed step
+    /// applies is deliberately the identity — see [`Grid::step_once`].
     pub fn step(&mut self, timestep: &mut FixedTimestep, frame_duration_secs: Scalar) -> u32 {
         let steps = timestep.advance(frame_duration_secs);
         for _ in 0..steps {
@@ -229,13 +202,13 @@ impl Grid {
     /// `current` mid-step) and then [`Grid::swap`]s once the whole pass is
     /// done.
     ///
-    /// **This round's per-cell transformation is the identity** — every
+    /// **The per-cell transformation is currently the identity** — every
     /// cell's next value is exactly its current value, unchanged. No
-    /// gravity, no transport, no material behaviour: that is explicitly
-    /// M1.2 onward's job (see the round's Intent). This function exists so
-    /// a later round replaces the body of the inner loop with real per-cell
-    /// physics without changing the stepping mechanism ([`Grid::step`],
-    /// [`FixedTimestep`] wiring) around it at all.
+    /// gravity, no transport, no material behaviour yet: that is later
+    /// work's job. This function exists so real per-cell physics can
+    /// replace the body of the inner loop without changing the stepping
+    /// mechanism ([`Grid::step`], [`FixedTimestep`] wiring) around it at
+    /// all.
     fn step_once(&mut self) {
         for j in 0..self.height as i32 {
             for i in 0..self.width as i32 {
@@ -257,7 +230,7 @@ mod tests {
     const WATER: MaterialId = MaterialId(1);
     const STONE: MaterialId = MaterialId(2);
 
-    // --- Scenario: fixed dimensions, GridIndex-addressed (goal 1) ---
+    // --- Scenario: fixed dimensions, GridIndex-addressed ---
 
     /// Scenario: a freshly built grid reports the exact width and height it
     /// was constructed with, and every cell in that range reads back the
@@ -283,7 +256,7 @@ mod tests {
     /// Scenario: writing a specific material to one cell via `set` changes
     /// only that cell — its neighbours still read the original fill
     /// material. Pins that `set`/`get` are genuinely per-cell, addressed by
-    /// `GridIndex`, not a whole-grid operation (goals 1 and 3 together).
+    /// `GridIndex`, not a whole-grid operation.
     #[test]
     fn setting_one_cell_does_not_disturb_its_neighbours() {
         let mut grid = Grid::new(3, 3, AIR);
@@ -303,13 +276,13 @@ mod tests {
         }
     }
 
-    // --- Scenario: double buffering (goal 1) ---
+    // --- Scenario: double buffering ---
 
     /// Scenario: writing to the next buffer is invisible through `get`
     /// (which reads current) until `swap` is called, after which it becomes
     /// the current state — the double-buffer isolation the module doc
-    /// comment describes, and the exact mechanism round 2's step function
-    /// will rely on.
+    /// comment describes, and the exact mechanism the step function relies
+    /// on.
     #[test]
     fn next_buffer_write_is_isolated_from_current_until_swap() {
         let mut grid = Grid::new(2, 2, AIR);
@@ -358,15 +331,14 @@ mod tests {
     }
 
     /// Scenario: a *step* function will call `swap` once per tick, every
-    /// tick, for the life of a run — this round's "swappable" claim (goal 1)
-    /// is only actually true if that holds under repeated use, not just the
-    /// one-swap case above. Simulates several ticks by hand (write a
-    /// distinct, tick-numbered material into `next`, then swap) and checks
-    /// after every single swap — not just the last one — that `current`
-    /// holds exactly what that tick wrote and nothing from an earlier or
-    /// later tick leaks through. Refactor-added: this is exactly the kind of
-    /// "does it still hold after repetition, not just once" adversarial
-    /// check `cycle-refactor` asks for on a brand-new shared primitive.
+    /// tick, for the life of a run — the "swappable" claim is only actually
+    /// true if that holds under repeated use, not just the one-swap case
+    /// above. Simulates several ticks by hand (write a distinct,
+    /// tick-numbered material into `next`, then swap) and checks after
+    /// every single swap — not just the last one — that `current` holds
+    /// exactly what that tick wrote and nothing from an earlier or later
+    /// tick leaks through: the "does it still hold after repetition, not
+    /// just once" check a brand-new shared primitive deserves.
     #[test]
     fn swap_behaves_correctly_across_many_repeated_swaps_in_sequence() {
         let mut grid = Grid::new(2, 2, AIR);
@@ -392,12 +364,12 @@ mod tests {
         }
     }
 
-    // --- Scenario: convention pin, grid/storage agreement (goal 4) ---
+    // --- Scenario: convention pin, grid/storage agreement ---
 
     /// Scenario: indexing the grid via `GridIndex` (`get`) and indexing its
     /// underlying flat storage directly (`cells()[linear_index(idx)]`)
     /// agree, for a variety of cells including the origin and a
-    /// non-trivial interior cell. This is goal 4's core pin: the public
+    /// non-trivial interior cell. This is the core pin: the public
     /// `GridIndex`-addressed API and the raw storage layout must never
     /// silently disagree.
     #[test]
@@ -455,7 +427,7 @@ mod tests {
         );
     }
 
-    // --- Scenario: Vec2/GridIndex genuinely called (goal 3 / milestone target 4) ---
+    // --- Scenario: Vec2/GridIndex genuinely called ---
 
     /// Scenario: `Grid::cell_center` (this grid's own use of
     /// `GridIndex::center`) agrees with calling `GridIndex::center`
@@ -495,16 +467,13 @@ mod tests {
         let _ = grid.get(GridIndex::new(2, 0));
     }
 
-    /// Scenario (Refactor-added): the out-of-bounds contract holds on
-    /// *every* edge and axis, not just the one direction
-    /// `indexing_past_width_panics` above happens to cover — negative `i`,
-    /// negative `j`, `i == width`, and `j == height` each panic on their
-    /// own. `linear_index`'s two `assert!`s are structurally symmetric
-    /// between `i`/width and `j`/height (see `src/grid.rs`'s source), but
-    /// before this test only the `i >= width` case had ever been exercised
-    /// directly — a real coverage gap on a milestone-wide shared primitive,
-    /// closed here rather than just re-reported. All four panics are
-    /// checked independently so a future change that broke, say, only the
+    /// Scenario: the out-of-bounds contract holds on *every* edge and axis,
+    /// not just the one direction `indexing_past_width_panics` above
+    /// happens to cover — negative `i`, negative `j`, `i == width`, and
+    /// `j == height` each panic on their own. `linear_index`'s two
+    /// `assert!`s are structurally symmetric between `i`/width and
+    /// `j`/height (see `src/grid.rs`'s source). All four panics are checked
+    /// independently so a future change that broke, say, only the
     /// negative-`j` check specifically would be caught.
     #[test]
     fn out_of_bounds_contract_holds_on_every_edge_and_axis() {
@@ -526,7 +495,7 @@ mod tests {
         }
     }
 
-    // --- Scenario: step only advances what real elapsed time earns (round 2 goal 4) ---
+    // --- Scenario: step only advances what real elapsed time earns ---
 
     /// Scenario: mirrors `src/timestep.rs`'s and `src/lib.rs`'s own
     /// "irregular durations total the expected step count" scenarios, now
@@ -603,12 +572,12 @@ mod tests {
         );
     }
 
-    // --- Scenario: stepping the identity transformation is a true no-op (round 2 goal 5) ---
+    // --- Scenario: stepping the identity transformation is a true no-op ---
 
     /// Scenario: a resting scenario — several distinct materials placed in
     /// several cells, nothing moving — stays exactly as it was after
     /// stepping forward by a real elapsed duration covering several fixed
-    /// steps. This round's step content is the identity transform (no
+    /// steps. The current step content is the identity transform (no
     /// gravity, no transport, no material behaviour), so every cell must
     /// read back exactly what it held before stepping, for every step in
     /// between — not just the final one.
@@ -646,7 +615,7 @@ mod tests {
         }
     }
 
-    // --- Reference grid / performance budget (M1.1 round 5) ---
+    // --- Reference grid / performance budget ---
 
     /// Timing measurement, not a correctness scenario — `#[ignore]`d by
     /// default per the fast-path convention (`README.md`'s "Test tagging /
@@ -665,14 +634,10 @@ mod tests {
     /// `WARMUP_STEPS` untimed steps to let allocator/cache effects settle.
     /// Reports the average wall-clock time per step to stdout.
     ///
-    /// See `cycle-log/tranche-1/m1.1/round-05.md` for the chosen grid size's
-    /// reasoning and the measured number this run produced on the dev
-    /// machine at the time this round closed — this test is what makes that
-    /// number reproducible/re-derivable, not a restatement of it. The only
-    /// assertion here is a generous sanity ceiling, not the recorded budget
-    /// itself: this stays a measurement harness a later round can re-run to
-    /// check for a real regression, not a brittle timing-dependent pass/fail
-    /// gate tied to one dev machine's exact number.
+    /// The only assertion here is a generous sanity ceiling, not a recorded
+    /// budget: this stays a measurement harness that can be re-run to check
+    /// for a real regression, not a brittle timing-dependent pass/fail gate
+    /// tied to one dev machine's exact number.
     const REFERENCE_GRID_WIDTH: usize = 1024;
     const REFERENCE_GRID_HEIGHT: usize = 1024;
 

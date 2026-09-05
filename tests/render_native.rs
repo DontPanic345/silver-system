@@ -1,21 +1,19 @@
-//! M1.1 round 4, goal 4 — headless empirical check for the grid renderer,
-//! native/PNG path: runs the actual compiled `native_viewer` binary as a
-//! subprocess (not just calling `render::render_grid_to_rgb8` in-process —
-//! that would only prove the pure function, not that the binary really
-//! writes a readable file), decodes the `scenario.png` it writes, and reads
-//! real pixel bytes back — the same discipline `tests/native_fallback.rs`
-//! already applies to the M0.1 rectangle, mirrored here rather than
-//! reinvented (per the round's focus).
+//! Headless empirical check for the grid renderer, native/PNG path: runs
+//! the actual compiled `native_viewer` binary as a subprocess (not just
+//! calling `render::render_grid_to_rgb8` in-process — that would only prove
+//! the pure function, not that the binary really writes a readable file),
+//! decodes the `scenario.png` it writes, and reads real pixel bytes back —
+//! the same discipline `tests/native_fallback.rs` already applies to the
+//! rectangle, mirrored here rather than reinvented.
 //!
 //! Kept as a separate file rather than added to `tests/native_fallback.rs`:
-//! this round's explicit must-not-break condition is that the *existing*
-//! `tests/native_fallback.rs` stays unmodified, proving the M0.1 rectangle
-//! path still works untouched — this is a second, parallel test file, not a
-//! change to that one.
+//! the existing `tests/native_fallback.rs` stays unmodified, proving the
+//! rectangle path still works untouched — this is a second, parallel test
+//! file, not a change to that one.
 //!
 //! Asserts specific pixels match specific materials' `Material::colour`
-//! values for `stone_and_water_pool()` (round 2's fixture) — the same
-//! `Scenario` value round 3's `run_headless` measures (round 4 goal 5).
+//! values for `stone_and_water_pool()` — the same `Scenario` value
+//! `run_headless` measures.
 
 use std::process::Command;
 

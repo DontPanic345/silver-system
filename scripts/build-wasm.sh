@@ -2,13 +2,11 @@
 # Builds the `viewer` crate for wasm32 and generates the JS glue with
 # wasm-bindgen-cli, so www/index.html can load it.
 #
-# This is the exact command sequence proved out in
-# night-shift/cycle-log/tranche-0/m0.1/round-01.md. CI (M0.2) should call this script
-# rather than re-deriving the steps.
+# CI should call this script rather than re-deriving the steps.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-# --lib only: M0.3 added a native-only binary (src/bin/native_viewer.rs,
+# --lib only: there's also a native-only binary (src/bin/native_viewer.rs,
 # behind a `cfg(not(target_arch = "wasm32"))` dependency) that doesn't build
 # for this target and doesn't need to — the wasm-bindgen step below only
 # ever reads the library's cdylib output.

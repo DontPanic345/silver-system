@@ -1,24 +1,25 @@
-//! M0.3 — the fallback. If wasm-in-the-browser had not worked, this native
+//! The native fallback. If wasm-in-the-browser had not worked, this native
 //! binary is plan B: it renders the same rectangle-per-tick as
 //! `src/lib.rs`'s wasm path, but to real PNG files on disk instead of a
 //! canvas, using [`viewer::render_frame`] so both paths share one source of
 //! truth for geometry and colour.
 //!
-//! Pages (M0.2) is live and working, so this is *not* the path in use — see
-//! `README.md`. It exists, proven and exercised, so it doesn't have to be
-//! discovered-and-built under pressure if the web path ever breaks.
+//! The wasm/browser path is live and working, so this is *not* the path in
+//! use — see `README.md`. It exists, proven and exercised, so it doesn't
+//! have to be discovered-and-built under pressure if the web path ever
+//! breaks.
 //!
 //! Usage: `cargo run --bin native_viewer -- <out-dir>` (defaults to
 //! `native-fallback-out/` in the current directory). Writes `tick-0.png`,
 //! `tick-1.png`, `tick-2.png` — enough ticks for the three-sample check
 //! `tests/native_fallback.rs` runs (two samples can't tell "advancing" from
-//! "stuck at tick 1", per M0.1's round 2 finding) — and, since M1.1 round 4,
-//! `scenario.png`: `scenario::stone_and_water_pool()`'s current grid state
-//! rendered via `viewer::render::render_grid_to_rgb8`, the native-binary
-//! fallback path for round 4 goal 3. Both share this one binary rather than
-//! splitting into two, since both are "render something pure to a PNG on
-//! disk" and the M0.1 rectangle path already proved the `image` crate
-//! plumbing this reuses unchanged.
+//! "stuck at tick 1") — and `scenario.png`:
+//! `scenario::stone_and_water_pool()`'s current grid state rendered via
+//! `viewer::render::render_grid_to_rgb8`, the native-binary fallback path
+//! for the grid renderer. Both share this one binary rather than splitting
+//! into two, since both are "render something pure to a PNG on disk" and
+//! the rectangle path already proved the `image` crate plumbing this reuses
+//! unchanged.
 
 use std::path::PathBuf;
 
@@ -47,10 +48,10 @@ fn main() {
         println!("wrote {}", path.display());
     }
 
-    // Round 4 goal 3: the same `stone_and_water_pool()` Scenario round 3's
-    // headless runner measures, painted here via the round's new pure
-    // grid-to-pixels function — goal 5's "one definition, two consumers"
-    // demonstrated concretely against the native fallback path.
+    // The same `stone_and_water_pool()` Scenario the headless runner
+    // measures, painted here via the pure grid-to-pixels function — "one
+    // definition, two consumers" demonstrated concretely against the
+    // native fallback path.
     let scenario: scenario::Scenario = stone_and_water_pool();
     let grid = scenario.build_grid();
     let buf = render::render_grid_to_rgb8(&grid, &scenario.materials, SCENARIO_CELL_PX);

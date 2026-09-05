@@ -1,16 +1,16 @@
-//! Grid-to-pixels rendering: the "watchable" half of M1.1 (round 4 — see
-//! `cycle-log/tranche-1/m1.1/round-04.md`). Round 3 gave `Scenario` its
-//! first consumer (a headless runner that measures); this module is the
-//! second — a renderer that paints the *same* `Scenario` value's grid state
-//! to pixels, no browser/DOM dependency, so it works identically from a
-//! native binary and (via a thin wrapper in `src/lib.rs`) from wasm.
+//! Grid-to-pixels rendering: the watchable counterpart to `measure.rs`'s
+//! headless runner. That runner is `Scenario`'s first consumer (measures
+//! rather than draws); this module is the second — a renderer that paints
+//! the *same* `Scenario` value's grid state to pixels, no browser/DOM
+//! dependency, so it works identically from a native binary and (via a thin
+//! wrapper in `src/lib.rs`) from wasm.
 //!
-//! Mirrors `src/lib.rs`'s M0.1 `render_frame` shape on purpose (pure buffer
+//! Mirrors `src/lib.rs`'s `render_frame` shape on purpose (pure buffer
 //! function, thin wasm wrapper, thin native wrapper, headless pixel-reading
 //! test) rather than inventing a parallel rendering pattern — see that
-//! function's doc comment and this milestone's round-04 goal 1.
+//! function's doc comment.
 //!
-//! ## Coordinate flip: `Grid`'s own flagged refactor note
+//! ## Coordinate flip: `Grid`'s own flagged note
 //!
 //! `src/grid.rs`'s module doc comment flags this exact gap in advance:
 //! increasing `j` moves *forward* in the grid's flat storage and is world
@@ -25,11 +25,9 @@
 //! `Scenario::cell_size` (a `Scalar`) is the cell's size in *world* units,
 //! used for physics (`GridIndex::center`) — this renderer takes a separate
 //! `cell_px: u32`, the on-screen pixel size of one cell, deliberately
-//! decoupled from the physics cell size. Nothing in this milestone's goals
-//! asks for a world-to-screen camera/zoom (that is explicitly tranche 4's
-//! job, per the round's Intent — "no overlays, camera, or interaction"), so
-//! a flat integer pixels-per-cell is the simplest thing that paints a whole
-//! grid visibly.
+//! decoupled from the physics cell size. No world-to-screen camera/zoom
+//! exists yet (no overlays, camera, or interaction), so a flat integer
+//! pixels-per-cell is the simplest thing that paints a whole grid visibly.
 
 use crate::grid::Grid;
 use crate::material::MaterialTable;
@@ -61,19 +59,18 @@ pub fn render_dimensions_px(grid: &Grid, cell_px: u32) -> (u32, u32) {
 /// Pure: no DOM, no wasm-bindgen, no canvas — callable identically from a
 /// native binary ([`crate::render`]'s only expected native caller,
 /// `src/bin/native_viewer.rs`) and, via a thin `#[wasm_bindgen]` wrapper in
-/// `src/lib.rs`, from a browser. This is round 4's goal 1.
+/// `src/lib.rs`, from a browser.
 ///
 /// See the module doc comment for the top/bottom row flip this function
 /// applies (grid `j == height - 1` paints image row 0), and why `cell_px` is
 /// screen pixels per cell, not `Scenario::cell_size`'s world-space unit.
 ///
-/// Left as real content (not a stub) here in the report sense — implemented
-/// directly since it composes only already-proven `Grid`/`MaterialTable`
-/// reads, the same "short, direct composition of proven pieces" reasoning
-/// `Scenario::build_grid` gives for its own non-stubbed status — but it is
-/// this round's one genuinely new decision (the coordinate flip, the
-/// per-cell fill), so it is exercised directly by this module's own tests
-/// rather than assumed correct.
+/// Implemented directly since it composes only already-proven
+/// `Grid`/`MaterialTable` reads, the same "short, direct composition of
+/// proven pieces" reasoning `Scenario::build_grid` gives for its own
+/// directly-implemented status — but the coordinate flip and per-cell fill
+/// are genuinely new decisions, so they're exercised directly by this
+/// module's own tests rather than assumed correct.
 pub fn render_grid_to_rgb8(grid: &Grid, materials: &MaterialTable, cell_px: u32) -> Vec<u8> {
     let (width_px, height_px) = render_dimensions_px(grid, cell_px);
     let mut buf = vec![0u8; (width_px * height_px * 3) as usize];
@@ -117,7 +114,7 @@ mod tests {
         (buf[i], buf[i + 1], buf[i + 2])
     }
 
-    // --- Scenario: a pure grid-to-pixels function (goal 1) ---
+    // --- Scenario: a pure grid-to-pixels function ---
 
     /// Scenario: rendering a small grid with two distinct, known materials
     /// at a known `cell_px` produces a buffer of exactly the expected size,
@@ -163,7 +160,7 @@ mod tests {
         }
     }
 
-    // --- Scenario: the coordinate flip pinned explicitly (goal 1 / grid.rs's flagged note) ---
+    // --- Scenario: the coordinate flip pinned explicitly (grid.rs's flagged note) ---
 
     /// Scenario: a two-row grid where row j=0 and row j=1 hold visibly
     /// different materials renders with j=1 (the larger-j, "up" in world
@@ -198,10 +195,10 @@ mod tests {
         );
     }
 
-    // --- Scenario: one definition, two consumers, demonstrated concretely (goal 5) ---
+    // --- Scenario: one definition, two consumers, demonstrated concretely ---
 
     /// Scenario: the exact same `stone_and_water_pool()` `Scenario` value
-    /// round 3's `run_headless` measures is the one rendered here — pins
+    /// `run_headless` measures is the one rendered here — pins
     /// that a stone-placed cell and a water-placed cell (per that fixture's
     /// documented layout) paint the reference table's own stone/water
     /// colours, i.e. this is genuinely reading the same scenario's grid and
