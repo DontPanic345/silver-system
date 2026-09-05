@@ -9,9 +9,13 @@ done fine").
 
 ---
 
-> You're picking up work in `silver-system`. Start by reading `CLAUDE.md`, `README.md`, `JOURNAL.md`, `NORTH_STARS.md`, and `PRINCIPLES.md` in full — together they tell you what this repo is, what's been tried before and why each attempt ended (`JOURNAL.md`), what's kept as reusable starting material (`src/`, `www/`, `tests/`, `scripts/`: a Rust wasm/canvas substrate — grid, material, timestep, scenario, headless measurement, rendering — from a shelved experiment), what's motivated all of it from the start (`NORTH_STARS.md`), and what's been learned the hard way (`PRINCIPLES.md`).
+> You're picking up work in `silver-system`. Here's the briefing — it's everything you need to start; the files it points to have more depth if you want it, but reading them isn't a prerequisite:
 >
-> There is no stated goal handed to you for this run. Decide what small physical system to build next — something that produces emergent behaviour from simple interacting rules, in the spirit of Oxygen Not Included/Noita — and then build it. Use the kept Rust substrate if it's a genuine fit for what you decide to build; rework or discard any part of it that isn't. Don't preserve it out of inertia, and don't feel obliged to keep working in Rust if you decide it's the wrong fit.
+> This repo is heading toward a specific game, **Gnomes**: a colony sim fixing Oxygen Not Included's own named failures (no real mass/energy conservation, liquids defying gravity through pipes, gimmick gas/liquid behaviour, colony-failure-by-default) by reskinning its "dupes" as gnomes whose magic is the *one sanctioned exception* to an otherwise strictly-conserved simulation — bounded by a brewed mana resource called Gin, with death replaced by an escape to an "ethereal layer" rather than colony collapse. Nobody's built toward this directly yet; every experiment so far (a browser terrarium with a closed water cycle, a Stam stable-fluids solver that got as far as buoyancy before halting on a pressure-solver limitation, a Rust `tranche/milestone/round/phase` self-planning cycle that proved out some good ideas but spent too much of its own budget on ceremony) has instead built substrate this could eventually sit on — see `JOURNAL.md` for the real dates and specifics if you want them, and `NORTH_STARS.md` #4 for the fuller Gnomes distillation. Kept from the last of those: `src/`, `www/`, `tests/`, `scripts/` — a Rust wasm/canvas substrate (grid, material, timestep, scenario, headless measurement, rendering); `README.md` has build/test commands if you use it.
+>
+> Four working principles, earned the hard way (`PRINCIPLES.md` has the reasoning): believability comes from the rules underneath being genuinely full, not from what's shown on screen. The only way to go fast is to go well. Do one thing at a time. Trust and verify.
+>
+> There is no stated goal handed to you for this run. Decide what small physical system to build next — it doesn't have to serve Gnomes directly, but it shouldn't contradict it either (e.g. don't bake in unconserved mass/energy as a shortcut). Use the kept Rust substrate if it's a genuine fit for what you decide to build; rework or discard any part of it that isn't. Don't preserve it out of inertia, and don't feel obliged to keep working in Rust if you decide it's the wrong fit.
 >
 > No cycle system, no imposed process, no milestone/round structure. Work the way a competent engineer would on their own: plan briefly if it helps you, then build, test, and verify as you go. This repo's convention is headless verification — numbers or JSON a test can assert on, not screenshots. Commit as you make real progress, with real commit messages, on a branch off `main`.
 >
@@ -23,10 +27,16 @@ done fine").
 
 ## Why this shape
 
-- **No tactical goal up front** — the run still reads `NORTH_STARS.md` (the
-  aspirational thread) for context, but nobody hands it a scoped target the
-  way `night-shift`'s `PLAN.md` did. The point of this run is to be the
-  yardstick, not to hit a target someone else already picked.
+- **No tactical goal up front** — the run gets the aspirational thread as a
+  paragraph in the briefing, not a scoped target the way `night-shift`'s
+  `PLAN.md` handed one down. The point of this run is to be the yardstick,
+  not to hit a target someone else already picked.
+- **The briefing is self-contained, not a reading list** — five files
+  (`CLAUDE.md`, `README.md`, `JOURNAL.md`, `NORTH_STARS.md`, `PRINCIPLES.md`)
+  add up to real weight before any code gets written, and that's its own
+  kind of ceremony, the same failure mode this run exists to avoid. The
+  prompt now carries the essential facts inline; the files stay linked for
+  whoever wants the full history, not required reading to start.
 - **No cycle system** — night-shift's own retrospective found the process
   spending a large share of its budget on ceremony rather than the work
   (~12 lines of process log per line of shipped logic). This run is the
