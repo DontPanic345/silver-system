@@ -4,14 +4,43 @@ Building a small world that is part of a much larger universe — emergent physi
 behaviour from simple interacting rules (fluids, materials, temperature, pressure,
 reactions), in the spirit of Oxygen Not Included and Noita.
 
-The language is Rust. The Rust code below was built under the `night-shift`
-cycle experiment (now shelved, see below) and is kept as substrate for whatever
-runs next — see [`JOURNAL.md`](JOURNAL.md) for the dated, narrative thread
-connecting every pivot this repo has made (including that experiment's stated
-goal and why it ended), [`night-shift/CLOSEOUT.md`](night-shift/CLOSEOUT.md)
-for its full retrospective, [`NORTH_STARS.md`](NORTH_STARS.md) for the
-aspirational statements this and every experiment has served, and
+The language is Rust. The Rust code below was scaffolded under the
+`night-shift` cycle experiment (now shelved, see below) and now carries a real
+gravity/density physics step (`src/grid.rs`) built directly on that substrate
+— see [`JOURNAL.md`](JOURNAL.md) for the dated, narrative thread connecting
+every pivot this repo has made (including `night-shift`'s stated goal and why
+it ended), [`night-shift/CLOSEOUT.md`](night-shift/CLOSEOUT.md) for its full
+retrospective, [`NORTH_STARS.md`](NORTH_STARS.md) for the aspirational
+statements this and every experiment has served, and
 [`PRINCIPLES.md`](PRINCIPLES.md) for the aphorisms distilled along the way.
+
+## The physics: gravity + density, generic over materials
+
+`src/grid.rs`'s per-cell step is a single, generic movement rule driven
+entirely by `Material::density`/`Phase` data (`src/material.rs`) — never a
+per-material `if` chain: a denser cell may swap into a neighbour's position
+if that neighbour is strictly less dense and not `Phase::Solid`, checked in
+priority order (straight down, then diagonal-down, then — `Phase::Liquid`
+only — sideways, gated to settle rather than slosh forever between two open
+columns). `Phase::Granular` (e.g. sand) falls and piles; `Phase::Liquid`
+(water) additionally flows to level itself; `Phase::Solid` (stone) never
+moves and blocks anything from moving into it. Every move is a swap of two
+cells' contents, never a creation or deletion, so per-material cell counts
+are exactly conserved by construction, for any number of steps — see
+`src/grid.rs`'s and `src/measure.rs`'s own conservation tests.
+
+Watch it live: build the wasm module (below) and open `www/physics.html` —
+`scenario::physics_demo()`, a sealed stone container with a flat resting
+water pool and several sand grains suspended in the open air above, stepped
+forward by `step_and_paint_physics_demo` on the page's own real-time timer
+loop. Grains fall, then sink through the water (since sand is denser, displacing
+the water upward as they go), and the pool re-levels around the
+disturbance. Headless-verified two ways: as a
+`cargo test --lib` scenario (`src/scenario.rs`'s
+`physics_demo_settles_every_suspended_grain_after_enough_steps`) and as a
+real-browser e2e check (`tests/e2e/physics_demo.test.mjs`) that reads actual
+canvas pixels after real wall-clock time passes — not a screenshot eyeballed
+once.
 
 ## Live deploy — the path actually in use
 
@@ -59,19 +88,23 @@ convention every round from M1.1 round 1 onward is expected to keep:
   cargo test
   ```
 
-- **Slow — the Playwright e2e path** (`tests/e2e/canvas_rectangle.test.mjs`),
-  a real headless-Chromium run. Never part of `cargo test` — run explicitly,
-  and only after building the wasm module (see below):
+- **Slow — the Playwright e2e path** (`tests/e2e/canvas_rectangle.test.mjs`,
+  `tests/e2e/scenario_canvas.test.mjs`, `tests/e2e/physics_demo.test.mjs`), a
+  real headless-Chromium run each. Never part of `cargo test` — run
+  explicitly, and only after building the wasm module (see below):
 
   ```sh
   NODE_PATH=/usr/local/lib/node_modules node tests/e2e/canvas_rectangle.test.mjs
+  NODE_PATH=/usr/local/lib/node_modules node tests/e2e/scenario_canvas.test.mjs
+  NODE_PATH=/usr/local/lib/node_modules node tests/e2e/physics_demo.test.mjs
   ```
 
-No `#[ignore]`-tagged tests exist yet; if a future round adds a genuinely
-slow `#[test]` (a long-running headless scenario, say), tag it `#[ignore]`
-and document its companion command (`cargo test --lib -- --ignored`) right
-next to this section rather than letting it silently join the default
-`--lib` run.
+One `#[ignore]`-tagged test exists (`src/grid.rs`'s `reference_grid_step_timing`,
+a timing measurement rather than a correctness scenario — see its own doc
+comment); run it explicitly with `cargo test --lib -- --ignored`. If a future
+round adds another genuinely slow `#[test]`, tag it `#[ignore]` and document
+its companion command right next to this section rather than letting it
+silently join the default `--lib` run.
 
 Build the wasm module and JS glue (requires `wasm-bindgen-cli` installed at a
 version matching the `wasm-bindgen` crate in `Cargo.lock` — see
@@ -82,18 +115,23 @@ bash scripts/build-wasm.sh
 ```
 
 This produces `www/pkg/viewer.js` + `www/pkg/viewer_bg.wasm`. Serve `www/`
-with any static file server and open it in a browser to watch it run, e.g.:
+with any static file server and open it in a browser — `index.html` for the
+original toolchain-proving rectangle, `scenario.html` for a static painting
+of `stone_and_water_pool()`, or **`physics.html` for the live gravity/
+density physics demo** (see above):
 
 ```sh
 python3 -m http.server -d www 8000
 ```
 
-Run the headless end-to-end test (drives a real headless Chromium via
-Playwright, samples real canvas pixel data at three points in time — requires
-`www/pkg/` to already be built, see above):
+Run the headless end-to-end tests (each drives a real headless Chromium via
+Playwright and reads real canvas pixel data rather than a screenshot —
+requires `www/pkg/` to already be built, see above):
 
 ```sh
 NODE_PATH=/usr/local/lib/node_modules node tests/e2e/canvas_rectangle.test.mjs
+NODE_PATH=/usr/local/lib/node_modules node tests/e2e/scenario_canvas.test.mjs
+NODE_PATH=/usr/local/lib/node_modules node tests/e2e/physics_demo.test.mjs
 ```
 
 ## The fallback (M0.3, not in current use)
@@ -107,9 +145,14 @@ source of truth, `viewer::render_frame`).
 cargo run --bin native_viewer -- /tmp/native-fallback-out
 ```
 
-Writes `tick-0.png`, `tick-1.png`, `tick-2.png`. Verified headlessly (real
-pixel bytes read back from the PNGs, not eyeballed) by
-`tests/native_fallback.rs`, which runs as part of `cargo test`.
+Writes `tick-0.png`, `tick-1.png`, `tick-2.png`, plus `scenario.png`
+(`stone_and_water_pool()`, static) and `physics-demo-tick-{0,60,150,300}.png`
+(`scenario::physics_demo()` stepped forward under real physics, four
+snapshots of the same run) — the physics sequence is a visual sanity check,
+not itself a headless assertion (that's `src/scenario.rs`'s own test); the
+rectangle path is what's verified headlessly (real pixel bytes read back
+from the PNGs, not eyeballed) by `tests/native_fallback.rs`, which runs as
+part of `cargo test`.
 
 ## Shelved experiments
 

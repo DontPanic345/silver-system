@@ -23,10 +23,26 @@
 //! `Grid` holds two `MaterialId` buffers, `current` and `next`, of identical
 //! size. Reads ([`Grid::get`]) and ad-hoc writes ([`Grid::set`], used by
 //! scenario setup and tests) go through `current`. A step writes its
-//! results into `next` via [`Grid::set_next`] without disturbing `current`
-//! mid-step — every cell's next state is computed from a consistent,
-//! unchanging view of the current one — and then calls [`Grid::swap`] once
-//! the whole step is done, making the written state the new `current`.
+//! results into `next` without disturbing `current` mid-step — from outside
+//! `step`/`step_once`, `current` is guaranteed unchanged until the whole
+//! step completes and calls [`Grid::swap`], at which point the written state
+//! becomes the new `current`.
+//!
+//! **Internal exception, since the physics step (below) exists:** the
+//! *external* guarantee above ("current unchanged until swap") does not mean
+//! `next` is computed as one pure function of a frozen `current` snapshot,
+//! the way the original identity-transform `step_once` worked. A cellular
+//! movement rule that swaps two cells' contents needs an *exclusive claim*
+//! on both cells — two cells independently deciding to move into the same
+//! third cell from a frozen snapshot would race, and double buffering alone
+//! can't express "first claim wins" between two independent per-cell
+//! decisions. So `step_once` seeds `next` as a copy of `current` and then
+//! reads *and* writes `next` progressively as it scans the grid once,
+//! guarded by a per-step `moved` bitset (below) so a parcel of material only
+//! ever moves once per step. This is the standard technique real
+//! falling-sand engines use for exactly this reason. `current` itself is
+//! still never touched until [`Grid::swap`] — the external contract holds.
+
 //!
 //! ## Coordinate convention: this is `GridIndex`'s first real caller
 //!
@@ -51,9 +67,49 @@
 //! instance of it, named here so it isn't rediscovered as a bug (see
 //! `src/render.rs`, which does exactly this flip).
 
-use crate::material::MaterialId;
+use crate::material::{MaterialId, MaterialTable, Phase};
 use crate::math::{GridIndex, Scalar, Vec2};
 use crate::timestep::FixedTimestep;
+
+// The movement rule, in words (implemented by `Grid::try_move_cell` below):
+// a single mobile cell's destination candidates are checked in priority
+// order, and the rule applied against each is: **a denser cell may swap
+// into a neighbour's position iff that neighbour is strictly less dense and
+// not `Phase::Solid`** — generic over materials, driven entirely by
+// `Material::density`/`Phase` data, never a per-material `if` chain (see
+// `src/material.rs`'s own module doc comment for why that distinction
+// matters).
+//
+// Priority, matching how granular media and liquids actually settle:
+//
+// 1. Straight down (`(i, j-1)`) — gravity's own direction, since `+y` is up
+//    (`src/math.rs`).
+// 2. Diagonally down, both sides — lets a grain slide off a slope instead
+//    of stacking into an unstable spike, and lets a denser cell settle to
+//    one side when directly below is blocked.
+// 3. **Liquid only:** sideways, both sides, at the same row — a liquid that
+//    cannot fall any further spreads out instead. Plain "swap with any
+//    less-dense same-row neighbour" oscillates forever between two
+//    perfectly symmetric open columns (every cell in a column independently
+//    finds the same open neighbour column, so the whole block translates
+//    sideways as a rigid unit, then translates right back next step when
+//    the tie-break side flips) rather than actually levelling — so a
+//    horizontal move additionally requires the destination column to
+//    currently hold *strictly fewer* cells of this exact material than the
+//    source column (`Grid::column_count`, read from `next`, so it reflects
+//    swaps already applied earlier in this same step). That one extra
+//    condition is what turns "spreads out" into "spreads out and stops
+//    once both sides are level" — a cheap approximation of hydrostatic
+//    pressure that produces "a resting pool stays flat" / "a column of
+//    water finds its level" (`NORTH_STARS.md` #3) as a real, non-oscillating
+//    equilibrium rather than a screenshot that merely looks flat once.
+//    `Phase::Granular` stops at step 2: sand piles into a slope, it does
+//    not flow flat.
+//
+// The two diagonal (and, for liquids, the two sideways) candidates
+// alternate which side is tried first every step (`Grid`'s internal
+// `alternate_first_left` flip) so repeated ties do not all resolve the same
+// direction, which would visibly bias flow/piling to one side.
 
 /// A fixed-size, double-buffered grid of cells, each holding a
 /// [`MaterialId`]. See the module doc comment for the structure-of-arrays
@@ -66,6 +122,10 @@ pub struct Grid {
     height: usize,
     current: Vec<MaterialId>,
     next: Vec<MaterialId>,
+    /// Flips every [`Grid::step_once`] call; decides which side diagonal/
+    /// sideways movement candidates are tried first, so repeated ties don't
+    /// all resolve the same direction — see the movement-rule comment above.
+    alternate_first_left: bool,
 }
 
 impl Grid {
@@ -79,6 +139,7 @@ impl Grid {
             height,
             current: vec![fill; size],
             next: vec![fill; size],
+            alternate_first_left: false,
         }
     }
 
@@ -183,41 +244,167 @@ impl Grid {
     /// mirrors). Returns the number of fixed steps that elapsed (0, 1, or
     /// occasionally more, per `FixedTimestep::advance`'s own accumulator/
     /// spiral-of-death semantics), having applied [`Grid::step_once`] that
-    /// many times.
+    /// many times against `materials` — the same table the grid's cells are
+    /// [`MaterialId`]s into.
     ///
     /// The *mechanism* of stepping is real elapsed-time accounting (not a
     /// bare per-call `+1`), wired to the existing, unmodified
     /// `FixedTimestep`. The per-cell transformation each elapsed step
-    /// applies is deliberately the identity — see [`Grid::step_once`].
-    pub fn step(&mut self, timestep: &mut FixedTimestep, frame_duration_secs: Scalar) -> u32 {
+    /// applies is the gravity/density movement rule — see
+    /// [`Grid::step_once`].
+    pub fn step(
+        &mut self,
+        timestep: &mut FixedTimestep,
+        frame_duration_secs: Scalar,
+        materials: &MaterialTable,
+    ) -> u32 {
         let steps = timestep.advance(frame_duration_secs);
         for _ in 0..steps {
-            self.step_once();
+            self.step_once(materials);
         }
         steps
     }
 
-    /// Applies exactly one fixed step: for every cell, writes `next` from
-    /// `current` (via [`Grid::get`]/[`Grid::set_next`], never touching
-    /// `current` mid-step) and then [`Grid::swap`]s once the whole pass is
-    /// done.
+    /// Applies exactly one fixed step of the gravity/density movement rule
+    /// (see the module-level comment above `Grid`'s definition) to every
+    /// cell, then [`Grid::swap`]s once the whole pass is done.
     ///
-    /// **The per-cell transformation is currently the identity** — every
-    /// cell's next value is exactly its current value, unchanged. No
-    /// gravity, no transport, no material behaviour yet: that is later
-    /// work's job. This function exists so real per-cell physics can
-    /// replace the body of the inner loop without changing the stepping
-    /// mechanism ([`Grid::step`], [`FixedTimestep`] wiring) around it at
-    /// all.
-    fn step_once(&mut self) {
-        for j in 0..self.height as i32 {
-            for i in 0..self.width as i32 {
-                let idx = GridIndex::new(i, j);
-                let current_value = self.get(idx);
-                self.set_next(idx, current_value);
+    /// Seeds `next` as a copy of `current`, then scans every grid position
+    /// exactly once — row by row from `j = 0` (gravity's own direction,
+    /// since `+y` is up) to the top, alternating left-to-right/right-to-left
+    /// within a row and across steps (`alternate_first_left`) — reading and
+    /// writing `next` progressively rather than a frozen snapshot, since a
+    /// swap needs an exclusive claim on both cells involved (see the
+    /// module doc comment's "internal exception" section for why). A
+    /// per-step `moved` bitset guards every position visited (as a source
+    /// or as a swap target) so a single parcel of material is moved at most
+    /// once per step, regardless of scan order.
+    ///
+    /// Only [`Phase::Granular`]/[`Phase::Liquid`] cells are movers;
+    /// [`Phase::Solid`] never moves and never yields its cell to a swap;
+    /// [`Phase::Gas`] does not yet move on its own (see [`Phase::Gas`]'s own
+    /// doc comment) but can still be displaced by a denser mover swapping
+    /// into it. Because every change is a swap of two cells' contents,
+    /// never a creation or deletion, the count of cells holding each
+    /// [`MaterialId`] is exactly conserved by construction, for any number
+    /// of steps — `src/measure.rs`'s per-material cell-count/mass
+    /// conservation checks rely on exactly this property.
+    fn step_once(&mut self, materials: &MaterialTable) {
+        self.next.copy_from_slice(&self.current);
+        let mut moved = vec![false; self.width * self.height];
+        let left_first = self.alternate_first_left;
+        self.alternate_first_left = !self.alternate_first_left;
+
+        for j in 0..self.height {
+            let columns: Box<dyn Iterator<Item = usize>> = if left_first {
+                Box::new(0..self.width)
+            } else {
+                Box::new((0..self.width).rev())
+            };
+            for i in columns {
+                let idx = j * self.width + i;
+                if moved[idx] {
+                    continue;
+                }
+                let mat = materials.get(self.next[idx]);
+                if !matches!(mat.phase, Phase::Granular | Phase::Liquid) {
+                    continue;
+                }
+                self.try_move_cell(materials, &mut moved, i, j, mat.phase, mat.density, left_first);
             }
         }
+
         self.swap();
+    }
+
+    /// The core movement decision for one mover at `(i, j)` (`density`,
+    /// `phase` already looked up by the caller): builds this phase's
+    /// destination candidates in priority order (see the module-level
+    /// movement-rule comment), and swaps `next`'s two positions at the
+    /// first candidate that is strictly less dense and not
+    /// [`Phase::Solid`] — marking both positions in `moved` so neither is
+    /// revisited this step. Does nothing if no candidate qualifies (the
+    /// cell is already resting).
+    ///
+    /// `left_first` picks which side of each diagonal/sideways pair is
+    /// tried first, alternated by the caller every step.
+    #[allow(clippy::too_many_arguments)]
+    fn try_move_cell(
+        &mut self,
+        materials: &MaterialTable,
+        moved: &mut [bool],
+        i: usize,
+        j: usize,
+        phase: Phase,
+        density: Scalar,
+        left_first: bool,
+    ) {
+        let width = self.width as i32;
+        let (i, j) = (i as i32, j as i32);
+        let (first_dx, second_dx): (i32, i32) = if left_first { (-1, 1) } else { (1, -1) };
+
+        let mut candidates: Vec<(i32, i32)> = Vec::with_capacity(5);
+        if j > 0 {
+            candidates.push((i, j - 1));
+            if i + first_dx >= 0 && i + first_dx < width {
+                candidates.push((i + first_dx, j - 1));
+            }
+            if i + second_dx >= 0 && i + second_dx < width {
+                candidates.push((i + second_dx, j - 1));
+            }
+        }
+        if phase == Phase::Liquid {
+            if i + first_dx >= 0 && i + first_dx < width {
+                candidates.push((i + first_dx, j));
+            }
+            if i + second_dx >= 0 && i + second_dx < width {
+                candidates.push((i + second_dx, j));
+            }
+        }
+
+        let idx = self.linear_index(GridIndex::new(i, j));
+        for (ti, tj) in candidates {
+            let tidx = self.linear_index(GridIndex::new(ti, tj));
+            if moved[tidx] {
+                continue;
+            }
+            let target = materials.get(self.next[tidx]);
+            if target.phase == Phase::Solid {
+                continue;
+            }
+            if target.density < density {
+                // Horizontal (same-row) candidate: only flow toward the
+                // side that currently holds strictly fewer cells of this
+                // exact material — see the movement-rule comment above for
+                // why plain "any less-dense same-row neighbour" oscillates
+                // instead of levelling.
+                if tj == j {
+                    let self_id = self.next[idx];
+                    let source_count = self.column_count(i as usize, self_id);
+                    let target_count = self.column_count(ti as usize, self_id);
+                    if target_count >= source_count {
+                        continue;
+                    }
+                }
+                self.next.swap(idx, tidx);
+                moved[idx] = true;
+                moved[tidx] = true;
+                return;
+            }
+        }
+    }
+
+    /// How many cells in column `i` currently hold exactly `id`, read from
+    /// `next` (so it reflects any swaps already applied earlier in the same
+    /// [`Grid::step_once`] pass) — the "how full is this side" measure
+    /// [`Grid::try_move_cell`]'s horizontal-flow gate compares between a
+    /// source and destination column. `O(height)`; only ever called for a
+    /// `Phase::Liquid` cell's same-row candidates, not on every cell of
+    /// every step.
+    fn column_count(&self, i: usize, id: MaterialId) -> usize {
+        (0..self.height)
+            .filter(|&j| self.next[j * self.width + i] == id)
+            .count()
     }
 }
 
@@ -507,6 +694,7 @@ mod tests {
     /// boundaries.
     #[test]
     fn grid_step_only_advances_what_real_elapsed_time_earns_across_irregular_calls() {
+        let materials = MaterialTable::reference();
         let mut grid = Grid::new(2, 2, AIR);
         let mut timestep = FixedTimestep::new(0.1);
 
@@ -515,7 +703,10 @@ mod tests {
         // `irregular_frame_durations_total_the_expected_step_count` pins for
         // `FixedTimestep::advance` directly.
         let durations = [0.03, 0.12, 0.02, 0.11, 0.22];
-        let total_steps: u32 = durations.iter().map(|&d| grid.step(&mut timestep, d)).sum();
+        let total_steps: u32 = durations
+            .iter()
+            .map(|&d| grid.step(&mut timestep, d, &materials))
+            .sum();
 
         assert_eq!(
             total_steps, 5,
@@ -532,12 +723,13 @@ mod tests {
     /// site.
     #[test]
     fn grid_step_with_duration_under_one_dt_reports_zero_steps_and_grid_is_unchanged() {
+        let materials = MaterialTable::reference();
         let mut grid = Grid::new(2, 2, AIR);
         let idx = GridIndex::new(0, 0);
         grid.set(idx, WATER);
         let mut timestep = FixedTimestep::new(0.1);
 
-        let steps = grid.step(&mut timestep, 0.05);
+        let steps = grid.step(&mut timestep, 0.05, &materials);
 
         assert_eq!(
             steps, 0,
@@ -552,19 +744,18 @@ mod tests {
 
     /// Scenario: a single call carrying several whole `dt`s of real elapsed
     /// time advances the grid by that many steps in one call, not by one —
-    /// exercised by counting swaps indirectly: after a call worth 3 steps,
-    /// `current`/`next` have been exchanged an odd number of times overall,
-    /// which for a 3-step call from a fresh grid means the *contents* match
-    /// (identity transform, so unobservable directly by value) but the step
-    /// *count itself* is what this test pins, mirroring
+    /// the step *count itself* is what this test pins (an all-air grid has
+    /// nothing to move, so content is unobservable by value here; see the
+    /// physics scenarios below for content-level assertions), mirroring
     /// `advance_tick_with_several_dts_advances_by_that_many_steps_and_colour_matches_parity`
     /// in `src/lib.rs`.
     #[test]
     fn grid_step_with_several_dts_in_one_call_advances_by_that_many_steps() {
+        let materials = MaterialTable::reference();
         let mut grid = Grid::new(2, 2, AIR);
         let mut timestep = FixedTimestep::new(0.1);
 
-        let steps = grid.step(&mut timestep, 0.35);
+        let steps = grid.step(&mut timestep, 0.35, &materials);
 
         assert_eq!(
             steps, 3,
@@ -572,36 +763,47 @@ mod tests {
         );
     }
 
-    // --- Scenario: stepping the identity transformation is a true no-op ---
+    // --- Scenario: gravity/density physics (the movement rule) ---
 
-    /// Scenario: a resting scenario — several distinct materials placed in
-    /// several cells, nothing moving — stays exactly as it was after
-    /// stepping forward by a real elapsed duration covering several fixed
-    /// steps. The current step content is the identity transform (no
-    /// gravity, no transport, no material behaviour), so every cell must
-    /// read back exactly what it held before stepping, for every step in
-    /// between — not just the final one.
+    const SAND: MaterialId = MaterialId(3);
+
+    /// Scenario: a genuinely resting arrangement — a sealed stone container
+    /// (floor plus both side walls) full of water, air on top — stays
+    /// exactly as it was after stepping forward by a real elapsed duration
+    /// covering several fixed steps. Nothing here has anywhere less dense
+    /// to move into, so every cell must read back exactly what it held
+    /// before stepping, after every single step, not just the final one —
+    /// "a resting pool stays flat" (`NORTH_STARS.md` #3), pinned as a true
+    /// no-op rather than merely "looks flat in a screenshot".
     #[test]
-    fn stepping_the_identity_transformation_leaves_a_resting_scenario_unchanged() {
-        let mut grid = Grid::new(3, 3, AIR);
-        grid.set(GridIndex::new(0, 0), STONE);
-        grid.set(GridIndex::new(1, 1), WATER);
-        grid.set(GridIndex::new(2, 2), STONE);
+    fn a_sealed_resting_pool_stays_exactly_unchanged_under_gravity() {
+        let materials = MaterialTable::reference();
+        // 4 wide x 4 tall: stone floor (j=0) and stone side walls (i=0,3)
+        // for every row, water filling the interior at j=1..3, air on top.
+        let mut grid = Grid::new(4, 4, AIR);
+        for i in 0..4 {
+            grid.set(GridIndex::new(i, 0), STONE);
+        }
+        for j in 0..4 {
+            grid.set(GridIndex::new(0, j), STONE);
+            grid.set(GridIndex::new(3, j), STONE);
+        }
+        for j in 1..3 {
+            grid.set(GridIndex::new(1, j), WATER);
+            grid.set(GridIndex::new(2, j), WATER);
+        }
 
         let snapshot = |g: &Grid| -> Vec<MaterialId> {
-            (0..3)
-                .flat_map(|j| (0..3).map(move |i| GridIndex::new(i, j)))
+            (0..4)
+                .flat_map(|j| (0..4).map(move |i| GridIndex::new(i, j)))
                 .map(|idx| g.get(idx))
                 .collect()
         };
         let before = snapshot(&grid);
 
         let mut timestep = FixedTimestep::new(0.1);
-        // Several fixed steps' worth of real elapsed time, split across
-        // multiple calls, so the no-op property is checked after every
-        // single step, not just after one big jump.
         for _ in 0..5 {
-            let steps = grid.step(&mut timestep, 0.1);
+            let steps = grid.step(&mut timestep, 0.1, &materials);
             assert_eq!(
                 steps, 1,
                 "each 0.1s call at dt=0.1 should elapse exactly one step"
@@ -609,8 +811,211 @@ mod tests {
             assert_eq!(
                 snapshot(&grid),
                 before,
-                "the identity transform must leave every cell exactly as it was, \
-                 after each and every step"
+                "a sealed, already-flat pool has nothing less dense to move \
+                 into, so it must stay exactly as it was after each and \
+                 every step"
+            );
+        }
+    }
+
+    /// Scenario: a single grain of sand with only air below it falls
+    /// exactly one cell per step (never more, never less) until it lands on
+    /// the stone floor and then stays put — the basic granular-falls-under-
+    /// gravity behaviour, checked step by step rather than only at the end
+    /// so an off-by-one or a too-fast/too-slow fall would be caught.
+    #[test]
+    fn a_single_grain_of_sand_falls_one_cell_per_step_and_rests_on_the_floor() {
+        let materials = MaterialTable::reference();
+        let mut grid = Grid::new(1, 5, AIR);
+        grid.set(GridIndex::new(0, 0), STONE); // floor
+        grid.set(GridIndex::new(0, 4), SAND); // starts at the top
+
+        let mut timestep = FixedTimestep::new(0.1);
+        // Falls from j=4 to j=1 over three steps (one cell per step).
+        for expected_j in [3, 2, 1] {
+            grid.step(&mut timestep, 0.1, &materials);
+            assert_eq!(
+                grid.get(GridIndex::new(0, expected_j)),
+                SAND,
+                "sand should have fallen to j={expected_j}"
+            );
+        }
+        // One more step: blocked by the stone floor at j=0, so it rests at
+        // j=1 rather than trying to fall into stone.
+        grid.step(&mut timestep, 0.1, &materials);
+        assert_eq!(
+            grid.get(GridIndex::new(0, 1)),
+            SAND,
+            "sand should rest on top of the stone floor, not move into it"
+        );
+        assert_eq!(grid.get(GridIndex::new(0, 0)), STONE, "floor stays stone");
+    }
+
+    /// Scenario: stone never moves under gravity, no matter what is beneath
+    /// it (here: nothing — a lump of stone floating over open air) — pins
+    /// `Phase::Solid`'s "never a mover" contract directly, independent of
+    /// whether anything else in the grid is unstable.
+    #[test]
+    fn stone_never_falls_even_over_open_air() {
+        let materials = MaterialTable::reference();
+        let mut grid = Grid::new(1, 3, AIR);
+        grid.set(GridIndex::new(0, 2), STONE);
+
+        let mut timestep = FixedTimestep::new(0.1);
+        for _ in 0..10 {
+            grid.step(&mut timestep, 0.1, &materials);
+        }
+        assert_eq!(
+            grid.get(GridIndex::new(0, 2)),
+            STONE,
+            "Solid-phase stone must never move, however many steps elapse"
+        );
+    }
+
+    /// Scenario: a denser granular material sinks straight down through a
+    /// column of a less-dense liquid, displacing it upward — sand (density
+    /// 1.6) sinking through water (density 1.0) resting on a stone floor.
+    /// Demonstrates the movement rule is genuinely density-driven (a
+    /// `Liquid` cell can be a swap *target*, not just a mover) rather than
+    /// only handling "falls into empty air".
+    #[test]
+    fn denser_sand_sinks_through_a_water_column_displacing_it_upward() {
+        let materials = MaterialTable::reference();
+        let mut grid = Grid::new(1, 4, AIR);
+        grid.set(GridIndex::new(0, 0), STONE); // floor
+        grid.set(GridIndex::new(0, 1), WATER);
+        grid.set(GridIndex::new(0, 2), WATER);
+        grid.set(GridIndex::new(0, 3), SAND); // starts above the water
+
+        let mut timestep = FixedTimestep::new(0.1);
+        for _ in 0..10 {
+            grid.step(&mut timestep, 0.1, &materials);
+        }
+
+        // Sand ends up resting directly on the floor; the two water cells
+        // end up displaced above it — same three materials, same counts,
+        // just reordered by density.
+        assert_eq!(grid.get(GridIndex::new(0, 0)), STONE);
+        assert_eq!(
+            grid.get(GridIndex::new(0, 1)),
+            SAND,
+            "sand should have sunk all the way to rest on the floor"
+        );
+        assert_eq!(grid.get(GridIndex::new(0, 2)), WATER);
+        assert_eq!(
+            grid.get(GridIndex::new(0, 3)),
+            WATER,
+            "both water cells should have been displaced upward by the \
+             denser sinking sand"
+        );
+    }
+
+    /// Scenario: "a column of water finds its level" (`NORTH_STARS.md` #3),
+    /// pinned numerically rather than by eye. A stone container with a flat
+    /// floor and side walls starts with all its water piled on one side (a
+    /// tall column) and open air on the other (equal floor height, no
+    /// water) — after enough steps, the water has spread so that both
+    /// columns hold the same number of water cells (height 2 each out of 4
+    /// total water cells across 2 columns), i.e. a level surface, not still
+    /// piled on the original side.
+    #[test]
+    fn a_column_of_water_finds_its_level_across_an_open_container() {
+        let materials = MaterialTable::reference();
+        // 4 wide x 6 tall: stone floor and side walls; interior columns
+        // i=1..3 are the open container (2 columns wide).
+        let mut grid = Grid::new(4, 6, AIR);
+        for i in 0..4 {
+            grid.set(GridIndex::new(i, 0), STONE);
+        }
+        for j in 0..6 {
+            grid.set(GridIndex::new(0, j), STONE);
+            grid.set(GridIndex::new(3, j), STONE);
+        }
+        // All 4 water cells piled in column i=1; column i=2 starts empty
+        // (air) at the same floor height.
+        for j in 1..5 {
+            grid.set(GridIndex::new(1, j), WATER);
+        }
+
+        let mut timestep = FixedTimestep::new(0.1);
+        // Generously many steps: this is a cellular approximation of
+        // hydrostatic levelling, not an instant pressure solve, so it needs
+        // several passes to fully equalize a column this tall.
+        for _ in 0..200 {
+            grid.step(&mut timestep, 0.1, &materials);
+        }
+
+        let count_water_in_column = |grid: &Grid, i: i32| -> usize {
+            (1..5)
+                .filter(|&j| grid.get(GridIndex::new(i, j)) == WATER)
+                .count()
+        };
+        let left = count_water_in_column(&grid, 1);
+        let right = count_water_in_column(&grid, 2);
+        assert_eq!(
+            left + right,
+            4,
+            "all 4 water cells must still be present somewhere in the \
+             container (conservation), just possibly redistributed"
+        );
+        assert_eq!(
+            (left, right),
+            (2, 2),
+            "a column piled entirely on one side should have levelled to \
+             an equal split across both columns, not stayed piled"
+        );
+    }
+
+    /// Scenario: because every movement is a swap of two cells' contents,
+    /// never a creation or deletion, the total count of cells holding each
+    /// material is exactly conserved by construction — checked here across
+    /// a busy scenario (sand falling through water in a container with
+    /// air above) for many steps, not just the specific arrangements the
+    /// scenarios above already happen to conserve.
+    #[test]
+    fn per_material_cell_counts_are_exactly_conserved_across_many_steps_of_real_physics() {
+        let materials = MaterialTable::reference();
+        let mut grid = Grid::new(5, 6, AIR);
+        for i in 0..5 {
+            grid.set(GridIndex::new(i, 0), STONE);
+        }
+        for j in 0..6 {
+            grid.set(GridIndex::new(0, j), STONE);
+            grid.set(GridIndex::new(4, j), STONE);
+        }
+        grid.set(GridIndex::new(1, 1), WATER);
+        grid.set(GridIndex::new(2, 1), WATER);
+        grid.set(GridIndex::new(3, 1), WATER);
+        grid.set(GridIndex::new(1, 4), SAND);
+        grid.set(GridIndex::new(2, 5), SAND);
+        grid.set(GridIndex::new(3, 4), SAND);
+
+        let count_of = |grid: &Grid, id: MaterialId| -> usize {
+            (0..6)
+                .flat_map(|j| (0..5).map(move |i| GridIndex::new(i, j)))
+                .filter(|&idx| grid.get(idx) == id)
+                .count()
+        };
+        let before = (
+            count_of(&grid, AIR),
+            count_of(&grid, WATER),
+            count_of(&grid, STONE),
+            count_of(&grid, SAND),
+        );
+
+        let mut timestep = FixedTimestep::new(0.1);
+        for step_num in 0..60 {
+            grid.step(&mut timestep, 0.1, &materials);
+            let now = (
+                count_of(&grid, AIR),
+                count_of(&grid, WATER),
+                count_of(&grid, STONE),
+                count_of(&grid, SAND),
+            );
+            assert_eq!(
+                now, before,
+                "per-material cell counts must stay exactly conserved after \
+                 step {step_num}, since movement is only ever a swap"
             );
         }
     }
@@ -650,16 +1055,17 @@ mod tests {
         const MEASURED_STEPS: u32 = 50;
         const DT: Scalar = 1.0 / 60.0;
 
+        let materials = MaterialTable::reference();
         let mut grid = Grid::new(REFERENCE_GRID_WIDTH, REFERENCE_GRID_HEIGHT, AIR);
         let mut timestep = FixedTimestep::new(DT);
 
         for _ in 0..WARMUP_STEPS {
-            grid.step(&mut timestep, DT);
+            grid.step(&mut timestep, DT, &materials);
         }
 
         let start = Instant::now();
         for _ in 0..MEASURED_STEPS {
-            grid.step(&mut timestep, DT);
+            grid.step(&mut timestep, DT, &materials);
         }
         let elapsed = start.elapsed();
         let per_step = elapsed / MEASURED_STEPS;
@@ -679,3 +1085,4 @@ mod tests {
         );
     }
 }
+

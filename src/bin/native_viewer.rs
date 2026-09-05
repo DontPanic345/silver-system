@@ -23,9 +23,11 @@
 
 use std::path::PathBuf;
 
+use viewer::material::MaterialTable;
 use viewer::render::render_dimensions_px;
 use viewer::render_frame;
 use viewer::scenario::stone_and_water_pool;
+use viewer::timestep::FixedTimestep;
 use viewer::{render, scenario, SCENARIO_CELL_PX};
 
 const WIDTH: u32 = 200;
@@ -60,4 +62,34 @@ fn main() {
     image::save_buffer(&path, &buf, width_px, height_px, image::ColorType::Rgb8)
         .unwrap_or_else(|e| panic!("failed to write {path:?}: {e}"));
     println!("wrote {}", path.display());
+
+    // scenario::physics_demo() (see its own doc comment) stepped forward
+    // under real gravity/density physics (src/grid.rs) and snapshotted at a
+    // few points, so the movement rule's actual effect (grains falling,
+    // sinking through the water, the pool re-levelling) is visible in a
+    // sequence of real PNGs on disk, not just proven by the headless
+    // assertions in src/scenario.rs's own tests.
+    let physics_scenario = scenario::physics_demo();
+    let materials: MaterialTable = physics_scenario.materials;
+    let mut physics_grid = viewer::grid::Grid::new(
+        physics_scenario.width,
+        physics_scenario.height,
+        physics_scenario.background,
+    );
+    for &(index, id) in &physics_scenario.placements {
+        physics_grid.set(index, id);
+    }
+    let mut timestep = FixedTimestep::new(1.0 / 30.0);
+    let mut steps_so_far = 0u32;
+    for target_ticks in [0u32, 60, 150, 300] {
+        while steps_so_far < target_ticks {
+            steps_so_far += physics_grid.step(&mut timestep, 1.0 / 30.0, &materials);
+        }
+        let buf = render::render_grid_to_rgb8(&physics_grid, &materials, SCENARIO_CELL_PX);
+        let (width_px, height_px) = render_dimensions_px(&physics_grid, SCENARIO_CELL_PX);
+        let path = out_dir.join(format!("physics-demo-tick-{target_ticks}.png"));
+        image::save_buffer(&path, &buf, width_px, height_px, image::ColorType::Rgb8)
+            .unwrap_or_else(|e| panic!("failed to write {path:?}: {e}"));
+        println!("wrote {}", path.display());
+    }
 }

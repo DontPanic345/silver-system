@@ -152,7 +152,7 @@ pub fn run_headless(scenario: &Scenario, num_steps: u32, dt: Scalar) -> Measurem
 
     let mut ticks = 0u32;
     for _ in 0..num_steps {
-        ticks += grid.step(&mut timestep, dt);
+        ticks += grid.step(&mut timestep, dt, &scenario.materials);
     }
 
     measure(&grid, &scenario.materials, ticks)
@@ -187,7 +187,9 @@ mod tests {
     /// `src/scenario.rs`'s `stone_and_water_pool` doc comment). Air density
     /// is 0.0, water 1.0, stone 2.5 (`MaterialTable::reference`), so:
     /// air mass = 18 * 0.0 = 0.0, water mass = 2 * 1.0 = 2.0,
-    /// stone mass = 4 * 2.5 = 10.0.
+    /// stone mass = 4 * 2.5 = 10.0. `MaterialTable::reference` also holds a
+    /// fourth material (sand, id 3) unused by this fixture, so its record
+    /// is present with zero count/mass.
     #[test]
     fn headless_run_of_stone_and_water_pool_reports_exact_mass_and_cell_counts() {
         let scenario = stone_and_water_pool();
@@ -213,6 +215,11 @@ mod tests {
                         cell_count: 4,
                         total_mass: 10.0,
                     },
+                    MaterialMeasurement {
+                        material_id: 3,
+                        cell_count: 0,
+                        total_mass: 0.0,
+                    },
                 ],
             }
         );
@@ -222,7 +229,8 @@ mod tests {
             "{\"ticks\":3,\"materials\":[\
              {\"material_id\":0,\"cell_count\":18,\"total_mass\":0.0},\
              {\"material_id\":1,\"cell_count\":2,\"total_mass\":2.0},\
-             {\"material_id\":2,\"cell_count\":4,\"total_mass\":10.0}]}"
+             {\"material_id\":2,\"cell_count\":4,\"total_mass\":10.0},\
+             {\"material_id\":3,\"cell_count\":0,\"total_mass\":0.0}]}"
         );
     }
 

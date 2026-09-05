@@ -42,8 +42,11 @@ mod math;
 
 // Fixed-timestep accumulator harness (Scalar dt in, step count out), wired
 // into tick_and_draw via advance_tick below — see src/timestep.rs for what
-// it is and why.
-mod timestep;
+// it is and why. `pub`: `grid::Grid::step`'s own public signature takes a
+// `&mut FixedTimestep`, so this must be `pub` too or no external caller
+// (an integration test, `src/bin/native_viewer.rs`) could actually
+// construct one to call it with.
+pub mod timestep;
 
 // Material representation (Material, MaterialTable) and the grid (Grid)
 // they're stored in — see src/material.rs and src/grid.rs. `pub` so
@@ -277,6 +280,56 @@ pub fn paint_scenario(canvas_id: &str, cell_px: u32) {
     paint_rgb8_to_canvas(canvas_id, &buf, width_px, height_px);
 }
 
+thread_local! {
+    /// The persistent state driving [`step_and_paint_physics_demo`]:
+    /// `scenario::physics_demo()`'s grid, its own [`FixedTimestep`]
+    /// (independent of [`TIMESTEP`]'s rectangle-demo one — a different
+    /// scenario, a different clock), and its material table. Built lazily
+    /// on first use rather than at module `main()` time, since (unlike the
+    /// rectangle) nothing needs this scenario painted until
+    /// `www/physics.html` specifically asks for it.
+    static PHYSICS_DEMO: RefCell<Option<(grid::Grid, FixedTimestep, material::MaterialTable, u32)>> =
+        const { RefCell::new(None) };
+}
+
+/// Advances `scenario::physics_demo()` by however many fixed steps
+/// `frame_duration_secs` of real elapsed time earns (via this demo's own
+/// [`FixedTimestep`], the same accumulator mechanism [`advance_tick`] and
+/// [`Grid::step`] already use elsewhere — see their doc comments), repaints
+/// it to `canvas_id` at `cell_px` pixels per cell (mirroring
+/// [`paint_scenario`]'s own render pattern), and returns the tick count
+/// reached so far.
+///
+/// The watchable counterpart to `src/scenario.rs`'s own
+/// `physics_demo_settles_every_suspended_grain_after_enough_steps` headless
+/// test: same scenario, same [`Grid::step`] call, just driven by a
+/// browser's real wall-clock frames (via `www/physics.html`) instead of a
+/// fixed loop count.
+///
+/// First call builds and paints tick 0 (nothing has had time to fall yet);
+/// every call after that both steps and repaints, so `www/physics.html`'s
+/// own timer loop can call this on every fire the same way
+/// `tick_and_draw`/`www/index.html` already do for the rectangle.
+#[wasm_bindgen]
+pub fn step_and_paint_physics_demo(canvas_id: &str, cell_px: u32, frame_duration_secs: f32) -> u32 {
+    PHYSICS_DEMO.with(|state| {
+        let mut state = state.borrow_mut();
+        let (grid, timestep, materials, tick) = state.get_or_insert_with(|| {
+            let scenario = scenario::physics_demo();
+            let grid = scenario.build_grid();
+            (grid, FixedTimestep::new(1.0 / 30.0), scenario.materials, 0u32)
+        });
+
+        *tick += grid.step(timestep, frame_duration_secs, materials);
+
+        let buf = render::render_grid_to_rgb8(grid, materials, cell_px);
+        let (width_px, height_px) = render::render_dimensions_px(grid, cell_px);
+        paint_rgb8_to_canvas(canvas_id, &buf, width_px, height_px);
+
+        *tick
+    })
+}
+
 /// Looks up the canvas element by `canvas_id`, resizes it to `width` x
 /// `height`, and paints `rgb` (a flat RGB8 buffer, `width * height * 3`
 /// bytes — [`render::render_grid_to_rgb8`]'s own output shape) to it via a
@@ -406,6 +459,15 @@ pub fn scenario_water_colour_rgb() -> Vec<u8> {
 #[wasm_bindgen]
 pub fn scenario_stone_colour_rgb() -> Vec<u8> {
     material_colour_rgb(2)
+}
+
+/// Sand's reference colour — `scenario_air/water/stone_colour_rgb`'s own
+/// pattern, extended for `scenario::physics_demo()`'s fourth material (see
+/// `src/material.rs`'s `MaterialTable::reference`). Used by
+/// `tests/e2e/physics_demo.test.mjs`.
+#[wasm_bindgen]
+pub fn scenario_sand_colour_rgb() -> Vec<u8> {
+    material_colour_rgb(3)
 }
 
 fn material_colour_rgb(id: u16) -> Vec<u8> {

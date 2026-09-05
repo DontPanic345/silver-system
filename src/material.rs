@@ -26,8 +26,28 @@ use crate::math::Scalar;
 /// holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
+    /// Immovable under gravity — a wall/floor material. Never a mover in
+    /// `src/grid.rs`'s physics step, and never a valid swap *target* either
+    /// (a `Solid` cell blocks anything from displacing it) — see
+    /// `Grid::try_move_cell`'s target check.
     Solid,
+    /// A granular solid (e.g. sand): falls straight down or diagonally
+    /// down-slope under gravity, same density-driven displacement rule as
+    /// `Liquid`, but does not flow sideways to seek a level the way a
+    /// liquid does — see `src/grid.rs`'s module doc comment for the physics
+    /// rule this phase distinction exists to drive.
+    Granular,
+    /// Falls under gravity like `Granular`, and additionally flows
+    /// sideways (once it cannot fall straight down or diagonally) to seek
+    /// its own level — see `src/grid.rs`.
     Liquid,
+    /// Currently treated as immobile background by `src/grid.rs`'s physics
+    /// step (never a mover), though it can still be *displaced upward* when
+    /// a denser `Granular`/`Liquid` cell swaps into its cell. Real gas
+    /// buoyancy/diffusion is deliberately not implemented yet — see
+    /// `NORTH_STARS.md`'s physics-then-chemistry-then-biology ordering;
+    /// this is a physics-phase gap to close later, not a decision that gas
+    /// doesn't move.
     Gas,
 }
 
@@ -176,7 +196,13 @@ impl MaterialTable {
         let empty = Material::new(0.0, 0.0, 1.0, 0.0, Phase::Gas, (0, 0, 0));
         let water = Material::new(1.0, 0.5, 4.186, 0.6, Phase::Liquid, (40, 90, 200));
         let stone = Material::new(2.5, 0.0, 0.8, 2.0, Phase::Solid, (120, 120, 120));
-        MaterialTable::new(vec![empty, water, stone])
+        // Sand: appended at id 3, after the original three — every existing
+        // caller that hardcodes ids 0/1/2 (air/water/stone) stays correct.
+        // Denser than water (so it sinks through it), Granular phase (falls
+        // under gravity, does not flow sideways the way Liquid does) — see
+        // `src/grid.rs`'s physics step.
+        let sand = Material::new(1.6, 0.0, 0.83, 0.3, Phase::Granular, (194, 178, 128));
+        MaterialTable::new(vec![empty, water, stone, sand])
     }
 }
 

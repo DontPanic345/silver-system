@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Physics demo</title>
+  <style>
+    body { background: #111; }
+    canvas { image-rendering: pixelated; }
+  </style>
+</head>
+<body>
+  <!--
+    Watches src/scenario.rs's physics_demo() step forward under real
+    gravity/density physics (src/grid.rs) via step_and_paint_physics_demo:
+    sand grains fall, sink through the resting water pool (denser than
+    water), and the pool re-levels around the disturbance. See
+    src/lib.rs's step_and_paint_physics_demo doc comment.
+
+    Canvas convention unchanged: (0,0) top-left, x right, y down.
+  -->
+  <canvas id="canvas"></canvas>
+  <script type="module">
+    import init, * as wasm from './pkg/viewer.js';
+
+    window.__physicsReady = false;
+    window.__physicsError = null;
+    window.__physicsTicks = 0;
+
+    init()
+      .then(() => {
+        window.__wasm = wasm;
+        // scenario_cell_px() is the single source of truth this page and
+        // src/lib.rs already share for cell size — see src/lib.rs's
+        // SCENARIO_CELL_PX doc comment.
+        const cellPx = wasm.scenario_cell_px();
+        window.__physicsTicks = wasm.step_and_paint_physics_demo('canvas', cellPx, 0);
+        window.__physicsReady = true;
+
+        // Same real-elapsed-time-per-frame discipline as www/index.html's
+        // tick_and_draw loop — see that file's own comment for why this
+        // measures actual performance.now() deltas rather than assuming a
+        // fixed per-call duration.
+        const intervalMs = 1000 / 30;
+        let lastFireMs = performance.now();
+        setInterval(() => {
+          const nowMs = performance.now();
+          const frameDurationSecs = (nowMs - lastFireMs) / 1000;
+          lastFireMs = nowMs;
+          window.__physicsTicks = wasm.step_and_paint_physics_demo('canvas', cellPx, frameDurationSecs);
+        }, intervalMs);
+      })
+      .catch((e) => { window.__physicsError = String(e); });
+  </script>
+</body>
+</html>
