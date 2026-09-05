@@ -49,9 +49,15 @@ returned to build. Retrospective: `stable-fluids/tdd-cycle-closeout.md`,
 which is where most of night-shift's design came from.
 
 **2026-09-05 — night-shift.** The stable-fluids halt becomes the
-retrospective that shapes the next attempt: a `tranche → milestone → round →
-phase` self-planning cycle system, in Rust this time, meant to run
-indefinitely across four tranches without a human re-briefing it each step.
+retrospective that shapes the next attempt — concretely: two days after that
+halt, the user wrote up pointed questions on how the TDD cycle actually went
+(`dictation-dumps/response-to-tdd-cycle.md`, 2026-09-03 — "maybe Red writes
+skeleton code too," "who is top dog and can make the call," "would a blank
+agent per AC have just been better?"), then dictated a full answer
+(`dictation-dumps/agentic-development.md`, 2026-09-05) that became a
+`tranche → milestone → round → phase` self-planning cycle system, in Rust
+this time, meant to run indefinitely across four tranches without a human
+re-briefing it each step.
 Stated goal: *"A believable small world inside a large universe. A terrarium
 people can see on their screens and interact with"* — see `NORTH_STARS.md`
 #3, which this run restates sharply enough to be its own entry. Tranche 0
@@ -105,3 +111,18 @@ three aspirational fragments (each now with a pointer to its original
 context — commit and file, or an honest note where no file survives), and
 started `PRINCIPLES.md` to hold the aphorisms on their own. `README.md` and
 `CLAUDE.md` updated to point at the right file for each kind of question.
+
+**2026-09-06 — Archived the real dictation dumps.** The ink was barely dry
+on the above when it turned out entry #3 was reconstructed from a downstream
+copy (`night-shift/CLAUDE.md`) of a real source the user still had:
+`Agentic Development.md`, an ~11KB voice dictation, plus
+`response to tdd cycle.md`, the reflection two days earlier that shaped it.
+Archived both verbatim under `dictation-dumps/` (typos and all) rather than
+re-paraphrasing secondhand — corrected `NORTH_STARS.md` and `PRINCIPLES.md`'s
+attributions to cite them directly, including catching that the
+determinism-as-"architecture-contingent" walk-back was voiced *in this same
+dump*, not between two unrelated documents as the previous draft implied.
+Per the user: nobody should need to read these dumps routinely — they're
+archived for provenance, with a genuine open task (noted in
+`dictation-dumps/README.md`) to revisit all such material later for ideas
+that never made it into a distillation the first time.

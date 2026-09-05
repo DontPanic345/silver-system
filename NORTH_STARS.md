@@ -15,6 +15,12 @@ Read this before writing a new one. If what you're about to write already
 captures the same sliver as something below, restate it there instead of
 starting a new entry.
 
+Entries here are the distillation, not the source. Raw material (voice
+dictations, reflections) is archived verbatim under `dictation-dumps/` —
+nobody needs to read those to work in this repo; they exist for provenance
+and for the open task noted in `dictation-dumps/README.md` (revisiting all
+of it for ideas that never made it into a distillation the first time).
+
 ---
 
 ## 1. The long-term interest (2026-09-02)
@@ -73,31 +79,40 @@ entry is now the more durable copy; if the two ever disagree, trust this
 one and update that memory file to match, not the other way around.
 
 **Status:** the emergent-behaviour framing, materials-as-data, Rust, and the
-physics→chemistry→biology→game-layer ordering were all carried forward.
-Two pieces were explicitly walked back rather than carried forward: GPU
-compute as *foundational* architecture (not a later optimisation) and
-determinism as a standing requirement. Both are now treated as
-architecture-contingent decisions to make later, if a real need arises —
+physics→chemistry→biology→game-layer ordering were all carried forward. GPU
+compute as *foundational* architecture and determinism as a standing
+requirement were not — three days later, in the dump behind entry #3 below,
+the same author had gone "iffy about the deterministic requirement... I
+think we will [move to the GPU but] I'm really worried these agents are
+going [to try] to get determinism when we don't actually need it —
+'architecture contingent.'" That's the walk-back, in its original words —
+see `dictation-dumps/agentic-development.md`. Both are now treated as
+decisions to make later if a real need arises, not standing requirements —
 see `src/math.rs`'s `Scalar` doc comment for where that reasoning currently
 lives in code.
 
 ## 3. A believable small world inside a large universe (2026-09-05)
 
-> **A believable small world inside a large universe.**
->
-> **A terrarium people can see on their screens and interact with.**
+> Only when the big universe is sufficiently full will the small world be
+> believable.
 
-Two statements of the same goal, stated as both a standard (believability
-comes from the universe underneath being genuinely full — see
-`PRINCIPLES.md`'s first entry, which is this standard restated as a rule of
-thumb) and a deliverable (a thing on a screen a person opens, watches,
-reaches into, and comes back to).
+> **A believable small world inside a large universe. A terrarium people
+> can see on their screens and interact with.**
 
-**Original context:** `night-shift`'s `CLAUDE.md` and `PLAN.md` (long
-version), commit `d83f3b0` ("Flesh out the plan; state the north star; tell
-planners to reach"). `night-shift/PLAN.md` and
-`night-shift/skills/cycle-contract/SKILL.md` still carry it verbatim, kept
-for reference under the shelved experiment.
+The same dump also restates #1's domain ordering with real detail: pressure
+and fluid dynamics in physics (a resting pool stays flat, a column of water
+finds its level, a U-shaped pipe brings water to a level across both arms);
+state changes, burning, iron/carbon → steel by more than one route, and the
+full water cycle in chemistry; fungus, humus, bacteria, slime mould, and the
+carbon/nitrogen cycles in biology; then "the glass pane" — human interaction
+with the world, sandbox and terrarium both.
+
+**Original context:** dictated by the user,
+`dictation-dumps/agentic-development.md` (2026-09-05) — mixed in,
+undifferentiated, with a full specification of the `night-shift`
+tranche/round/Red-Green-Refactor cycle (see `dictation-dumps/README.md`).
+Landed in committed form as `night-shift`'s `CLAUDE.md`/`PLAN.md`, commit
+`d83f3b0`.
 
 **Status:** the process built to chase this (`night-shift`'s
 tranche/milestone/round/phase cycle) was shelved — see `JOURNAL.md` — but

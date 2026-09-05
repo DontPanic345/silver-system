@@ -18,10 +18,12 @@ being genuinely full, not from what the camera happens to show. A world whose
 rules stop just past the visible edge reads as a trick, however good the
 visible part looks.
 
-*Origin: `night-shift`'s `CLAUDE.md` (commit `d83f3b0`) and
-`night-shift/skills/cycle-contract/SKILL.md` §9 — both since shelved along
-with the rest of `night-shift`, but the principle itself outlived the process
-that stated it.*
+*Origin: the user's own dictation, `dictation-dumps/agentic-development.md`
+("Only when the big universe is sufficiently full, Will the small world to
+be believable."). Copied into `night-shift`'s `CLAUDE.md` (commit `d83f3b0`)
+and `night-shift/skills/cycle-contract/SKILL.md` §9 — both since shelved
+along with the rest of `night-shift`, but the principle itself outlived the
+process that stated it.*
 
 ### The only way to go fast is to go well.
 
@@ -32,11 +34,14 @@ logic — is a case of violating this in the other direction: "doing it well"
 was over-interpreted as "documenting every step," which is its own way of not
 going fast.
 
-*Origin: same as above.*
+*Origin: `dictation-dumps/agentic-development.md` ("The only way to go fast,
+is to go well."), copied into `night-shift`'s `CLAUDE.md` and
+`cycle-contract` the same way as above.*
 
 ### Do one thing at a time.
 
-*Origin: same as above.*
+*Origin: `dictation-dumps/agentic-development.md`, verbatim, same context as
+above.*
 
 ### Trust and verify.
 
@@ -45,5 +50,7 @@ Not "trust, then verify" as a sequence, and not "verify instead of trusting"
 (numbers/JSON a test can assert on, not a screenshot eyeballed once) is this
 principle made concrete.
 
-*Origin: `night-shift`'s `CLAUDE.md` (commit `d83f3b0`) only —
-`cycle-contract`'s own Principles list (§9) omits this one.*
+*Origin: `dictation-dumps/agentic-development.md` ("Trust and verify."),
+stated twice in the same dump (also: "Agents decisions should be trusted and
+verifed"). Copied into `night-shift`'s `CLAUDE.md` (commit `d83f3b0`) but
+not into `cycle-contract`'s own Principles list (§9), which omits this one.*
