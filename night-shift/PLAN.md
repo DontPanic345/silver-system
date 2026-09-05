@@ -1,5 +1,9 @@
 # Plan
 
+**Shelved 2026-09-05 along with the rest of `night-shift/` — see
+[`CLOSEOUT.md`](CLOSEOUT.md). Kept as the historical record of what this
+experiment was executing, not as a live plan.**
+
 ## The north star
 
 Two statements of the same goal. Both are load-bearing; neither replaces the other.

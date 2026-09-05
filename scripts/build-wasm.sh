@@ -3,7 +3,7 @@
 # wasm-bindgen-cli, so www/index.html can load it.
 #
 # This is the exact command sequence proved out in
-# cycle-log/tranche-0/m0.1/round-01.md. CI (M0.2) should call this script
+# night-shift/cycle-log/tranche-0/m0.1/round-01.md. CI (M0.2) should call this script
 # rather than re-deriving the steps.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."

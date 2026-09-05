@@ -4,16 +4,11 @@ Building a small world that is part of a much larger universe — emergent physi
 behaviour from simple interacting rules (fluids, materials, temperature, pressure,
 reactions), in the spirit of Oxygen Not Included and Noita.
 
-The work plan is [`PLAN.md`](PLAN.md): mathematics and tooling foundations, then
-physics, chemistry, biology, and the glass pane. The language is Rust.
-
-## How the work runs
-
-`tranche → milestone → round → phase`. A round is one Red → Green → Refactor pass;
-a phase is one agent's turn. The cycle is defined by the skills in
-[`.claude/skills/`](.claude/skills/), starting with `cycle-contract`. `cycle-tranche`
-is the top of it — it runs indefinitely, chaining from tranche to tranche once
-`PLAN.md`'s are done. Round logs live under `cycle-log/`.
+The language is Rust. The Rust code below was built under the `night-shift`
+cycle experiment (now shelved, see below) and is kept as substrate for whatever
+runs next — see [`NORTH_STARS.md`](NORTH_STARS.md) for that experiment's stated
+goal and why it was retired, and [`night-shift/CLOSEOUT.md`](night-shift/CLOSEOUT.md)
+for the full retrospective.
 
 ## Live deploy — the path actually in use
 
@@ -30,7 +25,7 @@ rule, don't quietly maintain both once one is proven.
 
 `viewer` (M0.1, the toolchain proving ground) compiles to wasm32, loads in a
 browser canvas via `wasm-bindgen`/`web-sys`, and is verified headlessly with
-Playwright rather than by eye (see `cycle-log/tranche-0/m0.1/`).
+Playwright rather than by eye (see `night-shift/cycle-log/tranche-0/m0.1/`).
 
 Rust unit tests (native, no wasm/browser involved):
 
@@ -122,4 +117,9 @@ Kept for reference, not extended.
 - [`stable-fluids/`](stable-fluids/) — a browser Stam stable-fluids sim with
   conservative advection, temperature and buoyancy, built test-first over seven
   rounds. Halted on a checkerboard mode in the colocated pressure projection. Its
-  retrospective is why the current cycle skills look the way they do.
+  retrospective is why the `night-shift` cycle skills looked the way they did.
+- [`night-shift/`](night-shift/) — the `tranche → milestone → round → phase` cycle
+  system that built the Rust code above. Proved out its own ideas (cold review
+  catches what a continuous pass misses, planning that folds forward beats
+  memoryless churn) but was found to be spending a large share of its own budget
+  on ceremony rather than the work. See `night-shift/CLOSEOUT.md`.

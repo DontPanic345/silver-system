@@ -5,7 +5,7 @@
 # happens to resolve to that day.
 #
 # Flagged as a real gap by tranche 0's own planning
-# (cycle-log/tranche-0/plan.md §2) and left undone by every milestone until
+# (night-shift/cycle-log/tranche-0/plan.md §2) and left undone by every milestone until
 # this tranche-scope refactor pass closed it.
 #
 # CI (.github/workflows/deploy-pages.yml) deliberately does NOT read this
