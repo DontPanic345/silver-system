@@ -21,6 +21,14 @@ distillation against the source — e.g. the open task below.
   Several of its questions turn directly into decisions in
   `agentic-development.md` (e.g. "maybe Red writes skeleton code too" here
   becomes a stated decision there).
+- **`gnomes.md`** (dictated 2026-09-05) — the actual game this project has
+  been building substrate for: a colony sim fixing Oxygen Not Included's
+  physical and design failures (no conservation, gravity-defying pipes,
+  gimmick gas/liquid behaviour, colony-failure-by-default), reskinned around
+  gnomes whose magic is a bounded, resource-costed exception to an otherwise
+  strictly-conserved simulation. Distilled in full as `NORTH_STARS.md` #4 —
+  this one is dense enough with actual design (not process) that the
+  distillation is substantial, not a one-liner.
 
 ## Open task
 
