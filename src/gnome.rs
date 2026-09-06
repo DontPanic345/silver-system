@@ -1,0 +1,744 @@
+//! Gnomes: the game layer, and the only thing in this crate allowed to
+//! break conservation — at a price, and on the record.
+//!
+//! `NORTH_STARS.md` #4 is the capstone this exists to serve. Its central
+//! idea is not "simulate physics properly" on its own; it is that real
+//! conservation *becomes the game mechanic*. A gnome can create or destroy
+//! heat and mass, which no other part of this simulation can do, but every
+//! such act spends **Gin** — a finite resource regenerated only by
+//! foraging juniper — and is written into [`World`]'s
+//! [`Ledger`](crate::world::Ledger). The world therefore stays closed in
+//! the only sense that matters: nothing changes without something paying
+//! for it, and the books always balance.
+//!
+//! Three of the dictated design's specifics are built here:
+//!
+//! - **Gin as a bounded mana resource.** Warming or chilling a cell costs
+//!   Gin in proportion to the joules moved; conjuring or banishing matter
+//!   costs it in proportion to the grams. A gnome out of Gin has no magic
+//!   at all, which is what stops magic being a free pass around the
+//!   physics.
+//! - **The ethereal layer instead of death.** ONI's colonies are tuned to
+//!   fail and dupes die; the note this is built from calls that out
+//!   directly. A gnome in lethal trouble — drowning, roasting, freezing —
+//!   spends Gin on cheap mitigations first, and only when those run out
+//!   does it slip into the ethereal layer, from which another gnome can
+//!   retrieve it. Nothing is ever lost permanently.
+//! - **Ethereal pipes as an honest shortcut.** ONI's pipes move liquid
+//!   uphill through a layer disconnected from physics and pretend that is
+//!   physical. Here that shortcut exists — [`EtherealPipe`] moves matter
+//!   from one node to another regardless of what lies between — but it is
+//!   explicitly magical, it costs Gin, and, because it is implemented as a
+//!   swap of two cells, it still cannot create or destroy anything.
+//!
+//! Not built here: brewing and distilling (Gin currently comes from
+//! foraging berries only), the knowledge economy, and buildings. See
+//! `JOURNAL.md`.
+
+use crate::material::{terrarium as t, Mobility, Phase};
+use crate::math::{GridIndex, Scalar};
+use crate::world::World;
+
+/// The most Gin a gnome can hold.
+pub const MAX_GIN: Scalar = 100.0;
+/// Gin per joule moved by a warming or chilling spell. Tuned so a gnome
+/// with a full flask can shift roughly the heat in a cell of water by 100 K
+/// a few times over — magic that matters, but that runs out.
+pub const GIN_PER_JOULE: Scalar = 1.0 / 4000.0;
+/// Gin per gram conjured or banished. Matter is dearer than heat.
+pub const GIN_PER_GRAM: Scalar = 8.0;
+/// Gin recovered per forage, and the juniper mass it consumes.
+pub const GIN_PER_BERRY: Scalar = 30.0;
+pub const BERRY_MASS: Scalar = 0.05;
+
+/// Below this, a gnome starts looking for juniper instead of working.
+pub const GIN_HUNGRY: Scalar = 45.0;
+
+/// The temperature band a gnome is comfortable in, in kelvin.
+pub const COMFORT_MIN: Scalar = 265.0;
+pub const COMFORT_MAX: Scalar = 320.0;
+/// Outside this wider band, staying put is lethal.
+pub const LETHAL_MIN: Scalar = 250.0;
+pub const LETHAL_MAX: Scalar = 340.0;
+
+/// Steps a gnome can hold its breath in something unbreathable.
+pub const BREATH_STEPS: u32 = 40;
+/// How close an embodied gnome must be to pull one back from the ethereal
+/// layer, and how many steps of proximity it takes.
+pub const RESCUE_RADIUS: i32 = 4;
+pub const RESCUE_STEPS: u32 = 20;
+
+/// Whether a gnome is in the world or in the ethereal layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Body {
+    /// Present, physical, and killable-but-for-the-ethereal-layer.
+    Embodied,
+    /// Slipped out of the world to escape something lethal, waiting to be
+    /// pulled back. `rescue_progress` counts steps spent with a living
+    /// gnome nearby.
+    Ethereal { rescue_progress: u32 },
+}
+
+/// What a gnome did on the step just simulated — the readable trace the
+/// headless report prints, so behaviour can be checked by numbers instead
+/// of by watching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Act {
+    Idle,
+    Walked,
+    Fell,
+    Foraged,
+    Warmed,
+    Chilled,
+    /// Spent Gin conjuring breathable air around itself.
+    Breathed,
+    WentEthereal,
+    Rescued,
+    Waiting,
+}
+
+/// One gnome.
+#[derive(Debug, Clone, Copy)]
+pub struct Gnome {
+    pub pos: GridIndex,
+    /// Where this gnome slipped out of the world, and where a rescue
+    /// returns it to. Meaningful only while ethereal.
+    pub anchor: GridIndex,
+    pub gin: Scalar,
+    pub body: Body,
+    /// Steps of held breath remaining; refills instantly in breathable air.
+    pub breath: u32,
+    pub last_act: Act,
+    /// Which way this gnome is walking.
+    pub facing: i8,
+}
+
+impl Gnome {
+    pub fn new(pos: GridIndex) -> Self {
+        Gnome {
+            pos,
+            anchor: pos,
+            gin: MAX_GIN,
+            body: Body::Embodied,
+            breath: BREATH_STEPS,
+            last_act: Act::Idle,
+            facing: 1,
+        }
+    }
+
+    pub fn is_embodied(&self) -> bool {
+        matches!(self.body, Body::Embodied)
+    }
+
+    /// Whether this gnome can afford `gin`.
+    fn can_afford(&self, gin: Scalar) -> bool {
+        self.gin >= gin
+    }
+}
+
+/// A sanctioned magical shortcut for moving matter: whatever sits at
+/// `input` is exchanged with whatever sits at `output`, however far apart
+/// and whatever lies between.
+///
+/// This is the deliberate answer to ONI's liquid-in-pipes problem. That
+/// game moves liquid uphill through a layer that isn't part of the physical
+/// world while presenting it as plumbing; the note this is built from
+/// objects to the pretence, not to the shortcut. So the shortcut is kept
+/// and labelled: it is magic, it costs Gin per transfer, and — because it
+/// is a swap rather than a delete-and-create — it cannot break
+/// conservation even though it ignores geometry.
+#[derive(Debug, Clone, Copy)]
+pub struct EtherealPipe {
+    pub input: GridIndex,
+    pub output: GridIndex,
+    /// Gin per cell moved.
+    pub gin_per_transfer: Scalar,
+}
+
+impl EtherealPipe {
+    pub fn new(input: GridIndex, output: GridIndex) -> Self {
+        EtherealPipe {
+            input,
+            output,
+            gin_per_transfer: 0.5,
+        }
+    }
+}
+
+/// The gnomes, their pipes, and the shared behaviour that drives them.
+pub struct Colony {
+    pub gnomes: Vec<Gnome>,
+    pub pipes: Vec<EtherealPipe>,
+    /// Deterministic tie-breaker source. A real RNG would make runs
+    /// unreproducible for no gain here; this crate's habit is numbers a
+    /// test can assert on.
+    seed: u64,
+}
+
+impl Colony {
+    pub fn new(gnomes: Vec<Gnome>) -> Self {
+        Colony {
+            gnomes,
+            pipes: Vec::new(),
+            seed: 0x9E3779B97F4A7C15,
+        }
+    }
+
+    pub fn with_pipe(mut self, pipe: EtherealPipe) -> Self {
+        self.pipes.push(pipe);
+        self
+    }
+
+    fn next_rand(&mut self) -> u64 {
+        // xorshift64*, deterministic and dependency-free.
+        self.seed ^= self.seed >> 12;
+        self.seed ^= self.seed << 25;
+        self.seed ^= self.seed >> 27;
+        self.seed.wrapping_mul(0x2545F4914F6CDD1D)
+    }
+
+    /// How much Gin the colony holds in total — the resource the whole
+    /// design hangs on, so worth reading directly.
+    pub fn total_gin(&self) -> f64 {
+        self.gnomes.iter().map(|g| g.gin as f64).sum()
+    }
+
+    pub fn embodied_count(&self) -> usize {
+        self.gnomes.iter().filter(|g| g.is_embodied()).count()
+    }
+
+    pub fn ethereal_count(&self) -> usize {
+        self.gnomes.len() - self.embodied_count()
+    }
+
+    /// One step of gnome behaviour, run after the physics step.
+    pub fn update(&mut self, world: &mut World) {
+        self.run_pipes(world);
+        for idx in 0..self.gnomes.len() {
+            match self.gnomes[idx].body {
+                Body::Embodied => self.update_embodied(world, idx),
+                Body::Ethereal { .. } => self.update_ethereal(idx),
+            }
+        }
+    }
+
+    /// Ethereal pipes move one cell of matter per step, paid for out of the
+    /// nearest gnome's flask. No gnome with Gin to spare, no transfer —
+    /// the pipes are gnome infrastructure, not free machinery.
+    fn run_pipes(&mut self, world: &mut World) {
+        for pipe_idx in 0..self.pipes.len() {
+            let pipe = self.pipes[pipe_idx];
+            if !world.in_bounds(pipe.input) || !world.in_bounds(pipe.output) {
+                continue;
+            }
+            let src = world.cell(pipe.input);
+            let dst = world.cell(pipe.output);
+            let src_mat = world.materials().get(src.material);
+            let dst_mat = world.materials().get(dst.material);
+            // Only carries fluids, and only when there is something lighter
+            // at the far end to displace — otherwise the pipe is full.
+            if src_mat.mobility == Mobility::Static || src_mat.phase == Phase::Gas {
+                continue;
+            }
+            if dst_mat.mobility == Mobility::Static || dst_mat.density >= src_mat.density {
+                continue;
+            }
+            let Some(payer) = self.nearest_payer(pipe.input, pipe.gin_per_transfer) else {
+                continue;
+            };
+            self.gnomes[payer].gin -= pipe.gin_per_transfer;
+            world.charge_gin(pipe.gin_per_transfer as f64);
+            let a = world.linear_index(pipe.input);
+            let b = world.linear_index(pipe.output);
+            world.swap_cells(a, b);
+        }
+    }
+
+    /// The embodied gnome closest to `at` that can afford `gin`.
+    fn nearest_payer(&self, at: GridIndex, gin: Scalar) -> Option<usize> {
+        self.gnomes
+            .iter()
+            .enumerate()
+            .filter(|(_, g)| g.is_embodied() && g.can_afford(gin))
+            .min_by_key(|(_, g)| (g.pos.i - at.i).abs() + (g.pos.j - at.j).abs())
+            .map(|(i, _)| i)
+    }
+
+    fn update_ethereal(&mut self, idx: usize) {
+        let anchor = self.gnomes[idx].anchor;
+        let helper_near = self.gnomes.iter().enumerate().any(|(other, g)| {
+            other != idx
+                && g.is_embodied()
+                && (g.pos.i - anchor.i).abs() <= RESCUE_RADIUS
+                && (g.pos.j - anchor.j).abs() <= RESCUE_RADIUS
+        });
+        let Body::Ethereal { rescue_progress } = self.gnomes[idx].body else {
+            return;
+        };
+        if helper_near {
+            let progress = rescue_progress + 1;
+            if progress >= RESCUE_STEPS {
+                let g = &mut self.gnomes[idx];
+                g.body = Body::Embodied;
+                g.breath = BREATH_STEPS;
+                g.gin = (g.gin + GIN_PER_BERRY).min(MAX_GIN);
+                g.pos = g.anchor;
+                g.last_act = Act::Rescued;
+            } else {
+                self.gnomes[idx].body = Body::Ethereal {
+                    rescue_progress: progress,
+                };
+                self.gnomes[idx].last_act = Act::Waiting;
+            }
+        } else {
+            self.gnomes[idx].last_act = Act::Waiting;
+        }
+    }
+
+    fn update_embodied(&mut self, world: &mut World, idx: usize) {
+        let pos = self.gnomes[idx].pos;
+        if !world.in_bounds(pos) {
+            return;
+        }
+        let cell = world.cell(pos);
+        let here = *world.materials().get(cell.material);
+
+        // --- Breathing ---
+        if here.breathable {
+            self.gnomes[idx].breath = BREATH_STEPS;
+        } else if self.gnomes[idx].breath > 0 {
+            self.gnomes[idx].breath -= 1;
+        }
+
+        // --- Lethal heat or cold: mitigate with Gin, or leave the world ---
+        let too_hot = cell.temperature > LETHAL_MAX;
+        let too_cold = cell.temperature < LETHAL_MIN;
+        let drowning = self.gnomes[idx].breath == 0;
+
+        if too_hot || too_cold {
+            let target = if too_hot { COMFORT_MAX } else { COMFORT_MIN };
+            let capacity = cell.mass as f64 * here.heat_capacity as f64;
+            let joules = (target - cell.temperature) as f64 * capacity;
+            let cost = (joules.abs() * GIN_PER_JOULE as f64) as Scalar;
+            if self.gnomes[idx].can_afford(cost) {
+                self.spend(world, idx, cost);
+                world.conjure_energy(pos, joules);
+                self.gnomes[idx].last_act = if too_hot { Act::Chilled } else { Act::Warmed };
+                return;
+            }
+            self.go_ethereal(idx);
+            return;
+        }
+
+        if drowning {
+            // A cheap Gin-powered gasp: replace the cell you are stuck in
+            // with breathable air. Costs matter, so it is not free.
+            let cost = world.materials().get(t::AIR).density * GIN_PER_GRAM + 4.0;
+            if self.gnomes[idx].can_afford(cost) {
+                self.spend(world, idx, cost);
+                let air_mass = world.materials().get(t::AIR).density;
+                world.conjure_mass(pos, t::AIR, air_mass, cell.temperature);
+                self.gnomes[idx].breath = BREATH_STEPS;
+                self.gnomes[idx].last_act = Act::Breathed;
+                return;
+            }
+            self.go_ethereal(idx);
+            return;
+        }
+
+        // --- Forage when the flask runs low ---
+        if self.gnomes[idx].gin < GIN_HUNGRY {
+            if let Some(bush) = self.find_adjacent(world, pos, t::JUNIPER) {
+                // Eating removes matter from the world: booked like every
+                // other magical act, because a gnome's stomach is no more
+                // exempt than its spells.
+                world.conjure_mass(bush, t::JUNIPER, -BERRY_MASS, cell.temperature);
+                let g = &mut self.gnomes[idx];
+                g.gin = (g.gin + GIN_PER_BERRY).min(MAX_GIN);
+                g.last_act = Act::Foraged;
+                return;
+            }
+        }
+
+        // --- Otherwise: fall, or walk ---
+        let below = GridIndex::new(pos.i, pos.j - 1);
+        if world.in_bounds(below) && self.is_walkable(world, below) {
+            self.gnomes[idx].pos = below;
+            self.gnomes[idx].last_act = Act::Fell;
+            return;
+        }
+
+        let goal = self.walk_direction(world, idx);
+        let ahead = GridIndex::new(pos.i + goal as i32, pos.j);
+        let step_up = GridIndex::new(pos.i + goal as i32, pos.j + 1);
+        if world.in_bounds(ahead) && self.is_walkable(world, ahead) {
+            self.gnomes[idx].pos = ahead;
+            self.gnomes[idx].last_act = Act::Walked;
+        } else if world.in_bounds(step_up) && self.is_walkable(world, step_up) {
+            self.gnomes[idx].pos = step_up;
+            self.gnomes[idx].last_act = Act::Walked;
+        } else {
+            self.gnomes[idx].facing = -goal;
+            self.gnomes[idx].last_act = Act::Idle;
+        }
+    }
+
+    /// Which way to walk: toward the nearest juniper when hungry, otherwise
+    /// carry on the way you were going.
+    fn walk_direction(&mut self, world: &World, idx: usize) -> i8 {
+        let g = self.gnomes[idx];
+        // A stranded comrade outranks everything else. Rescue is the whole
+        // point of the ethereal layer: without someone walking over, an
+        // ethereal gnome is just a slower death.
+        if let Some(anchor) = self.nearest_anchor(idx) {
+            if anchor.i != g.pos.i {
+                let dir = (anchor.i - g.pos.i).signum() as i8;
+                self.gnomes[idx].facing = dir;
+                return dir;
+            }
+        }
+        if g.gin < GIN_HUNGRY {
+            if let Some(bush) = self.nearest(world, g.pos, t::JUNIPER) {
+                if bush.i != g.pos.i {
+                    let dir = (bush.i - g.pos.i).signum() as i8;
+                    self.gnomes[idx].facing = dir;
+                    return dir;
+                }
+            }
+        }
+        // A small deterministic chance of turning around, so gnomes don't
+        // all end up pressed against the same wall forever.
+        if self.next_rand().is_multiple_of(64) {
+            self.gnomes[idx].facing = -g.facing;
+        }
+        self.gnomes[idx].facing
+    }
+
+    /// The anchor of the closest gnome currently in the ethereal layer.
+    fn nearest_anchor(&self, idx: usize) -> Option<GridIndex> {
+        let from = self.gnomes[idx].pos;
+        self.gnomes
+            .iter()
+            .enumerate()
+            .filter(|(other, g)| *other != idx && !g.is_embodied())
+            .min_by_key(|(_, g)| (g.anchor.i - from.i).abs() + (g.anchor.j - from.j).abs())
+            .map(|(_, g)| g.anchor)
+    }
+
+    fn go_ethereal(&mut self, idx: usize) {
+        let g = &mut self.gnomes[idx];
+        g.anchor = g.pos;
+        g.body = Body::Ethereal { rescue_progress: 0 };
+        g.last_act = Act::WentEthereal;
+    }
+
+    fn spend(&mut self, world: &mut World, idx: usize, gin: Scalar) {
+        self.gnomes[idx].gin -= gin;
+        world.charge_gin(gin as f64);
+    }
+
+    /// A cell a gnome can stand in: not solid, and not something it would
+    /// sink through like a stone.
+    fn is_walkable(&self, world: &World, index: GridIndex) -> bool {
+        let m = world.materials().get(world.material_at(index));
+        m.mobility != Mobility::Static && m.phase != Phase::Solid
+    }
+
+    fn find_adjacent(
+        &self,
+        world: &World,
+        pos: GridIndex,
+        material: crate::material::MaterialId,
+    ) -> Option<GridIndex> {
+        for d in [
+            GridIndex::new(1, 0),
+            GridIndex::new(-1, 0),
+            GridIndex::new(0, 1),
+            GridIndex::new(0, -1),
+        ] {
+            let n = GridIndex::new(pos.i + d.i, pos.j + d.j);
+            if world.in_bounds(n) && world.material_at(n) == material {
+                return Some(n);
+            }
+        }
+        None
+    }
+
+    fn nearest(
+        &self,
+        world: &World,
+        from: GridIndex,
+        material: crate::material::MaterialId,
+    ) -> Option<GridIndex> {
+        let mut best: Option<(i32, GridIndex)> = None;
+        for j in 0..world.height() as i32 {
+            for i in 0..world.width() as i32 {
+                let n = GridIndex::new(i, j);
+                if world.material_at(n) != material {
+                    continue;
+                }
+                let d = (n.i - from.i).abs() + (n.j - from.j).abs();
+                if best.is_none_or(|(bd, _)| d < bd) {
+                    best = Some((d, n));
+                }
+            }
+        }
+        best.map(|(_, n)| n)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::material::MaterialTable;
+    use crate::physics;
+
+    fn cavern() -> World {
+        let mut w = World::new(20, 12, MaterialTable::terrarium(), t::AIR, 293.0);
+        for i in 0..20 {
+            w.fill(GridIndex::new(i, 0), t::STONE, 293.0);
+        }
+        w.rebaseline();
+        w
+    }
+
+    #[test]
+    fn a_gnome_walks_along_the_floor_instead_of_sinking_into_it() {
+        let mut w = cavern();
+        let mut colony = Colony::new(vec![Gnome::new(GridIndex::new(5, 6))]);
+        for _ in 0..40 {
+            colony.update(&mut w);
+        }
+        assert_eq!(
+            colony.gnomes[0].pos.j, 1,
+            "a gnome should fall to the floor and stand on it"
+        );
+    }
+
+    #[test]
+    fn magic_costs_gin_and_the_ledger_records_exactly_what_it_added() {
+        let mut w = cavern();
+        // A pocket of lava-hot air the gnome must chill to survive.
+        w.fill(GridIndex::new(5, 1), t::AIR, 500.0);
+        w.rebaseline();
+        let mut colony = Colony::new(vec![Gnome::new(GridIndex::new(5, 1))]);
+        let energy_before = w.total_energy();
+
+        colony.update(&mut w);
+
+        assert_eq!(colony.gnomes[0].last_act, Act::Chilled);
+        assert!(colony.gnomes[0].gin < MAX_GIN, "chilling should cost Gin");
+        assert!(w.ledger().gin_spent > 0.0);
+        // Energy really did leave the world — and the ledger accounts for
+        // every joule of it.
+        assert!(w.total_energy() < energy_before);
+        assert!(
+            w.conservation_residuals().energy.abs() < 1e-3,
+            "residual {}",
+            w.conservation_residuals().energy
+        );
+    }
+
+    #[test]
+    fn a_gnome_out_of_gin_slips_into_the_ethereal_layer_rather_than_dying() {
+        let mut w = cavern();
+        w.fill(GridIndex::new(5, 1), t::AIR, 900.0);
+        w.rebaseline();
+        let mut gnome = Gnome::new(GridIndex::new(5, 1));
+        gnome.gin = 0.0;
+        let mut colony = Colony::new(vec![gnome]);
+
+        colony.update(&mut w);
+
+        assert!(!colony.gnomes[0].is_embodied(), "should have gone ethereal");
+        assert_eq!(colony.gnomes[0].last_act, Act::WentEthereal);
+        assert_eq!(colony.gnomes.len(), 1, "nobody dies; nobody is removed");
+    }
+
+    #[test]
+    fn another_gnome_nearby_pulls_an_ethereal_gnome_back() {
+        let mut w = cavern();
+        w.fill(GridIndex::new(5, 1), t::AIR, 900.0);
+        w.rebaseline();
+        let mut stuck = Gnome::new(GridIndex::new(5, 1));
+        stuck.gin = 0.0;
+        let rescuer = Gnome::new(GridIndex::new(7, 1));
+        let mut colony = Colony::new(vec![stuck, rescuer]);
+
+        colony.update(&mut w);
+        assert!(!colony.gnomes[0].is_embodied());
+
+        // Let the danger pass, then let the rescuer do its work.
+        w.fill(GridIndex::new(5, 1), t::AIR, 293.0);
+        for _ in 0..RESCUE_STEPS + 5 {
+            colony.update(&mut w);
+        }
+        assert!(
+            colony.gnomes[0].is_embodied(),
+            "a nearby gnome should have pulled it back"
+        );
+    }
+
+    #[test]
+    fn drowning_costs_gin_first_and_the_ethereal_layer_only_as_a_last_resort() {
+        // A sealed flooded pocket, so the gnome cannot simply walk out of
+        // the water — which, given the chance, it does.
+        let mut w = cavern();
+        for i in 3..8 {
+            for j in 1..6 {
+                w.fill(GridIndex::new(i, j), t::STONE, 293.0);
+            }
+        }
+        for i in 4..7 {
+            for j in 1..5 {
+                w.fill(GridIndex::new(i, j), t::WATER, 293.0);
+            }
+        }
+        w.rebaseline();
+        let mut colony = Colony::new(vec![Gnome::new(GridIndex::new(5, 2))]);
+        for _ in 0..BREATH_STEPS + 4 {
+            colony.update(&mut w);
+            physics::step(&mut w, 0.05);
+        }
+        assert!(
+            colony.gnomes[0].gin < MAX_GIN || !colony.gnomes[0].is_embodied(),
+            "a drowning gnome must have either spent Gin or gone ethereal"
+        );
+        assert!(
+            w.conservation_residuals().mass.abs() < 1e-4,
+            "even a gasp for air is booked: residual {}",
+            w.conservation_residuals().mass
+        );
+    }
+
+    #[test]
+    fn foraging_juniper_restores_gin_and_removes_the_matter_it_ate() {
+        let mut w = cavern();
+        w.fill(GridIndex::new(6, 1), t::JUNIPER, 293.0);
+        w.rebaseline();
+        let mut gnome = Gnome::new(GridIndex::new(5, 1));
+        gnome.gin = 10.0;
+        let mut colony = Colony::new(vec![gnome]);
+        let mass_before = w.total_mass();
+
+        colony.update(&mut w);
+
+        assert_eq!(colony.gnomes[0].last_act, Act::Foraged);
+        assert!(colony.gnomes[0].gin > 10.0, "berries should restore Gin");
+        assert!(w.total_mass() < mass_before, "the berry left the world");
+        assert!(w.conservation_residuals().mass.abs() < 1e-4);
+    }
+
+    #[test]
+    fn an_ethereal_pipe_moves_water_uphill_without_creating_any() {
+        // The ONI complaint, made concrete: water in a sealed basin, an
+        // outlet high above it with no physical path between, and the water
+        // gets there anyway — magically, at a price, and without a gram
+        // appearing from nowhere.
+        let mut w = World::new(9, 12, MaterialTable::terrarium(), t::AIR, 293.0);
+        for i in 0..9 {
+            w.fill(GridIndex::new(i, 0), t::STONE, 293.0);
+            w.fill(GridIndex::new(i, 4), t::STONE, 293.0);
+        }
+        for j in 0..12 {
+            w.fill(GridIndex::new(0, j), t::STONE, 293.0);
+            w.fill(GridIndex::new(8, j), t::STONE, 293.0);
+        }
+        for i in 1..8 {
+            for j in 1..4 {
+                w.fill(GridIndex::new(i, j), t::WATER, 293.0);
+            }
+        }
+        w.rebaseline();
+        let mass_before = w.total_mass();
+
+        let pipe = EtherealPipe::new(GridIndex::new(4, 3), GridIndex::new(4, 6));
+        let mut gnome = Gnome::new(GridIndex::new(2, 6));
+        gnome.gin = MAX_GIN;
+        let mut colony = Colony::new(vec![gnome]).with_pipe(pipe);
+
+        let above_before = (5..12)
+            .filter(|&j| w.material_at(GridIndex::new(4, j)) == t::WATER)
+            .count();
+        for _ in 0..30 {
+            colony.update(&mut w);
+            physics::step(&mut w, 0.05);
+        }
+        let above_after: usize = (1..8)
+            .flat_map(|i| (5..12).map(move |j| GridIndex::new(i, j)))
+            .filter(|&idx| w.material_at(idx) == t::WATER)
+            .count();
+
+        assert_eq!(above_before, 0);
+        assert!(
+            above_after > 0,
+            "the pipe should have lifted water over the ceiling"
+        );
+        assert!(w.ledger().gin_spent > 0.0, "the pipe should cost Gin");
+        assert!(
+            (w.total_mass() - mass_before).abs() < 1e-4,
+            "a pipe transfer is a swap: no mass may appear or vanish"
+        );
+        assert!(w.conservation_residuals().mass.abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_colony_survives_a_long_run_and_the_books_still_balance() {
+        let mut w = World::new(32, 20, MaterialTable::terrarium(), t::AIR, 293.0);
+        for i in 0..32 {
+            w.fill(GridIndex::new(i, 0), t::STONE, 293.0);
+            w.fill(GridIndex::new(i, 1), t::STONE, 293.0);
+        }
+        for i in 2..30 {
+            w.fill(GridIndex::new(i, 2), t::SAND, 293.0);
+        }
+        for i in [5, 11, 19, 25] {
+            w.fill(GridIndex::new(i, 3), t::JUNIPER, 293.0);
+        }
+        // A hot spring at one end and a block of ice at the other, so the
+        // world is doing something while the gnomes live in it.
+        for i in 1..4 {
+            w.fill(GridIndex::new(i, 1), t::LAVA, 1700.0);
+        }
+        for i in 26..30 {
+            for j in 8..11 {
+                w.fill(GridIndex::new(i, j), t::ICE, 240.0);
+            }
+        }
+        w.rebaseline();
+
+        let mut colony = Colony::new(
+            (0..6)
+                .map(|k| Gnome::new(GridIndex::new(6 + k * 3, 8)))
+                .collect(),
+        );
+
+        for _ in 0..800 {
+            physics::step(&mut w, 0.05);
+            colony.update(&mut w);
+        }
+
+        let r = w.conservation_residuals();
+        assert!(
+            r.mass_relative.abs() < 1e-6,
+            "mass residual {} ({:e} relative) after a full colony run",
+            r.mass,
+            r.mass_relative
+        );
+        assert!(
+            r.energy_relative.abs() < 1e-6,
+            "energy residual {} ({:e} relative) after a full colony run",
+            r.energy,
+            r.energy_relative
+        );
+        assert_eq!(colony.gnomes.len(), 6, "no gnome is ever destroyed");
+        assert!(
+            colony.embodied_count() >= 1,
+            "the colony should not be wiped out"
+        );
+        assert!(
+            w.ledger().gin_spent >= 0.0,
+            "the Gin ledger should be coherent"
+        );
+    }
+}

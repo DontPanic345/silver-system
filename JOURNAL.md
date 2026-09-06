@@ -141,3 +141,50 @@ closed water cycle work traces to this, not abstract engineering taste.
 Archived verbatim as `dictation-dumps/gnomes.md`, distilled in full as
 `NORTH_STARS.md` #4. Not yet reflected in `CLAUDE.md`/`README.md`'s top-level
 framing — asked the user whether it should be.
+
+**2026-09-07 — Gnomes, built.** The first experiment to aim at
+`NORTH_STARS.md` #4 directly instead of building substrate underneath it.
+Stated goal: *build as much of the north stars as one session can
+confidently carry*, with no process cycle at all — a deliberate contrast
+with `night-shift`, whose closeout blamed ceremony rather than the goal.
+What landed, on top of the kept Rust substrate:
+
+- **A real simulation.** `src/world.rs` replaces the material-only `Grid`
+  with cells carrying mass, temperature and latent-change progress;
+  `src/physics.rs` adds density-ordered movement, symmetric heat
+  conduction, and data-driven phase change. Mass and energy are conserved
+  *by construction* — movement is a swap, conduction is a clamped pairwise
+  transfer, phase change is an algebraic rewrite — and asserted to `1e-6`
+  relative over 600–4000-step runs, not merely hoped for.
+- **The Gnomes game layer** (`src/gnome.rs`): Gin as a bounded mana
+  resource, magic as the one accounted-for hole in the world's books,
+  the ethereal layer instead of death, gnome-to-gnome rescue, juniper
+  foraging, and ethereal pipes implemented as a two-cell swap so that even
+  the sanctioned shortcut cannot create matter.
+- **The terrarium** (`src/terrarium.rs`), a running water cycle, plus a
+  browser view (`www/terrarium.html`) and a headless JSON runner
+  (`cargo run --bin terrarium`) that report the same numbers.
+
+Four findings worth keeping, each recorded in the code where it bites:
+
+1. *A sealed jar dies.* The first terrarium was fully closed and reached
+   thermal equilibrium in a couple of minutes of simulated time — correct
+   physics, no cycle. Fixed by giving it a declared hot vent and cold lid
+   whose flux goes through the same ledger gnome magic uses, so the jar's
+   openness is a number rather than a fudge.
+2. *Latent heat cannot be a threshold flip.* Melting has to accumulate
+   energy at the transition point, or a cell must overshoot melting point
+   by 160 K to pay for its own latent heat, and then oscillates.
+3. *Falling and spreading must be separate passes.* Combined, a liquid
+   slides into the hole the cell above it was about to fall through, and a
+   shallow pool never fills its bottom row.
+4. *Communicating vessels need a body-level rule.* Cell-local gravity
+   cannot climb the far arm of a U-bend. `stable-fluids` split on the
+   pressure solve; this sidesteps it by transferring a surface cell from
+   the tallest column of a connected cavity to a lower one, which is the
+   only consequence of the pressure field that this scenario needs.
+
+Not built: brewing/distilling (Gin comes from berries only), the
+book-copying knowledge economy, the Gnome Grandmother, buildings, and
+farming. The physics still has no pressure or gas diffusion, and gases do
+not spread laterally at all (deliberately — see `physics::apply_gravity`).

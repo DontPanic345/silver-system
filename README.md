@@ -4,14 +4,67 @@ Building a small world that is part of a much larger universe — emergent physi
 behaviour from simple interacting rules (fluids, materials, temperature, pressure,
 reactions), in the spirit of Oxygen Not Included and Noita.
 
-The language is Rust. The Rust code below was built under the `night-shift`
-cycle experiment (now shelved, see below) and is kept as substrate for whatever
-runs next — see [`JOURNAL.md`](JOURNAL.md) for the dated, narrative thread
+The language is Rust. The current experiment is **Gnomes** — a conserving
+mass/energy/phase simulation with a colony sim on top of it, where a gnome's
+magic is the one accounted-for exception to an otherwise closed world. See
+[`NORTH_STARS.md`](NORTH_STARS.md) #4 for the vision and the section below
+for how to run it. Some of the Rust here predates it, built under the
+`night-shift` cycle experiment (now shelved, see below) and kept as
+substrate — see [`JOURNAL.md`](JOURNAL.md) for the dated, narrative thread
 connecting every pivot this repo has made (including that experiment's stated
 goal and why it ended), [`night-shift/CLOSEOUT.md`](night-shift/CLOSEOUT.md)
 for its full retrospective, [`NORTH_STARS.md`](NORTH_STARS.md) for the
 aspirational statements this and every experiment has served, and
 [`PRINCIPLES.md`](PRINCIPLES.md) for the aphorisms distilled along the way.
+
+## The gnome terrarium — the current experiment
+
+A vent held hot under a lid held cold, water in between, four gnomes living
+in the gap. The boiling, the rain, the sand piling and the gnomes' scramble
+for Gin are all emergent: there is no script, only conduction, two phase
+transitions, a density rule, and a Gin budget.
+
+```sh
+# Headless: JSON snapshots (and an ASCII map on stderr) — no browser needed.
+cargo run --release --bin terrarium -- --steps 8000 --every 2000 --map
+
+# In a browser, with a live conservation read-out:
+bash scripts/build-wasm.sh
+python3 -m http.server -d www 8000   # then open /terrarium.html
+```
+
+### What it is actually claiming
+
+The interesting property is not that things fall convincingly; it is that
+**mass and energy are conserved by construction, and everything that isn't
+conserved is written down.** Movement is a swap of whole cells, conduction
+is a clamped symmetric pairwise transfer, and a phase change is an algebraic
+rewrite that holds a cell's energy fixed across the material switch. None of
+those can gain or lose a gram or a joule.
+
+Two things are allowed to break that, and both go through the same ledger:
+gnome magic (paid for in Gin) and the terrarium's declared hot/cold boundary
+(a sealed jar reaches equilibrium and its water cycle stops — see
+`src/terrarium.rs`). So the standing invariant is not "nothing changes" but
+
+```text
+total_mass_now == total_mass_at_start + ledger.mass_conjured
+```
+
+and the same for energy. Every long-running test asserts it to `1e-6`
+relative, the headless report prints it, and the browser page displays it
+live. `residual_mass_g` in that output is the whole argument in one number.
+
+### Where the pieces live
+
+| File | What it holds |
+| --- | --- |
+| `src/material.rs` | Materials and phase transitions as data; latent-heat offsets derived, not declared |
+| `src/world.rs` | Cells with mass, temperature and latent progress; the magic ledger |
+| `src/physics.rs` | Movement, buoyancy, hydrostatic levelling, conduction, phase change |
+| `src/gnome.rs` | Gin economy, the ethereal layer, rescue, foraging, ethereal pipes |
+| `src/terrarium.rs` | The flagship scenario and its declared boundary conditions |
+| `src/report.rs` | JSON snapshots and an ASCII map, for headless verification |
 
 ## Live deploy — the path actually in use
 
@@ -94,7 +147,15 @@ Playwright, samples real canvas pixel data at three points in time — requires
 
 ```sh
 NODE_PATH=/usr/local/lib/node_modules node tests/e2e/canvas_rectangle.test.mjs
+NODE_PATH=/usr/local/lib/node_modules node tests/e2e/scenario_canvas.test.mjs
+NODE_PATH=/usr/local/lib/node_modules node tests/e2e/terrarium_canvas.test.mjs
 ```
+
+`terrarium_canvas.test.mjs` is the one worth keeping green: it drives the
+real page in headless Chromium and checks that the step counter advances,
+that canvas pixels actually change, and that the conservation residuals
+reported by the browser build stay at zero — numbers read out of the running
+simulation, not a screenshot.
 
 ## The fallback (M0.3, not in current use)
 

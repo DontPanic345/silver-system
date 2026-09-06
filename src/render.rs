@@ -103,6 +103,100 @@ pub fn render_grid_to_rgb8(grid: &Grid, materials: &MaterialTable, cell_px: u32)
     buf
 }
 
+/// Renders a [`World`](crate::world::World) — with its gnomes — to a flat
+/// RGB8 buffer, the same shape [`render_grid_to_rgb8`] produces.
+///
+/// Two things this does that the plain grid renderer cannot, because a
+/// `Grid` has nowhere to put them:
+///
+/// - **Temperature is visible.** Each cell's material colour is shifted
+///   toward red when it is hotter than a comfortable room and toward blue
+///   when colder, so a heat gradient reads at a glance. Without it the jar
+///   looks static even while the whole interesting half of the simulation
+///   is happening.
+/// - **Gnomes are drawn over the world**, not in it. A gnome is an agent at
+///   a cell, not a material occupying one, so it is painted on top; an
+///   ethereal gnome is drawn as a faint ghost at its anchor, which is what
+///   makes "go and rescue them" legible.
+pub fn render_world_to_rgb8(
+    world: &crate::world::World,
+    colony: &crate::gnome::Colony,
+    cell_px: u32,
+) -> Vec<u8> {
+    let width_px = world.width() as u32 * cell_px;
+    let height_px = world.height() as u32 * cell_px;
+    let mut buf = vec![0u8; (width_px * height_px * 3) as usize];
+
+    let put = |buf: &mut Vec<u8>, x: u32, y: u32, c: (u8, u8, u8)| {
+        if x >= width_px || y >= height_px {
+            return;
+        }
+        let idx = ((y * width_px + x) * 3) as usize;
+        buf[idx] = c.0;
+        buf[idx + 1] = c.1;
+        buf[idx + 2] = c.2;
+    };
+
+    for j in 0..world.height() {
+        let image_row = world.height() - 1 - j;
+        for i in 0..world.width() {
+            let index = GridIndex::new(i as i32, j as i32);
+            let cell = world.cell(index);
+            let base = world.materials().get(cell.material).colour;
+            let colour = tint_by_temperature(base, cell.temperature);
+            for dy in 0..cell_px {
+                for dx in 0..cell_px {
+                    put(
+                        &mut buf,
+                        i as u32 * cell_px + dx,
+                        image_row as u32 * cell_px + dy,
+                        colour,
+                    );
+                }
+            }
+        }
+    }
+
+    for gnome in &colony.gnomes {
+        let (pos, colour) = if gnome.is_embodied() {
+            (gnome.pos, (245, 225, 140))
+        } else {
+            (gnome.anchor, (150, 120, 210))
+        };
+        if !world.in_bounds(pos) {
+            continue;
+        }
+        let image_row = world.height() - 1 - pos.j as usize;
+        let inset = (cell_px / 4).max(1);
+        for dy in inset..cell_px.saturating_sub(inset).max(inset + 1) {
+            for dx in inset..cell_px.saturating_sub(inset).max(inset + 1) {
+                put(
+                    &mut buf,
+                    pos.i as u32 * cell_px + dx,
+                    image_row as u32 * cell_px + dy,
+                    colour,
+                );
+            }
+        }
+    }
+
+    buf
+}
+
+/// Shifts a material colour warm or cool according to `temperature_k`.
+/// Neutral at 293 K, fully warm by 800 K, fully cool by 200 K.
+fn tint_by_temperature(base: (u8, u8, u8), temperature_k: crate::math::Scalar) -> (u8, u8, u8) {
+    let t = temperature_k;
+    let mix = |a: u8, b: u8, f: f32| (a as f32 + (b as f32 - a as f32) * f).clamp(0.0, 255.0) as u8;
+    if t > 293.0 {
+        let f = ((t - 293.0) / 507.0).clamp(0.0, 1.0) * 0.75;
+        (mix(base.0, 255, f), mix(base.1, 90, f), mix(base.2, 30, f))
+    } else {
+        let f = ((293.0 - t) / 93.0).clamp(0.0, 1.0) * 0.5;
+        (mix(base.0, 90, f), mix(base.1, 140, f), mix(base.2, 255, f))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

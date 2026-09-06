@@ -173,8 +173,11 @@ resources spent writing to her.
 **Original context:** dictated by the user, archived verbatim as
 `dictation-dumps/gnomes.md`.
 
-**Status:** not yet built toward directly by any experiment. Terrarium,
-stable-fluids, and night-shift each built substrate this could eventually
-sit on (closed cycles, real conservation, materials-as-data, temperature) —
-none has attempted the game layer, the Gin economy, or the ethereal-pipe
-mechanic yet.
+**Status:** first built toward directly on 2026-09-07 — see `JOURNAL.md`.
+The Gin economy, magic-as-the-one-ledgered-exception, the ethereal layer
+with gnome-to-gnome rescue, and ethereal pipes all exist and are tested
+(`src/gnome.rs`), sitting on a conserving mass/energy/phase simulation
+(`src/world.rs`, `src/physics.rs`). Still untouched: brewing and distilling
+(Gin currently comes from foraging juniper berries, not from making the
+drink), the hand-copied-book knowledge economy and its seeding protocol,
+the Gnome Grandmother correspondence, farming, and buildings.

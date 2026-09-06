@@ -31,6 +31,22 @@ pub enum Phase {
     Gas,
 }
 
+/// How a material moves under gravity. Derived by default from
+/// [`Phase`] (solids sit still, liquids and gases flow) but separable from
+/// it, because sand is a solid that falls and piles — a distinction phase
+/// alone cannot express.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mobility {
+    /// Never moves on its own: stone, ice, a juniper bush.
+    Static,
+    /// Falls straight down and slides diagonally, but does not level out:
+    /// sand.
+    Granular,
+    /// Falls (or rises, if lighter than what's above it) and spreads
+    /// sideways to find its level: water, lava, air, steam.
+    Flowing,
+}
+
 /// A material's physical properties, as plain data — never as a
 /// per-material code path. Any later code that needs to know "how does this
 /// cell behave" reads it off a `Material` value looked up from a
@@ -64,6 +80,28 @@ pub struct Material {
     /// `(u8, u8, u8)` convention `src/lib.rs`'s `RECT_COLOR_RGB` already
     /// uses, so the renderer needs no new colour representation.
     pub colour: (u8, u8, u8),
+    /// Enthalpy offset: the energy per unit mass this material holds *over
+    /// and above* its sensible heat (`mass * heat_capacity * temperature`),
+    /// measured against an arbitrary shared zero.
+    ///
+    /// This is how latent heat becomes data instead of code. Total world
+    /// energy is `Σ mass * (heat_capacity * T + latent_energy)`, so a phase
+    /// change that debits the sensible term by exactly the enthalpy gap
+    /// between the two materials conserves that total by construction — see
+    /// `physics::apply_phase_changes`.
+    ///
+    /// **Do not set this by hand on a material that takes part in a
+    /// transition.** [`MaterialTable::with_transitions`] solves for it from
+    /// the transitions' real latent heats; see that method for why a
+    /// hand-written value is almost always subtly wrong.
+    pub latent_energy: Scalar,
+    /// How this material moves under gravity — see [`Mobility`].
+    pub mobility: Mobility,
+    /// Whether a gnome standing in this material can breathe it. Air and
+    /// steam are breathable-ish; water, stone and lava are not. Used only
+    /// by the gnome layer, but it lives here for the same reason every
+    /// other property does: no per-material `if` chains elsewhere.
+    pub breathable: bool,
 }
 
 impl Material {
@@ -86,8 +124,66 @@ impl Material {
             conductivity,
             phase,
             colour,
+            latent_energy: 0.0,
+            mobility: match phase {
+                Phase::Solid => Mobility::Static,
+                Phase::Liquid | Phase::Gas => Mobility::Flowing,
+            },
+            breathable: false,
         }
     }
+
+    /// Overrides [`Material::mobility`], builder-style.
+    pub fn with_mobility(mut self, mobility: Mobility) -> Self {
+        self.mobility = mobility;
+        self
+    }
+
+    /// Sets [`Material::latent_energy`], builder-style.
+    pub fn with_latent_energy(mut self, latent_energy: Scalar) -> Self {
+        self.latent_energy = latent_energy;
+        self
+    }
+
+    /// Marks this material breathable, builder-style.
+    pub fn breathable(mut self) -> Self {
+        self.breathable = true;
+        self
+    }
+
+    /// Energy per unit mass held by this material at `temperature`:
+    /// sensible heat plus this material's enthalpy offset. The quantity
+    /// every conservation check in this crate sums.
+    pub fn specific_energy(&self, temperature: Scalar) -> Scalar {
+        self.heat_capacity * temperature + self.latent_energy
+    }
+}
+
+/// The direction a [`Transition`] fires in: on the way up in temperature
+/// (melting, boiling) or on the way down (freezing, condensing).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Heating,
+    Cooling,
+}
+
+/// A data-driven phase change: "material `from` becomes material `to` when
+/// its temperature crosses `threshold_k` in `direction`".
+///
+/// `latent_heat` is the real physical figure (J/g absorbed going `from` →
+/// `to`, so negative for a cooling transition, which releases it). The
+/// per-material [`Material::latent_energy`] offsets that make total-energy
+/// bookkeeping work out are *derived* from these numbers by
+/// [`MaterialTable::with_transitions`], not declared alongside them — which
+/// is what stops a transition and its reverse ever disagreeing about the
+/// cost of the change.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Transition {
+    pub from: MaterialId,
+    pub to: MaterialId,
+    pub direction: Direction,
+    pub threshold_k: Scalar,
+    pub latent_heat: Scalar,
 }
 
 /// A newtype index into a [`MaterialTable`], distinct from a bare integer so
@@ -119,6 +215,7 @@ impl MaterialId {
 /// without every caller changing.
 pub struct MaterialTable {
     materials: Vec<Material>,
+    transitions: Vec<Transition>,
 }
 
 impl MaterialTable {
@@ -128,7 +225,98 @@ impl MaterialTable {
     /// vector is that material's [`MaterialId`] under the id convention —
     /// see [`MaterialTable::get`].
     pub fn new(materials: Vec<Material>) -> Self {
-        MaterialTable { materials }
+        MaterialTable {
+            materials,
+            transitions: Vec::new(),
+        }
+    }
+
+    /// Attaches this table's phase-transition rules and derives every
+    /// material's [`Material::latent_energy`] offset from them.
+    ///
+    /// ## Why the offsets are derived rather than declared
+    ///
+    /// Total world energy is defined as `Σ mass * (c·T + latent_energy)`.
+    /// For a transition A → B at temperature `Θ` absorbing `L` J/g, that
+    /// definition only produces the right answer if
+    ///
+    /// ```text
+    /// (c_B·Θ + L_B) - (c_A·Θ + L_A) == L
+    /// ```
+    ///
+    /// i.e. `L_B == L_A + L + (c_A - c_B)·Θ`. Hand-written offsets satisfy
+    /// that only by accident — the `(c_A - c_B)·Θ` term is easy to forget,
+    /// and forgetting it silently makes every melt or boil create or
+    /// destroy energy. So the offsets are solved for here instead: one
+    /// material per connected component of the transition graph is pinned
+    /// at zero (an arbitrary but harmless choice, since only differences
+    /// are ever observed) and the rest are propagated out from it.
+    ///
+    /// Panics if two transitions imply contradictory offsets for the same
+    /// material — that is a badly specified table, and it should be loud.
+    pub fn with_transitions(mut self, transitions: Vec<Transition>) -> Self {
+        let n = self.materials.len();
+        let mut offset: Vec<Option<Scalar>> = vec![None; n];
+        let capacity = |i: usize, materials: &[Material]| materials[i].heat_capacity;
+
+        // Relaxation: propagate from whatever is already pinned, seeding a
+        // fresh component at zero whenever a pass makes no progress.
+        loop {
+            let mut progressed = false;
+            for tr in &transitions {
+                let (a, b) = (tr.from.0 as usize, tr.to.0 as usize);
+                let shift = tr.latent_heat
+                    + (capacity(a, &self.materials) - capacity(b, &self.materials))
+                        * tr.threshold_k;
+                match (offset[a], offset[b]) {
+                    (Some(la), None) => {
+                        offset[b] = Some(la + shift);
+                        progressed = true;
+                    }
+                    (None, Some(lb)) => {
+                        offset[a] = Some(lb - shift);
+                        progressed = true;
+                    }
+                    (Some(la), Some(lb)) => {
+                        assert!(
+                            (lb - (la + shift)).abs() <= 1e-2 * (1.0 + lb.abs()),
+                            "transition {:?} -> {:?} implies a latent-energy offset of {} for \
+                             material {}, but another transition already fixed it at {} — the \
+                             table's transitions contradict each other",
+                            tr.from,
+                            tr.to,
+                            la + shift,
+                            b,
+                            lb
+                        );
+                    }
+                    (None, None) => {}
+                }
+            }
+            if !progressed {
+                // Seed the next unresolved component, if any remains.
+                match transitions
+                    .iter()
+                    .find(|tr| offset[tr.from.0 as usize].is_none())
+                {
+                    Some(tr) => offset[tr.from.0 as usize] = Some(0.0),
+                    None => break,
+                }
+            }
+        }
+
+        for (i, o) in offset.into_iter().enumerate() {
+            if let Some(value) = o {
+                self.materials[i].latent_energy = value;
+            }
+        }
+        self.transitions = transitions;
+        self
+    }
+
+    /// This table's phase-transition rules — see [`Transition`].
+    pub fn transitions(&self) -> &[Transition] {
+        &self.transitions
     }
 
     /// How many materials this table holds.
@@ -177,6 +365,114 @@ impl MaterialTable {
         let water = Material::new(1.0, 0.5, 4.186, 0.6, Phase::Liquid, (40, 90, 200));
         let stone = Material::new(2.5, 0.0, 0.8, 2.0, Phase::Solid, (120, 120, 120));
         MaterialTable::new(vec![empty, water, stone])
+    }
+
+    /// The table the gnome terrarium actually runs on: eight materials
+    /// spanning three phases, wired together by six phase transitions
+    /// covering the full water cycle (ice ⇄ water ⇄ steam) and rock melting
+    /// (stone ⇄ lava).
+    ///
+    /// Ids are the [`terrarium`] module's constants — `terrarium::WATER`
+    /// and so on — never bare integers at call sites.
+    ///
+    /// **Units.** Unlike [`MaterialTable::reference`], this table *is*
+    /// dimensionally consistent with itself, which the conservation checks
+    /// require. Mass is in grams per cell-volume, temperature in kelvin,
+    /// energy in joules; `heat_capacity` is J/(g·K) and `latent_energy` is
+    /// J/g, both at their real-world values for the materials that have
+    /// them. `density` is g per cell, so a full cell of water massing 1.0
+    /// sets the scale. `conductivity` is a per-second exchange coefficient,
+    /// not a real W/(m·K) figure — it is the one number here tuned for
+    /// simulation feel rather than taken from a table.
+    pub fn terrarium() -> Self {
+        use terrarium as t;
+        // Latent heats are real figures: 334 J/g to melt ice, 2260 J/g to
+        // boil water. Per-material enthalpy offsets are derived from them
+        // by `with_transitions`, not written here.
+        const L_FUSION: Scalar = 334.0;
+        const L_VAPORISATION: Scalar = 2260.0;
+        const L_ROCK_MELT: Scalar = 400.0;
+        const T_FREEZE: Scalar = 273.15;
+        const T_BOIL: Scalar = 373.15;
+        const T_ROCK_MELT: Scalar = 1500.0;
+
+        let mut materials = vec![Material::new(0.0, 0.0, 0.0, 0.0, Phase::Gas, (0, 0, 0)); 8];
+        materials[t::AIR.0 as usize] =
+            Material::new(0.0012, 0.02, 1.005, 0.05, Phase::Gas, (16, 18, 28)).breathable();
+        materials[t::STEAM.0 as usize] =
+            Material::new(0.0006, 0.01, 2.08, 0.04, Phase::Gas, (170, 180, 200)).breathable();
+        materials[t::WATER.0 as usize] =
+            Material::new(1.0, 0.5, 4.186, 0.6, Phase::Liquid, (40, 90, 200));
+        materials[t::ICE.0 as usize] =
+            Material::new(0.92, 0.0, 2.093, 2.2, Phase::Solid, (170, 210, 240));
+        materials[t::SAND.0 as usize] =
+            Material::new(1.6, 0.0, 0.83, 0.3, Phase::Solid, (200, 175, 105))
+                .with_mobility(Mobility::Granular);
+        materials[t::STONE.0 as usize] =
+            Material::new(2.5, 0.0, 0.8, 2.0, Phase::Solid, (105, 105, 115));
+        materials[t::LAVA.0 as usize] =
+            Material::new(2.4, 8.0, 1.0, 1.5, Phase::Liquid, (235, 110, 40));
+        materials[t::JUNIPER.0 as usize] =
+            Material::new(0.5, 0.0, 2.0, 0.2, Phase::Solid, (70, 130, 90));
+
+        let heating = |from, to, threshold_k, latent_heat| Transition {
+            from,
+            to,
+            direction: Direction::Heating,
+            threshold_k,
+            latent_heat,
+        };
+        let cooling = |from, to, threshold_k, latent_heat: Scalar| Transition {
+            from,
+            to,
+            direction: Direction::Cooling,
+            threshold_k,
+            latent_heat: -latent_heat,
+        };
+        let transitions = vec![
+            heating(t::ICE, t::WATER, T_FREEZE, L_FUSION),
+            cooling(t::WATER, t::ICE, T_FREEZE, L_FUSION),
+            heating(t::WATER, t::STEAM, T_BOIL, L_VAPORISATION),
+            cooling(t::STEAM, t::WATER, T_BOIL, L_VAPORISATION),
+            heating(t::STONE, t::LAVA, T_ROCK_MELT, L_ROCK_MELT),
+            cooling(t::LAVA, t::STONE, T_ROCK_MELT, L_ROCK_MELT),
+        ];
+
+        MaterialTable::new(materials).with_transitions(transitions)
+    }
+}
+
+/// Named [`MaterialId`]s for [`MaterialTable::terrarium`]. Call sites use
+/// `terrarium::WATER`, never `MaterialId::new(2)`.
+pub mod terrarium {
+    use super::MaterialId;
+
+    pub const AIR: MaterialId = MaterialId(0);
+    pub const STEAM: MaterialId = MaterialId(1);
+    pub const WATER: MaterialId = MaterialId(2);
+    pub const ICE: MaterialId = MaterialId(3);
+    pub const SAND: MaterialId = MaterialId(4);
+    pub const STONE: MaterialId = MaterialId(5);
+    pub const LAVA: MaterialId = MaterialId(6);
+    pub const JUNIPER: MaterialId = MaterialId(7);
+
+    /// Every id above, in table order — for tests and reporting that want
+    /// to iterate the whole table by name.
+    pub const ALL: [MaterialId; 8] = [AIR, STEAM, WATER, ICE, SAND, STONE, LAVA, JUNIPER];
+
+    /// Human-readable name for a terrarium id, for JSON reports.
+    pub fn name(id: MaterialId) -> &'static str {
+        match id.0 {
+            0 => "air",
+            1 => "steam",
+            2 => "water",
+            3 => "ice",
+            4 => "sand",
+            5 => "stone",
+            6 => "lava",
+            7 => "juniper",
+            _ => "unknown",
+        }
     }
 }
 
