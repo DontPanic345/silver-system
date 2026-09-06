@@ -231,3 +231,15 @@ A few honest bullets:
   doc comment) rather than a silent omission.
 - Didn't touch `terrarium/`, `stable-fluids/`, or `night-shift/` — all still
   shelved, referenced only for context.
+
+**2026-09-07 — The effort-level experiment, written up.** Follow-on from
+this file's own prompt-3 entry above: re-ran that same prompt five more
+times, once per `effort:` setting (`low`/`medium`/`high`/`xhigh`/`max`), each
+via a dedicated Sonnet subagent on its own branch off the shared baseline
+(`b6a30ea`), in series, left unmerged for review. Full background, the four
+original ambition-wording prompts and their results, a verified per-level
+token-usage table, every branch's own `JOURNAL.md` entry verbatim, and notes
+on each (including one live-observed false claim `cargo test`/`clippy`/e2e
+all missed) are in [`effort-level-experiment/README.md`](effort-level-experiment/README.md)
+rather than duplicated here. Branches: `experiment/effort-low`,
+`-medium`, `-high`, `-xhigh`, `-max`.
