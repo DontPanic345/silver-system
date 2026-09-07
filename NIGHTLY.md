@@ -85,6 +85,13 @@ and what you deliberately left undone. State plainly what you verified and
 what you did NOT — an honest "I did not check X" is worth more than a
 confident claim that has to be disproved later. Then commit your work.
 
+Keep the entry itself short — a few paragraphs, not a report. Numbers
+(token counts, diff-stats, timestamps) belong in the commit message, which
+nobody has to read every night, not in JOURNAL.md, which every night does.
+If something needs more space than that to explain, put the detail in its
+own file and point to it from one sentence here, the way the effort-level
+experiment's entry points at its own README instead of inlining it.
+
 The next session starts cold and has only what you wrote down.
 ```
 

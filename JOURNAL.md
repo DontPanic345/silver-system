@@ -11,136 +11,125 @@ commit messages.
 Entries before 2026-09-06 are a backfill from git history — see each entry's
 note on how confident it is. Entries from 2026-09-06 on are written live.
 
+**Entries older than the current and previous experiment are kept short,
+deliberately.** Every night this file is read cold, in full, with no cache
+carried over from the night before (see `NIGHTLY.md`) — so its size is a
+real, recurring cost, not just a readability concern. Full detail on
+anything summarized below is still in git history (`git log`, `git show
+<commit>`) and in the shelved experiments' own retrospectives, verbatim and
+un-lost; compressing the live copy here loses nothing, since nothing is
+actually being deleted from the repo, only shortened where it's read.
+
 ---
 
-**2026-08-28 — Jekyll blog scaffold.** The repo's actual first commit: a
-Jekyll "bug-fix blog" scaffold (`_config.yml`, `Gemfile`, `index.md`,
-`_posts/`), deployed to GitHub Pages the same day. *(Backfilled from git log
-alone — no record survives of why a blog was the starting point, or what it
-was even for. If you're reading this wondering the same thing: the reasoning
-is genuinely gone, not just buried.)*
+**2026-08-28 — Jekyll blog scaffold.** The repo's first commit, for reasons
+no longer recoverable (backfilled from git log alone; the blog itself was
+dropped 2026-09-02).
 
-**2026-08-31 — Pivot to a falling-sand simulation.** Three days later,
-`Add falling sand simulation` lands directly on top of the blog scaffold,
-followed same-day by a rework from single-material cells to mixture cells.
-*(Backfilled — no recorded reasoning for the pivot away from the blog
-either.)*
+**2026-08-31 — Falling-sand pivot, then terrarium.** Pivoted from the blog to
+a falling-sand sim, then the same day grew into a sealed-jar terrarium goal:
+*"A small system that can run itself indefinitely once sealed."* Shelved
+2026-09-02 as a successful test — jar, light cycle, and a closed, conserved
+water cycle all landed; plants (the real design risk) never started. Kept
+under `terrarium/`.
 
-**2026-08-31/09-01 — Terrarium.** Same day as the mixture-cell rework, a
-"terrarium roadmap handoff doc" (`terrarium/TERRARIUM_PLAN.md`) is added, and
-the sim grows a sealed glass jar, a day/night light cycle, and (next day) a
-closed water cycle. Stated goal: *"A small system that can run itself
-indefinitely once sealed — not just a prettier sandbox."* The blog scaffold
-is finally dropped once the terrarium is confirmed live on Pages. Shelved
-2026-09-02 as a successful test: Phase 0 (jar + light cycle) and Phase 1
-(closed water cycle, conserved by construction) both done; Phase 2 (plants —
-the real design risk) never started. Kept under `terrarium/`.
+**2026-09-02 — Stable-fluids.** A Stam-style stable-fluids prototype, test-
+first over seven planned rounds, chasing a physically-driven water cycle
+(boil → rise → condense → rain, conserved). Rounds 1–6 passed; round 7 hit a
+real structural wall — a checkerboard null mode in the colocated pressure
+projection needing a staggered/compact `project()` rewrite nobody returned
+to build. Retrospective, and the source most of night-shift's design came
+from: `stable-fluids/tdd-cycle-closeout.md`.
 
-**2026-09-02 — Stable-fluids.** Terrarium shelved same day a Stam-style
-stable-fluids prototype starts (grid solver, mouse-driven dye), then grows
-test-first over seven planned rounds. Stated goal: *"A closed water cycle
-driven by physics — heat the water and it boils, the vapour rises, cools,
-condenses, and rains back down. Mass and energy go round the loop and are
-conserved to a good approximation."* Rounds 1–6 of 7 pass (conservation-
-checked advection, temperature, buoyancy, phase change); round 7 stops on a
-structural limit — a checkerboard null mode in the colocated pressure
-projection that needed a staggered or compact `project()` rewrite nobody
-returned to build. Retrospective: `stable-fluids/tdd-cycle-closeout.md`,
-which is where most of night-shift's design came from.
+**2026-09-05 — night-shift, and its cleanup.** A self-planning
+`tranche → milestone → round → phase` cycle system, dictated in
+`dictation-dumps/agentic-development.md` in response to stable-fluids'
+retrospective, meant to run for four tranches with no human re-briefing.
+Tranche 0 and milestone M1.1 (the grid/material/scenario substrate this repo
+still builds on) closed out clean; shelved the same day it hit a real
+usage-budget wall one milestone into seven — the process itself was
+spending more of its own budget on ceremony than the work (**~12 lines of
+process log per line of shipped logic**). The goal wasn't wrong; the process
+built to chase it was. Cleaned the cycle system's own vocabulary out of the
+kept Rust code's comments same day, confirmed via `cargo test --lib` that
+this touched no logic. Full retrospective: `night-shift/CLOSEOUT.md`.
 
-**2026-09-05 — night-shift.** The stable-fluids halt becomes the
-retrospective that shapes the next attempt — concretely: two days after that
-halt, the user wrote up pointed questions on how the TDD cycle actually went
-(`dictation-dumps/response-to-tdd-cycle.md`, 2026-09-03 — "maybe Red writes
-skeleton code too," "who is top dog and can make the call," "would a blank
-agent per AC have just been better?"), then dictated a full answer
-(`dictation-dumps/agentic-development.md`, 2026-09-05) that became a
-`tranche → milestone → round → phase` self-planning cycle system, in Rust
-this time, meant to run indefinitely across four tranches without a human
-re-briefing it each step.
-Stated goal: *"A believable small world inside a large universe. A terrarium
-people can see on their screens and interact with"* — see `NORTH_STARS.md`
-#3, which this run restates sharply enough to be its own entry. Tranche 0
-(toolchain) and milestone M1.1 (grid/material/scenario substrate) both close
-out clean. Shelved same day the session hit a real usage-budget wall one
-milestone into a seven-milestone plan — the process itself was found to be
-spending a large share of its own budget on ceremony rather than the work
-(~12 lines of process log per line of shipped logic, ~1.7 comment lines per
-line of actual code). The goal wasn't wrong, and wasn't retired — the process
-built to chase it was. Full retrospective: `night-shift/CLOSEOUT.md`.
+**2026-09-06 — This journal, and its supporting docs.** Started this file
+because the arc above was reconstructable only from raw git log, not written
+down anywhere. Split what had been one conflated `NORTH_STARS.md` three
+ways: aspiration stays in `NORTH_STARS.md`, concrete history moves here, and
+a new `PRINCIPLES.md` holds the aphorisms. Drafted (but didn't yet run)
+`ONE_SHOT_PROMPT.md` with its own `session-metrics.py`-based instrumentation
+— since superseded by `NIGHTLY.md`. Also archived two real voice dictations
+verbatim under `dictation-dumps/` after finding a NORTH_STARS.md entry had
+been reconstructed secondhand rather than sourced from them directly —
+nobody needs to read the dumps routinely; they exist for provenance.
 
-**2026-09-05 — Cleanup pass.** Stripped the shelved cycle-system's own
-vocabulary (milestone/round numbers, `cycle-log` paths, Green/Refactor
-phase language) out of the kept Rust code's comments, since it was about to
-outlive the process that produced it and would otherwise read as still-live
-process rather than history. Confirmed via `cargo test --lib` that this
-touched no logic. Rust substrate (`src/`, `www/`, `tests/`, `scripts/`) kept
-as starting material for whatever runs next.
-
-**2026-09-06 — This file.** Realized mid-conversation that the arc above
-(blog → falling-sand → terrarium → vision doc → stable-fluids → night-shift)
-was reconstructable only by reading raw git log, not written down anywhere
-as a narrative — and that the very first pivot's reasoning had already been
-lost for good. Started this journal so the next pivot doesn't disappear the
-same way. Drafted `ONE_SHOT_PROMPT.md` for the next experiment (deliberately
-with no stated goal handed to it up front, kept the Rust substrate as
-starting material) — not yet run.
-
-**2026-09-06 — Metrics for the one-shot prompt.** stable-fluids had a
-`## Cycle debug` instruction appended to every phase prompt (see
-`stable-fluids/WATER_SIM_AC.md`) that worked well: a handful of blunt
-bullets, collected at close-out into one improvement summary. Under
-night-shift it drifted into an unfiltered, everything-that-happened log
-instead. Rebuilt it in two parts for `ONE_SHOT_PROMPT.md`: a
-`## Session metrics` section pulled verbatim from the harness's own
-per-session `cost-state` tracking via the new `scripts/session-metrics.py`
-(wall-clock time, model/tool time, token usage, cost, lines changed — no
-self-reporting, so it's actually comparable across experiments), plus a
-`## Debug notes` section that reinstates stable-fluids' original bounded,
-blunt-bullets discipline for whatever isn't quantifiable.
-
-**2026-09-06 — Split NORTH_STARS.md three ways.** Realized `NORTH_STARS.md`
-had been conflating three different things: the vague, aspirational
-statements the name actually implies (the GPU vision doc, night-shift's
-two-line goal); the concrete, per-experiment stated-goal-and-why-it-ended
-record that's this file's job; and aphorisms (night-shift's own
-`## Principles` section, buried in a shelved `CLAUDE.md` and a shelved skill
-file) that are neither aspiration nor history. Pulled the per-experiment
-material into the entries above, rewrote `NORTH_STARS.md` down to just the
-three aspirational fragments (each now with a pointer to its original
-context — commit and file, or an honest note where no file survives), and
-started `PRINCIPLES.md` to hold the aphorisms on their own. `README.md` and
-`CLAUDE.md` updated to point at the right file for each kind of question.
-
-**2026-09-06 — Archived the real dictation dumps.** The ink was barely dry
-on the above when it turned out entry #3 was reconstructed from a downstream
-copy (`night-shift/CLAUDE.md`) of a real source the user still had:
-`Agentic Development.md`, an ~11KB voice dictation, plus
-`response to tdd cycle.md`, the reflection two days earlier that shaped it.
-Archived both verbatim under `dictation-dumps/` (typos and all) rather than
-re-paraphrasing secondhand — corrected `NORTH_STARS.md` and `PRINCIPLES.md`'s
-attributions to cite them directly, including catching that the
-determinism-as-"architecture-contingent" walk-back was voiced *in this same
-dump*, not between two unrelated documents as the previous draft implied.
-Per the user: nobody should need to read these dumps routinely — they're
-archived for provenance, with a genuine open task (noted in
-`dictation-dumps/README.md`) to revisit all such material later for ideas
-that never made it into a distillation the first time.
-
-**2026-09-06 — Gnomes.** The user surfaced the actual capstone: a full game
-concept, dictated 2026-09-05, that every experiment so far has actually been
-building substrate for without anyone (including this session) knowing it.
-Not "an emergent physics sim in the spirit of ONI" in the abstract — a
-specific colony sim reskinning ONI's dupes as gnomes whose magic (bounded by
-a "Gin" mana resource, regenerated by brewing/drinking) is the one sanctioned
-exception to an otherwise strictly-conserved simulation, explicitly designed
-to fix ONI's own named failures (no conservation, gravity-defying pipes,
-gimmick gas behaviour, colony-failure-by-default). Directly explains a
-standing mystery: "this is why I wanted such an overbuilt terrarium" — the
-closed water cycle work traces to this, not abstract engineering taste.
+**2026-09-06 — Gnomes.** The user surfaced the actual capstone every prior
+experiment had unknowingly been building substrate for: not "an emergent
+physics sim in the spirit of ONI" in the abstract, but a specific colony sim
+reskinning ONI's dupes as gnomes, whose magic (bounded by a "Gin" mana
+resource) is the one sanctioned exception to an otherwise strictly-conserved
+world — explicitly designed to fix ONI's own named failures (no
+conservation, gravity-defying pipes, gimmick gas, colony-failure-by-default).
 Archived verbatim as `dictation-dumps/gnomes.md`, distilled in full as
-`NORTH_STARS.md` #4. Not yet reflected in `CLAUDE.md`/`README.md`'s top-level
-framing — asked the user whether it should be.
+`NORTH_STARS.md` #4.
+
+**2026-09-07 — Gnomes, built.** *(Restored 2026-09-07: this entry was lost
+during manual conflict resolution when `experiment/effort-opus-low` merged
+into `main` — both branches had appended at the same point in the file, and
+only one side survived the resolution. Recovered verbatim from the branch;
+see `effort-level-experiment/README.md`'s `opus-low` section for the
+independent verification this run got before merging.)* The first
+experiment to aim at `NORTH_STARS.md` #4 directly instead of building
+substrate underneath it. Stated goal: *build as much of the north stars as
+one session can confidently carry*, with no process cycle at all — a
+deliberate contrast with `night-shift`, whose closeout blamed ceremony
+rather than the goal. What landed, on top of the kept Rust substrate:
+
+- **A real simulation.** `src/world.rs` replaces the material-only `Grid`
+  with cells carrying mass, temperature and latent-change progress;
+  `src/physics.rs` adds density-ordered movement, symmetric heat
+  conduction, and data-driven phase change. Mass and energy are conserved
+  *by construction* — movement is a swap, conduction is a clamped pairwise
+  transfer, phase change is an algebraic rewrite — and asserted to `1e-6`
+  relative over 600–4000-step runs, not merely hoped for.
+- **The Gnomes game layer** (`src/gnome.rs`): Gin as a bounded mana
+  resource, magic as the one accounted-for hole in the world's books,
+  the ethereal layer instead of death, gnome-to-gnome rescue, juniper
+  foraging, and ethereal pipes implemented as a two-cell swap so that even
+  the sanctioned shortcut cannot create matter.
+- **The terrarium** (`src/terrarium.rs`), a running water cycle, plus a
+  browser view (`www/terrarium.html`) and a headless JSON runner
+  (`cargo run --bin terrarium`) that report the same numbers.
+
+Four findings worth keeping, each recorded in the code where it bites:
+
+1. *A sealed jar dies.* The first terrarium was fully closed and reached
+   thermal equilibrium in a couple of minutes of simulated time — correct
+   physics, no cycle. Fixed by giving it a declared hot vent and cold lid
+   whose flux goes through the same ledger gnome magic uses, so the jar's
+   openness is a number rather than a fudge.
+2. *Latent heat cannot be a threshold flip.* Melting has to accumulate
+   energy at the transition point, or a cell must overshoot melting point
+   by 160 K to pay for its own latent heat, and then oscillates.
+3. *Falling and spreading must be separate passes.* Combined, a liquid
+   slides into the hole the cell above it was about to fall through, and a
+   shallow pool never fills its bottom row.
+4. *Communicating vessels need a body-level rule.* Cell-local gravity
+   cannot climb the far arm of a U-bend. `stable-fluids` split on the
+   pressure solve; this sidesteps it by transferring a surface cell from
+   the tallest column of a connected cavity to a lower one, which is the
+   only consequence of the pressure field that this scenario needs.
+
+Not built: brewing/distilling (Gin comes from berries only), the
+book-copying knowledge economy, the Gnome Grandmother, buildings, and
+farming. The physics still has no pressure or gas diffusion, and gases do
+not spread laterally at all (deliberately — see `physics::apply_gravity`).
+Also not yet reconciled: `src/grid.rs`'s material-only `Grid` (below) and
+`src/world.rs`'s mass/temperature `World` are now both live, solving
+overlapping problems — an open duplication, not a decision that both should
+stay.
 
 **2026-09-05 — Real gravity/density physics on the kept Rust substrate.**
 Started the next experiment directly on `src/`'s existing grid/material/
@@ -202,35 +191,20 @@ its own tracked quantity (the current liquid-levelling rule is a cellular
 approximation, not a real pressure solve), and everything past physics.
 `CLAUDE.md`/`README.md` updated to describe this as the current experiment.
 
-## Session metrics (967f66e9-d433-446a-81ac-0f0adade057c.jsonl)
+*(Raw session metrics for this run — wall-clock, token usage by model,
+diff-stat — trimmed from the live copy of this entry 2026-09-07 to keep the
+file lean for nightly reads; recoverable via `git show
+d6d2139:JOURNAL.md` or the original transcript
+`967f66e9-d433-446a-81ac-0f0adade057c.jsonl` if ever needed.)*
 
-- Wall-clock span (first→last transcript event): 2026-09-05T05:29:54.896Z → 2026-09-05T08:58:50.157Z
-- No `cost-state` event found in this transcript; falling back to totals derived directly from the transcript's own assistant-message `usage` blocks (see `scripts/session-metrics.py`'s module doc comment for why, and what this fallback can't reconstruct — duration/model/tool-time split and lines added/removed aren't available this way).
-- Token usage by model (derived, deduplicated by message id, cost not computed): `claude-sonnet-5`: 210 in, 79,847 out, 39,413 thinking, 14,258,313 cache-read, 314,587 cache-created.
-- `git diff --stat` against the branch point: 8 files changed, 809 insertions(+), 90 deletions(-), plus 2 new untracked files (`tests/e2e/physics_demo.test.mjs`, `www/physics.html`).
-
-A few honest bullets:
-
-- The physics rule's first draft compiled and passed every test I'd written
-  for it — including the water-levelling one, which failed exactly the way
-  the debug trace predicted (rigid oscillation) once I actually ran it and
-  looked at the printed grid state frame by frame, not just the pass/fail
-  line. Worth remembering: a plausible-sounding cellular rule can pass
-  "does it compile and do something" while being wrong in a way only a
-  concrete trace reveals.
-- Chose to build directly on the existing (if idle) Rust substrate rather
-  than start a new experiment from zero, since `CLAUDE.md` explicitly left
-  it "kept as starting material" and the grid/material/scenario shape was
-  already exactly what real physics needed — this felt like continuing
-  night-shift's actual unfinished work (M1.2 onward) more than starting a
-  fresh, differently-named experiment, and I didn't rename it as one.
-- Deliberately scoped to physics only (gravity + density), matching
-  `NORTH_STARS.md`'s own physics→chemistry→biology→game-layer ordering,
-  rather than reaching for temperature/pressure/reactions in the same
-  session — gas movement in particular is a visible, named gap (`Phase::Gas`
-  doc comment) rather than a silent omission.
-- Didn't touch `terrarium/`, `stable-fluids/`, or `night-shift/` — all still
-  shelved, referenced only for context.
+One finding worth keeping past the trim: the first draft of the physics rule
+compiled and passed every test written for it — including the water-
+levelling one, which only failed the way a debug trace predicted (rigid
+oscillation) once actually run and watched frame by frame, not just
+pass/fail. A plausible-sounding cellular rule can pass "does it compile and
+do something" while being wrong in a way only a concrete trace reveals —
+the same lesson `xhigh` re-taught, more expensively, in the effort-level
+experiment below.
 
 **2026-09-07 — The effort-level experiment, written up.** Follow-on from
 this file's own prompt-3 entry above: re-ran that same prompt five more
@@ -246,3 +220,15 @@ rather than duplicated here. Branches: `experiment/effort-low`,
 dial (`experiment/effort-opus-low`, Opus 5 at `effort: low`) — the cheapest
 run of the six, and the only one to solve the U-tube case or attempt the
 game layer at all; folded into the same write-up.
+
+
+
+**2026-09-07 — Motivation for nightly-self directed.**
+_I wanted to let the agent pick its own goals each turn. And aim
+for what it could comfortably do, what felt natural for that model+effort.
+They have been tuned and optimased better than my goal setting could ever help.
+Each Model+effort has been optimised for its own token usege for the kinds of tasks 
+that is targeted to do, and my assumption is that each will be able to do it's respecitve
+size of work, more effecently than any other size. I want to min/max my weekly session
+usage_
+
