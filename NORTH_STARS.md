@@ -6,20 +6,35 @@ Each one below captures a sliver of the same underlying motivation, in
 whatever words it was stated in at the time. None of these is a tactical
 goal, and none of them "completes" or gets abandoned the way an experiment
 does — see `JOURNAL.md` for the dated history of what got tried, and
-`PRINCIPLES.md` for the aphorisms distilled along the way. A north star can
-be narrowed, restated more sharply, or have a piece of it explicitly walked
-back (noted inline below when that happened) — but it isn't retired just
-because the experiment that was chasing it stopped.
+`PRINCIPLES.md` for the aphorisms distilled along the way. A north star
+isn't retired just because the experiment that was chasing it stopped.
 
-Read this before writing a new one. If what you're about to write already
-captures the same sliver as something below, restate it there instead of
-starting a new entry.
+## This file is written by the human, not by agents
+
+**If you are an agent working in this repo, this file is read-only to you.**
+Read it, build toward it, disagree with it in your `JOURNAL.md` entry if you
+think it's wrong — but do not edit it and do not add to it. That includes
+updating a `**Status:**` line to describe what you just built. Say what you
+built in `JOURNAL.md`; that is what `JOURNAL.md` is for.
+
+The reason is provenance, and it isn't hypothetical. This project's stated
+vision has already passed through several hands: entry #2 below was
+reconstructed by another model from a lost transcript, #3 and #4 are
+agent-written distillations of voice dictations, and an agent has already
+edited a status line here to describe its own work. Every one of those steps
+was individually reasonable. Together they mean the "vision" drifts toward
+being an artifact of models interpreting each other rather than a statement
+anybody actually made — and an agent reading a distillation of a distillation
+has no way to tell how far from the source it has travelled. So the chain
+stops here. Narrowing a north star, restating it more sharply, or walking
+part of it back are the human's to do.
 
 Entries here are the distillation, not the source. Raw material (voice
 dictations, reflections) is archived verbatim under `dictation-dumps/` —
 nobody needs to read those to work in this repo; they exist for provenance
 and for the open task noted in `dictation-dumps/README.md` (revisiting all
-of it for ideas that never made it into a distillation the first time).
+of it for ideas that never made it into a distillation the first time). Where
+a distillation here and the dictation behind it disagree, the dictation wins.
 
 ---
 

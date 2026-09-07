@@ -21,6 +21,26 @@ a repeat.
 - `terrarium/`, `stable-fluids/`, `night-shift/` — shelved experiments, kept for
   reference. Do not extend them.
 
+## Working conventions
+
+- **`NORTH_STARS.md` is read-only to agents.** Read it, build toward it, and
+  argue with it in your `JOURNAL.md` entry if you think it's wrong — but don't
+  edit it, and that includes its `**Status:**` lines. It states what the human
+  wants; `JOURNAL.md` states what happened. See that file's own preamble for
+  why the distinction is enforced.
+- **Extend, don't restart.** This project's instinct has historically been to
+  reset: four experiments in a row were shelved rather than built on, and only
+  the bare Rust scaffold has ever survived a generation. Unless you've been
+  explicitly told you are starting a new experiment, build on what is already
+  in `src/`, keep it working, and leave it in a state the next session can
+  continue from. See [`NIGHTLY.md`](NIGHTLY.md) for the standing brief that
+  assumes this.
+- **Passing tests is not the same as working.** A previous run here shipped a
+  water-levelling fix with a green suite, clean clippy, and three passing e2e
+  tests — and the water still visibly oscillated when a human looked at it.
+  Before claiming something works, ask what a human would see and go check
+  that. In your journal entry, state what you verified *and what you did not*.
+
 ## Current experiment
 
 **Gravity/density falling-sand physics on the Rust substrate**, started
