@@ -147,6 +147,7 @@ impl Material {
             latent_energy: 0.0,
             mobility: match phase {
                 Phase::Solid => Mobility::Static,
+                Phase::Granular => Mobility::Granular,
                 Phase::Liquid | Phase::Gas => Mobility::Flowing,
             },
             breathable: false,
