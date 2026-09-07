@@ -142,7 +142,8 @@ pub fn render_world_to_rgb8(
         for i in 0..world.width() {
             let index = GridIndex::new(i as i32, j as i32);
             let cell = world.cell(index);
-            let base = world.materials().get(cell.material).colour;
+            let material = world.materials().get(cell.material);
+            let base = shade_by_pressure(material, cell.mass);
             let colour = tint_by_temperature(base, cell.temperature);
             for dy in 0..cell_px {
                 for dx in 0..cell_px {
@@ -181,6 +182,33 @@ pub fn render_world_to_rgb8(
     }
 
     buf
+}
+
+/// Brightens a gas cell in proportion to how much gas is packed into it.
+///
+/// Gases are the only cells whose mass is genuinely variable (see
+/// `src/gas.rs`), and without this the most interesting thing in a gas
+/// scene — where the pressure is — is invisible: thin air and a
+/// ten-atmosphere bottle paint the identical dark blue. The scale is
+/// relative to the material's own density, i.e. to one atmosphere, so it is
+/// data-driven and says nothing about which gas it is. Non-gases are
+/// returned untouched, since for them mass and density are the same number
+/// by construction and the shading would always be a no-op anyway.
+fn shade_by_pressure(
+    material: &crate::material::Material,
+    mass: crate::math::Scalar,
+) -> (u8, u8, u8) {
+    if material.phase != crate::material::Phase::Gas || material.density <= 0.0 {
+        return material.colour;
+    }
+    let atmospheres = (mass / material.density).clamp(0.0, 6.0);
+    let lift = ((atmospheres - 1.0) * 22.0).clamp(-14.0, 110.0);
+    let add = |c: u8| (c as f32 + lift).clamp(0.0, 255.0) as u8;
+    (
+        add(material.colour.0),
+        add(material.colour.1),
+        add(material.colour.2),
+    )
 }
 
 /// Shifts a material colour warm or cool according to `temperature_k`.

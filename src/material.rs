@@ -41,13 +41,15 @@ pub enum Phase {
     /// sideways (once it cannot fall straight down or diagonally) to seek
     /// its own level — see `src/grid.rs`.
     Liquid,
-    /// Currently treated as immobile background by `src/grid.rs`'s physics
-    /// step (never a mover), though it can still be *displaced upward* when
-    /// a denser `Granular`/`Liquid` cell swaps into its cell. Real gas
-    /// buoyancy/diffusion is deliberately not implemented yet — see
-    /// `NORTH_STARS.md`'s physics-then-chemistry-then-biology ordering;
-    /// this is a physics-phase gap to close later, not a decision that gas
-    /// doesn't move.
+    /// A compressible gas. Unlike every other phase, a `Gas` cell's
+    /// [`crate::world::Cell::mass`] is genuinely variable: it is the amount
+    /// of gas packed into that cell, and with [`Material::gas_constant`] it
+    /// gives the cell a real pressure (`P = m·R·T`). `src/gas.rs` moves gas
+    /// down pressure gradients; `src/physics.rs` sinks and floats it by its
+    /// actual mass, so a compressed pocket is heavier than a thin one.
+    ///
+    /// (`src/grid.rs`'s older material-only physics still treats gas as
+    /// immobile background — that grid has nowhere to put a mass.)
     Gas,
 }
 
@@ -122,6 +124,21 @@ pub struct Material {
     /// by the gnome layer, but it lives here for the same reason every
     /// other property does: no per-material `if` chains elsewhere.
     pub breathable: bool,
+    /// Specific gas constant `R` in J/(g·K), or `0.0` for anything that
+    /// isn't a gas.
+    ///
+    /// This is the one number that turns [`Phase::Gas`] from "a light thing
+    /// that gets displaced" into a substance with a **pressure**: a gas cell
+    /// holding `m` grams at `T` kelvin is at `P = m·R·T` (per cell volume,
+    /// which is 1 in this simulation's units). `src/gas.rs` moves mass down
+    /// the gradient of that quantity, which is what makes a gas fill the
+    /// space it is given instead of sitting where it was painted.
+    ///
+    /// Real values: air 0.287, steam 0.4615, CO₂ 0.1889 — a lighter
+    /// molecule has a bigger `R`, which is why, at equal pressure and
+    /// temperature, CO₂ ends up the densest gas in the jar and settles
+    /// under the others without any rule saying so.
+    pub gas_constant: Scalar,
 }
 
 impl Material {
@@ -151,6 +168,7 @@ impl Material {
                 Phase::Liquid | Phase::Gas => Mobility::Flowing,
             },
             breathable: false,
+            gas_constant: 0.0,
         }
     }
 
@@ -170,6 +188,19 @@ impl Material {
     pub fn breathable(mut self) -> Self {
         self.breathable = true;
         self
+    }
+
+    /// Sets [`Material::gas_constant`], builder-style.
+    pub fn with_gas_constant(mut self, gas_constant: Scalar) -> Self {
+        self.gas_constant = gas_constant;
+        self
+    }
+
+    /// This material's pressure when `mass` grams of it sit in one cell at
+    /// `temperature` — the ideal gas law, `P = m·R·T`. Zero for anything
+    /// with no [`Material::gas_constant`], which is every non-gas.
+    pub fn pressure(&self, mass: Scalar, temperature: Scalar) -> Scalar {
+        self.gas_constant * mass * temperature
     }
 
     /// Energy per unit mass held by this material at `temperature`:
@@ -423,11 +454,49 @@ impl MaterialTable {
         const T_BOIL: Scalar = 373.15;
         const T_ROCK_MELT: Scalar = 1500.0;
 
-        let mut materials = vec![Material::new(0.0, 0.0, 0.0, 0.0, Phase::Gas, (0, 0, 0)); 8];
+        // The gases' densities are *derived*, not chosen: each is the mass
+        // of that gas which sits at one atmosphere at room temperature,
+        // `ρ = P₀/(R·T₀)`. Picking them by hand instead would mean a world
+        // painted with steam in it starts out with a pressure step across
+        // every steam/air boundary, and `gas::diffuse` would immediately go
+        // to work levelling a discontinuity that was only ever a typo.
+        const T0: Scalar = 291.0;
+        const R_AIR: Scalar = 0.287;
+        const R_STEAM: Scalar = 0.4615;
+        const R_CO2: Scalar = 0.1889;
+        const RHO_AIR: Scalar = 0.0012;
+        const P0: Scalar = RHO_AIR * R_AIR * T0;
+
+        let mut materials = vec![Material::new(0.0, 0.0, 0.0, 0.0, Phase::Gas, (0, 0, 0)); 9];
         materials[t::AIR.0 as usize] =
-            Material::new(0.0012, 0.02, 1.005, 0.05, Phase::Gas, (16, 18, 28)).breathable();
-        materials[t::STEAM.0 as usize] =
-            Material::new(0.0006, 0.01, 2.08, 0.04, Phase::Gas, (170, 180, 200)).breathable();
+            Material::new(RHO_AIR, 0.02, 1.005, 0.05, Phase::Gas, (16, 18, 28))
+                .breathable()
+                .with_gas_constant(R_AIR);
+        materials[t::STEAM.0 as usize] = Material::new(
+            P0 / (R_STEAM * T0),
+            0.01,
+            2.08,
+            0.04,
+            Phase::Gas,
+            (170, 180, 200),
+        )
+        .breathable()
+        .with_gas_constant(R_STEAM);
+        // Carbon dioxide: heavier than air at the same pressure, and not
+        // breathable. `NORTH_STARS.md` #4 names ONI's gas handling as one of
+        // the things this project exists to fix — "CO2 doesn't actually
+        // settle the way ONI's simplified layers show it". Here it settles
+        // because it is genuinely heavier, by the same one rule that sinks
+        // sand through air.
+        materials[t::CO2.0 as usize] = Material::new(
+            P0 / (R_CO2 * T0),
+            0.03,
+            0.844,
+            0.04,
+            Phase::Gas,
+            (92, 74, 108),
+        )
+        .with_gas_constant(R_CO2);
         materials[t::WATER.0 as usize] =
             Material::new(1.0, 0.5, 4.186, 0.6, Phase::Liquid, (40, 90, 200));
         materials[t::ICE.0 as usize] =
@@ -482,10 +551,11 @@ pub mod terrarium {
     pub const STONE: MaterialId = MaterialId(5);
     pub const LAVA: MaterialId = MaterialId(6);
     pub const JUNIPER: MaterialId = MaterialId(7);
+    pub const CO2: MaterialId = MaterialId(8);
 
     /// Every id above, in table order — for tests and reporting that want
     /// to iterate the whole table by name.
-    pub const ALL: [MaterialId; 8] = [AIR, STEAM, WATER, ICE, SAND, STONE, LAVA, JUNIPER];
+    pub const ALL: [MaterialId; 9] = [AIR, STEAM, WATER, ICE, SAND, STONE, LAVA, JUNIPER, CO2];
 
     /// Human-readable name for a terrarium id, for JSON reports.
     pub fn name(id: MaterialId) -> &'static str {
@@ -498,6 +568,7 @@ pub mod terrarium {
             5 => "stone",
             6 => "lava",
             7 => "juniper",
+            8 => "co2",
             _ => "unknown",
         }
     }

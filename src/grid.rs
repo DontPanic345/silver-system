@@ -310,7 +310,15 @@ impl Grid {
                 if !matches!(mat.phase, Phase::Granular | Phase::Liquid) {
                     continue;
                 }
-                self.try_move_cell(materials, &mut moved, i, j, mat.phase, mat.density, left_first);
+                self.try_move_cell(
+                    materials,
+                    &mut moved,
+                    i,
+                    j,
+                    mat.phase,
+                    mat.density,
+                    left_first,
+                );
             }
         }
 
@@ -1085,4 +1093,3 @@ mod tests {
         );
     }
 }
-

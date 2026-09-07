@@ -282,11 +282,17 @@ mod tests {
             for i in 0..24 {
                 if grid.get(GridIndex::new(i, j)) == sand {
                     sand_cells += 1;
-                    assert!(j >= 10, "sand should start suspended above the pool, not in it");
+                    assert!(
+                        j >= 10,
+                        "sand should start suspended above the pool, not in it"
+                    );
                 }
             }
         }
-        assert_eq!(sand_cells, 5, "physics_demo should place exactly 5 sand grains");
+        assert_eq!(
+            sand_cells, 5,
+            "physics_demo should place exactly 5 sand grains"
+        );
     }
 
     /// Scenario: stepping `physics_demo()` forward under real gravity/

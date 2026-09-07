@@ -51,6 +51,7 @@ use std::collections::HashMap;
 pub fn step(world: &mut World, dt: Scalar) {
     apply_gravity(world);
     equalise_liquid_levels(world);
+    crate::gas::step(world, dt);
     conduct_heat(world, dt);
     apply_phase_changes(world);
     world.step_count = world.step_count.wrapping_add(1);
@@ -94,14 +95,23 @@ pub fn apply_gravity(world: &mut World) {
                 if material.mobility == Mobility::Static {
                     continue;
                 }
-                // Only liquids spread sideways. Letting gases do it too is
-                // tempting (they do diffuse, after all) but it makes every
-                // open space churn permanently: an air cell and its
-                // neighbour trade places forever because neither is
-                // heavier, and the whole world shimmers. Gases still rise
-                // and sink by density, which is the part that matters.
-                let spreads = material.mobility == Mobility::Flowing
-                    && material.phase == crate::material::Phase::Liquid;
+                // Anything that flows spreads sideways — liquids, and (as
+                // of the gas work) gases too.
+                //
+                // Gases were excluded here for a long time, for a good
+                // reason that turned out to be the wrong conclusion:
+                // letting every gas cell trade places with its neighbour
+                // makes an open room shimmer forever, because neither cell
+                // is heavier than the other. What actually prevents that is
+                // `pick_target`'s strict density margin, which was already
+                // there: air never spreads into air, because air is not
+                // lighter than air. What the exclusion cost was the thing a
+                // heavy gas most obviously does — a CO2 layer that could
+                // only fall, never spread, piled up into a dune like sand
+                // instead of levelling out like a gas, which is precisely
+                // the "gas doesn't behave like gas" complaint this project
+                // exists to fix.
+                let spreads = material.mobility == Mobility::Flowing;
 
                 let target = match pass {
                     Pass::Sink => {
@@ -174,7 +184,7 @@ enum Pass {
 /// bounds, not already moved this step, mobile enough to be displaced, and
 /// genuinely lighter.
 fn pick_target(world: &World, p: usize, candidates: &[GridIndex], moved: &[bool]) -> Option<usize> {
-    let here_density = world.material_of(p).density;
+    let here = world.cell_at(p);
     for &c in candidates {
         if !world.in_bounds(c) {
             continue;
@@ -183,13 +193,37 @@ fn pick_target(world: &World, p: usize, candidates: &[GridIndex], moved: &[bool]
         if moved[q] {
             continue;
         }
-        let there = world.material_of(q);
-        if there.mobility == Mobility::Static {
+        if world.material_of(q).mobility == Mobility::Static {
             continue;
         }
+        let there = world.cell_at(q);
+        // Which weight to compare — and this is a real modelling decision,
+        // not plumbing.
+        //
+        // Between two cells of the *same* material, the honest comparison is
+        // their actual masses: a cell packed with twice the gas of the one
+        // below it should sink into it, and that is how a pressurised pocket
+        // finds its way down.
+        //
+        // Between *different* materials it has to be the materials' nominal
+        // densities instead, and the reason is a limit of the grid, stated
+        // rather than hidden. A cell of water that boils keeps its gram of
+        // mass, because mass is conserved — but a gram of steam is 1600
+        // cells' worth of gas crammed into one cell. Compare that by mass
+        // and the steam is heavier than the water it came from and sinks,
+        // which is nonsense. Real gas would expand into its neighbours; this
+        // grid cannot let it, because a cell holds exactly one material. The
+        // nominal density is the mass that species *would* have at the
+        // pressure everything else is at, so it is the right stand-in for
+        // "which of these two floats", and it is still pure data.
+        let (a, b) = if here.material == there.material {
+            (here.mass, there.mass)
+        } else {
+            (world.material_of(p).density, world.material_of(q).density)
+        };
         // A strict margin, not `<`: without it two materials of equal
         // density swap back and forth forever.
-        if there.density < here_density * 0.999 {
+        if b < a * 0.999 {
             return Some(q);
         }
     }

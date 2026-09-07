@@ -188,3 +188,66 @@ that is targeted to do, and my assumption is that each will be able to do it's r
 size of work, more effecently than any other size. I want to min/max my weekly session
 usage_
 
+
+**Night 2/7 — 2026-09-07 — Opus 5/low — Gas gets a pressure.** Chose the gas
+model, out of a shortlist of brewing/distilling (Gin from a still rather than
+from berries), the book-copying knowledge economy, and pressure. Gas won
+because `NORTH_STARS.md` #4 names ONI's gas handling as one of the specific
+things this project exists to fix — "gas behaves nothing like gas... CO2
+doesn't actually settle" — and because the physics→chemistry→biology ordering
+puts pressure before any of the game-layer pillars. It was also the biggest
+lie in the code: a gas cell was a light solid, and opening a valve on a
+pressurised tank did nothing, because nothing in the world knew what a
+pressure was.
+
+A gas cell's mass is now genuinely variable, and with a new data field
+(`Material::gas_constant`) that gives it a real pressure, `P = m·R·T`.
+`src/gas.rs` adds two rules on top of it, both conserving by construction:
+mass transfer between cells of the *same* gas down the pressure gradient
+(clamped to the exact levelling transfer, so no timestep overshoots), and a
+swap that carries a whole parcel toward lower pressure when two neighbouring
+cells hold different gases and so cannot merge. CO₂ is now in the material
+table, and `src/chamber.rs` / `www/gases.html` is the demonstration: a
+ten-atmosphere bottle behind one hole, and a slab of CO₂ released at the
+ceiling that falls, spreads and settles into a flat layer on the floor.
+
+Four things worth keeping:
+
+1. *Conservation forbids the obvious buoyancy rule.* Comparing neighbouring
+   cells by actual mass is right within one material and wrong across two: a
+   gram of water that boils is still a gram, but a gram of steam is 1600
+   cells' worth of gas in one cell, so by mass it is heavier than the water
+   it came from and sinks. Real gas expands; a one-material-per-cell grid
+   cannot let it. Nominal density is the honest stand-in across species.
+2. *The old "gases must not spread sideways or the world shimmers" rule was
+   half right and cost more than it saved.* What prevents shimmer is the
+   strict density margin already in `pick_target` — air never spreads into
+   air because air is not lighter than air. What the exclusion cost was a CO₂
+   layer that could only fall, so it piled into a dune like sand. Removing it
+   gives a flat, still layer, and settled-state churn measures at 8 cell
+   changes per 50 steps with a vent and a scrubber both running.
+3. *Pressure with no gravity term fires heavy gas at the ceiling.* Advection
+   down a gradient that cannot tell up from down left speckles of CO₂ hanging
+   in mid-air for buoyancy to drag back. Refusing the upward move when the
+   mover is denser is the cheap stand-in for the hydrostatic term.
+4. *A pretty renderer can make a browser test pass for the wrong reason.*
+   Gas cells are now brightened by pressure, so as the bottle vents, every
+   band of the canvas gets brighter — and the e2e check "the ceiling cleared"
+   passed on brightness alone while measuring nothing. It now measures
+   red-minus-green, which tracks how much CO₂ is in a band and ignores how
+   compressed it is.
+
+Verified: 118 lib tests and all five e2e checks green, clippy clean;
+conservation residuals asserted relative (1e-6) rather than absolute, because
+`Scalar` is `f32` and a cell of air masses a thousandth of a gram. The new
+e2e reads real canvas pixels after six seconds of real time and sees the CO₂
+layer arrive on the floor (mean height 17.97 → 1.75 rows, air pressure spread
+0.90 → 0.037). I checked the terrarium for regressions by ASCII map, material
+flip counts and pressure ranges against the same run with the gas step
+disabled — behaviour matches — but I did **not** open `terrarium.html` in a
+browser and look at it, and I did not look at `gases.html` by eye either; the
+pixel evidence for it is the e2e's band measurements only. Not done: gas
+interdiffusion (two gases cannot share a cell, so partial pressures do not
+exist and a dilute heavy gas drifts along the floor as separate parcels
+rather than mixing), any gravity term in the pressure field, gnome breathing
+or CO₂ production, and brewing.

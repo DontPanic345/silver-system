@@ -76,8 +76,14 @@ pub mod render;
 /// The simulated world — cells with mass, temperature and phase state.
 pub mod world;
 
+/// Compressible gas: pressure, diffusion and bulk flow.
+pub mod gas;
+
 /// The gnomes: the game layer, Gin economy, and ethereal mechanics.
 pub mod gnome;
+
+/// The gas-pressure demonstration chamber.
+pub mod chamber;
 
 /// The flagship sealed-jar scenario.
 pub mod terrarium;
@@ -330,7 +336,12 @@ pub fn step_and_paint_physics_demo(canvas_id: &str, cell_px: u32, frame_duration
         let (grid, timestep, materials, tick) = state.get_or_insert_with(|| {
             let scenario = scenario::physics_demo();
             let grid = scenario.build_grid();
-            (grid, FixedTimestep::new(1.0 / 30.0), scenario.materials, 0u32)
+            (
+                grid,
+                FixedTimestep::new(1.0 / 30.0),
+                scenario.materials,
+                0u32,
+            )
         });
 
         *tick += grid.step(timestep, frame_duration_secs, materials);
@@ -544,6 +555,74 @@ pub fn terrarium_report_json() -> String {
             None => "{}".to_string(),
         }
     })
+}
+
+// --- The gas chamber in the browser ---
+//
+// Same shape as the terrarium bindings above, and a separate world rather
+// than a mode of that one: the gas demonstration wants a room with a
+// pressurised bottle in it, not a jar with gnomes.
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static CHAMBER: std::cell::RefCell<Option<chamber::GasChamber>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Creates (or resets) the gas chamber the browser view drives.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn chamber_start() {
+    CHAMBER.with(|c| *c.borrow_mut() = Some(chamber::default_chamber()));
+}
+
+/// Advances the chamber by `steps` fixed steps and paints it to
+/// `canvas_id`. Returns the step count reached.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn chamber_tick_and_draw(canvas_id: &str, cell_px: u32, steps: u32) -> u32 {
+    CHAMBER.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        let chamber = match slot.as_mut() {
+            Some(c) => c,
+            None => return 0,
+        };
+        for _ in 0..steps {
+            chamber.step(DT_SECONDS);
+        }
+        // An empty colony: the chamber has no gnomes in it, and the world
+        // renderer draws whatever colony it is handed over the top.
+        let colony = gnome::Colony::new(Vec::new());
+        let buf = render::render_world_to_rgb8(&chamber.world, &colony, cell_px);
+        let width_px = chamber.world.width() as u32 * cell_px;
+        let height_px = chamber.world.height() as u32 * cell_px;
+        paint_rgb8_to_canvas(canvas_id, &buf, width_px, height_px);
+        chamber.steps as u32
+    })
+}
+
+/// The chamber's current JSON snapshot — pressures, the CO2 layer, and the
+/// conservation residuals, exactly as a headless run would report them.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn chamber_report_json() -> String {
+    CHAMBER.with(|cell| {
+        let slot = cell.borrow();
+        match slot.as_ref() {
+            Some(c) => report::chamber_json(&c.world, c.steps),
+            None => "{}".to_string(),
+        }
+    })
+}
+
+/// The chamber's dimensions in cells, as `[width, height]`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn chamber_dimensions() -> Vec<u32> {
+    vec![
+        chamber::DEFAULT_SIZE.0 as u32,
+        chamber::DEFAULT_SIZE.1 as u32,
+    ]
 }
 
 /// The terrarium's dimensions in cells, as `[width, height]`, so the page

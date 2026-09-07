@@ -59,8 +59,15 @@ energy, phase change, all conserved by construction) with a colony game on
 top, in which a gnome's magic is the single accounted-for exception to an
 otherwise closed world, paid for in Gin and recorded in a ledger.
 
-Live code: `src/world.rs`, `src/physics.rs`, `src/gnome.rs`,
-`src/terrarium.rs`, `src/report.rs`, `www/terrarium.html`. Run it headless
+Now running as the seven-night compounding sequence in
+[`NIGHTLY.md`](NIGHTLY.md) — one unattended session per night, each
+extending the last. Night 2 added compressible gas: pressure, diffusion,
+bulk flow, and a CO₂ that settles (`src/gas.rs`, `src/chamber.rs`,
+`www/gases.html`).
+
+Live code: `src/world.rs`, `src/physics.rs`, `src/gas.rs`, `src/gnome.rs`,
+`src/terrarium.rs`, `src/chamber.rs`, `src/report.rs`, `www/terrarium.html`,
+`www/gases.html`. Run it headless
 with `cargo run --release --bin terrarium -- --map`. No process cycle
 governs this experiment — deliberately, after `night-shift`.
 

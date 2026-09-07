@@ -67,6 +67,63 @@ pub fn snapshot_json(world: &World, colony: &Colony, step: u64) -> String {
     )
 }
 
+/// The gas chamber's JSON snapshot — the same conservation fields
+/// [`snapshot_json`] reports, minus the colony (the chamber has no gnomes
+/// in it) and plus the two numbers that scenario is actually about: the
+/// spread of pressures across the air, and how high the CO₂ is sitting.
+///
+/// Shape:
+///
+/// ```text
+/// {"step":N,"mean_temperature_k":F,"total_mass_g":F,
+///  "residual_mass_relative":F,"residual_energy_relative":F,
+///  "ledger":{"mass_conjured_g":F,"energy_conjured_j":F},
+///  "air_pressure_min":F,"air_pressure_max":F,
+///  "co2_mean_height":F,"co2_cells":N,
+///  "materials":[{"name":S,"cells":N,"mass_g":F},...]}
+/// ```
+///
+/// `co2_mean_height` is `-1` when the world holds no CO₂ at all, so the
+/// field is always a number and a reader never has to handle `null`.
+pub fn chamber_json(world: &World, step: u64) -> String {
+    let r = world.conservation_residuals();
+    let ledger = world.ledger();
+    let (lo, hi) = crate::gas::pressure_range_of(world, terrarium::AIR).unwrap_or((0.0, 0.0));
+    let co2_height = crate::gas::mean_height_of(world, terrarium::CO2).unwrap_or(-1.0);
+
+    let materials: Vec<String> = terrarium::ALL
+        .iter()
+        .map(|&id| {
+            format!(
+                "{{\"name\":\"{}\",\"cells\":{},\"mass_g\":{:.6}}}",
+                terrarium::name(id),
+                world.count_of(id),
+                world.mass_of(id)
+            )
+        })
+        .collect();
+
+    format!(
+        "{{\"step\":{step},\"mean_temperature_k\":{:.4},\"total_mass_g\":{:.6},\
+         \"residual_mass_relative\":{:e},\"residual_energy_relative\":{:e},\
+         \"ledger\":{{\"mass_conjured_g\":{:.6},\"energy_conjured_j\":{:.4}}},\
+         \"air_pressure_min\":{:.6},\"air_pressure_max\":{:.6},\
+         \"co2_mean_height\":{:.4},\"co2_cells\":{},\
+         \"materials\":[{}]}}",
+        world.mean_temperature(),
+        world.total_mass(),
+        r.mass_relative,
+        r.energy_relative,
+        ledger.mass_conjured,
+        ledger.energy_conjured,
+        lo,
+        hi,
+        co2_height,
+        world.count_of(terrarium::CO2),
+        materials.join(","),
+    )
+}
+
 /// An ASCII picture of the world, one character per cell, top row first —
 /// for eyeballing a headless run in a terminal without a canvas.
 pub fn ascii_map(world: &World) -> String {
@@ -83,6 +140,7 @@ pub fn ascii_map(world: &World) -> String {
                 "stone" => '#',
                 "lava" => '@',
                 "juniper" => 'Y',
+                "co2" => 'c',
                 _ => '?',
             });
         }
@@ -110,6 +168,24 @@ mod tests {
         }
         assert!(json.contains("\"residual_mass_g\":0.000000000"));
         assert!(json.contains("\"colony\":{\"gnomes\":4,\"embodied\":4,\"ethereal\":0"));
+    }
+
+    #[test]
+    fn a_chamber_snapshot_reports_pressure_and_the_co2_layer() {
+        let mut c = crate::chamber::default_chamber();
+        for _ in 0..200 {
+            c.step(0.05);
+        }
+        let json = chamber_json(&c.world, c.steps);
+        for field in [
+            "\"air_pressure_min\"",
+            "\"air_pressure_max\"",
+            "\"co2_mean_height\"",
+            "\"co2_cells\"",
+            "\"residual_mass_relative\"",
+        ] {
+            assert!(json.contains(field), "missing {field} in {json}");
+        }
     }
 
     #[test]

@@ -33,6 +33,12 @@ bash scripts/build-wasm.sh
 python3 -m http.server -d www 8000   # then open /terrarium.html
 ```
 
+There is a second live page, `/gases.html`: a room with a ten-atmosphere
+bottle of air behind one small hole and a slab of CO₂ released at the
+ceiling. The bottle bleeds down to the room's pressure and the CO₂ falls,
+spreads and settles into a flat layer on the floor — with nothing in the
+code naming CO₂ or saying heavy gases sink. See `src/gas.rs`.
+
 ### What it is actually claiming
 
 The interesting property is not that things fall convincingly; it is that
@@ -62,6 +68,8 @@ live. `residual_mass_g` in that output is the whole argument in one number.
 | `src/material.rs` | Materials and phase transitions as data; latent-heat offsets derived, not declared |
 | `src/world.rs` | Cells with mass, temperature and latent progress; the magic ledger |
 | `src/physics.rs` | Movement, buoyancy, hydrostatic levelling, conduction, phase change |
+| `src/gas.rs` | Gas pressure (`P = m·R·T`), pressure-driven diffusion and bulk flow |
+| `src/chamber.rs` | The gas demonstration room, its bottle, vent and scrubber |
 | `src/gnome.rs` | Gin economy, the ethereal layer, rescue, foraging, ethereal pipes |
 | `src/terrarium.rs` | The flagship scenario and its declared boundary conditions |
 | `src/report.rs` | JSON snapshots and an ASCII map, for headless verification |
