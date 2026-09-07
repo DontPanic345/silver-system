@@ -40,3 +40,24 @@ Current week (all models)
 Resets Sep 12, 9am (UTC)
 +50% weekly limits promo through Sep 13 · clau.de/cc-50-promo
 ```
+
+**Snapshot 2026-09-07T13:5x UTC — still before night 2** (delta from above
+is the journal-trimming work done in the interim, not night 2 itself — that
+still hasn't fired):
+
+```
+Total cost:            $12.78
+Total duration (API):  40m 53s
+Total duration (wall): 7h 45m 9s
+Total code changes:    664 lines added, 288 lines removed
+Usage by model:
+     claude-sonnet-5:  11.0k input, 121.8k output, 25.1m cache read, 453.9k cache write ($8.07)
+       claude-opus-5:  2.2k input, 35.2k output, 2.7m cache read, 262.6k cache write ($4.71)
+
+Current session
+██████████                                         20% used
+Resets 3:49pm (UTC)
+
+Current week (all models)
+██████████████                                     28% used
+```
