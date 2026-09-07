@@ -1,8 +1,14 @@
 # Nightly runs
 
-A standing brief for unattended, one-shot build sessions. One run per night,
-each starting cold from the repo's committed state, each leaving the next one
-something to build on.
+A standing brief for unattended, one-shot build sessions — **the real,
+current phase of this project, not another disposable experiment.** One run
+per night, each starting cold from the repo's committed state, each leaving
+the next one something to build on. Night 1 was `experiment/effort-opus-low`
+(merged onto `main`) — see its `JOURNAL.md` entry. The plan is seven nights.
+Unlike every experiment before it in this project's history, **this one is
+not meant to be reset** — the thing being tested is whether work compounds
+when nobody starts over. See `## Which night is this` below for how a cold
+session is meant to figure out where it is in the sequence.
 
 The shape of this brief is deliberate, and derived from runs recorded in
 [`effort-level-experiment/README.md`](effort-level-experiment/README.md).
@@ -22,6 +28,18 @@ Three findings from that experiment shape it:
   settings, with a fully green test suite behind it.
 
 So: the stance and the invariants are fixed. The target is not.
+
+## Which night is this
+
+`JOURNAL.md` entries for nightly runs are headed `**Night N/7 — <date> —
+<title>.**` (night 1: `experiment/effort-opus-low`, merged onto `main`). To
+find tonight's number: search `JOURNAL.md` for `Night ` and take the highest
+N found, then tonight is N+1. This is the only state that tracks the
+sequence — there is deliberately no separate counter file, so it can't
+drift out of sync with the journal itself.
+
+`USAGE.md` separately tracks `/cost` percentages before/after each night —
+that's for the human's own budget tracking, not for you to read or write.
 
 ## Operating rules
 
@@ -45,7 +63,16 @@ Swap nothing. Paste as-is.
 Read JOURNAL.md, NORTH_STARS.md and PRINCIPLES.md first. They carry the
 history, the aspiration, and the aphorisms distilled along the way.
 JOURNAL.md's most recent entries are the previous night's work — you are
-continuing that line, not starting a new one.
+continuing that line, not starting a new one. This is a seven-night
+compounding run, not another disposable experiment: work is meant to build
+on last night's, not reset it. Find out which night this is by searching
+JOURNAL.md for headings starting "Night " and taking the highest N/7 found;
+tonight is N+1. Head your own entry the same way: "Night <N+1>/7 — <date> —
+<title>."
+
+If a commentary block signed by the user appears after last night's entry,
+read it — it's a steer on that specific night's work, and read-only unless
+it explicitly instructs otherwise.
 
 Choose tonight's piece yourself. Pick whatever most moves this project
 toward NORTH_STARS.md, and open your journal entry by saying what you chose
@@ -94,6 +121,19 @@ experiment's entry points at its own README instead of inlining it.
 
 The next session starts cold and has only what you wrote down.
 ```
+
+## Where your own commentary goes
+
+Directly under that night's `JOURNAL.md` entry, as its own paragraph,
+wrapped in `_..._` (italics in most Markdown viewers) — the same convention
+you're already using in `CLAUDE.md`. That placement is deliberate: the next
+night's agent reads it in context, right next to the work it's reacting to,
+rather than in a separate file it would have no reason to open. It's
+optional — most nights won't need it — and it's read-only to the agent
+unless you say otherwise in it, same as your other commentary blocks.
+
+`USAGE.md` is the one exception: `/cost` percentages go there instead,
+since that's for your own tracking and nothing nightly needs to read it.
 
 ## Why the closing line matters
 
