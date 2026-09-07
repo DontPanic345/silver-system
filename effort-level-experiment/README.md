@@ -146,6 +146,46 @@ model, from the harness's own per-model billing (not the raw-token fallback
 the table above uses): all five Sonnet runs together, $81.00; the single
 Opus run, $14.39.
 
+#### Estimated one-shot cost per level
+
+For min/maxing a Pro-plan-style budget, what matters is the marginal cost of
+*one run at that level*, not the account's running total (which bundles the
+orchestrator's own reading/writing work on top of whichever subagent it just
+launched). Recomputed here straight from each run's own isolated transcript
+(the same dedup-by-message-id token counts behind the table above), priced
+with one consistent published-list-price formula across all six —
+Sonnet: $3/$15 per MTok in/out, cache write $3.75, cache read $0.30; Opus:
+$15/$75 per MTok in/out, cache write $18.75, cache read $1.50 — so the
+*relative* ordering and magnitude are solid even though the absolute dollar
+figure won't line up with the account-wide `/cost` totals a few paragraphs
+up (those mix in everything else this session did):
+
+| Level | Model | Est. cost (with caching) | Est. cost, no cache (sticker price) |
+|---|---|---:|---:|
+| low | Sonnet 5 | $1.09 | $7.79 |
+| medium | Sonnet 5 | $4.52 | $36.83 |
+| high | Sonnet 5 | $19.19 | $143.17 |
+| xhigh | Sonnet 5 | $11.79 | $104.16 |
+| max | Sonnet 5 | $18.38 | $156.70 |
+| opus-low | Opus 5 | $23.24 | $177.89 |
+
+Two things worth noting for min/maxing:
+
+- Cache is doing enormous work — every run's actual cost is roughly
+  7–15x cheaper than the same tokens would be cold, because each turn
+  re-reads the same growing context rather than paying full price for it
+  every time. A one-shot task that reads a lot of files once and does
+  little back-and-forth (i.e. genuinely low-effort, few turns) benefits
+  from this the least, since there's less repeated context to amortize.
+- `opus-low` is the *most* expensive run here despite being the lowest
+  Sonnet-equivalent effort setting, purely because Opus's per-token price
+  is ~5x Sonnet's — effort level and model choice are separate dials, and
+  for pure cost-per-run, model choice dominates. If the goal is min/maxing
+  a Pro plan's rolling budget rather than getting the most capable single
+  run, low-effort Sonnet is the cheap end by a wide margin (`low` here cost
+  about 1/20th of `opus-low`), and `high`/`max`/`opus-low` are all in the
+  same rough ballpark ($18–23) despite being very different runs.
+
 #### Account-level usage, for scale
 
 These are `/cost` snapshots of the *whole account*, not this experiment in
