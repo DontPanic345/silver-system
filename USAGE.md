@@ -17,3 +17,26 @@ numbers.
 
 <!-- Paste each night's /cost output below, or just the two percentages if
 that's all you want to keep. -->
+
+**Snapshot 2026-09-07T13:xx UTC — before night 2** (session window resets
+3:50pm UTC, ~2h25m out; night 2 is queued to launch right at that reset, so
+this snapshot is the "before" for a fresh window, not a mid-window reading):
+
+```
+Total cost:            $11.94
+Total duration (API):  38m 30s
+Total duration (wall): 7h 37m 10s
+Total code changes:    618 lines added, 217 lines removed
+Usage by model:
+     claude-sonnet-5:  9.9k input, 114.4k output, 21.5m cache read, 442.1k cache write ($7.23)
+       claude-opus-5:  2.2k input, 35.2k output, 2.7m cache read, 262.6k cache write ($4.71)
+
+Current session
+█████████▌                                         19% used
+Resets 3:50pm (UTC)
+
+Current week (all models)
+█████████████▌                                     27% used
+Resets Sep 12, 9am (UTC)
++50% weekly limits promo through Sep 13 · clau.de/cc-50-promo
+```
