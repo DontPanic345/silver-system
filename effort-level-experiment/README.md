@@ -6,7 +6,8 @@ changes in what gets built, and how much does it cost? This follows directly
 from the prompt-ambition experiment below, which varied prompt *wording*
 instead and found one wording (prompt #3) that reliably produced the most
 ambitious result — so that became the fixed prompt here, with effort as the
-one dial being turned.
+one dial being turned. A sixth run added a second dial — model — by pairing
+`low` effort with Opus instead of Sonnet; see its own section below.
 
 ## Background: the prompt-ambition experiment
 
@@ -113,13 +114,14 @@ isolated transcript carrying the expected `effort` value, confirming the
 setting really is applied per-turn (not a placebo, and not silently falling
 back to a shared default).
 
-| Level | `effort` field | Wall-clock | Tool calls | Assistant turns | Output tokens | Thinking tokens | Cache read | Rate-limited? |
-|---|---|---|---:|---:|---:|---:|---:|---|
-| low | 77/77 | 5m 9s | 43 | 44 | 2,764 | 610 | 2.5M | no |
-| medium | 156/156 | 17m 26s | 90 | 89 | 15,122 | 3,623 | 12.0M | no |
-| high | 311/311 | 20h 14m* | 178 | 181 | 107,991 | 67,599 | 46.2M | **yes** |
-| xhigh | 272/272 | 37m 13s | 153 | 143 | 16,798 | 7,988 | 34.3M | no |
-| max | 294/294 | 53m 14s | 174 | 155 | 55,880 | 35,367 | 51.4M | no |
+| Level | Model | `effort` field | Wall-clock | Tool calls | Assistant turns | Output tokens | Thinking tokens | Cache read | Rate-limited? |
+|---|---|---|---|---:|---:|---:|---:|---:|---|
+| low | Sonnet 5 | 77/77 | 5m 9s | 43 | 44 | 2,764 | 610 | 2.5M | no |
+| medium | Sonnet 5 | 156/156 | 17m 26s | 90 | 89 | 15,122 | 3,623 | 12.0M | no |
+| high | Sonnet 5 | 311/311 | 20h 14m* | 178 | 181 | 107,991 | 67,599 | 46.2M | **yes** |
+| xhigh | Sonnet 5 | 272/272 | 37m 13s | 153 | 143 | 16,798 | 7,988 | 34.3M | no |
+| max | Sonnet 5 | 294/294 | 53m 14s | 174 | 155 | 55,880 | 35,367 | 51.4M | no |
+| opus-low | Opus 5 | 153/153 | 31m 46s | 80 | 81 | 24,416 | 5,277 | 11.5M | no |
 
 \* `high`'s wall-clock includes a real overnight rate-limit stall (hit the
 account's session cap mid-run, resumed once it reset) — not a sign it did
@@ -135,6 +137,14 @@ here, not `xhigh`/`max` being unusually frugal. `xhigh` (37 min) and `max`
 (53 min) are the two genuinely comparable, unstalled, same-day runs, and
 `max` did roughly 3x `xhigh`'s output/thinking tokens for about 1.4x the
 wall-clock — the more informative same-conditions comparison.
+
+`opus-low` isn't on the same axis as the five above — it's the cheapest,
+lowest-effort row in raw token counts, comparable in size to `medium`, but
+it's a different *model* on `low` effort, not a Sonnet run — see its own
+section for why raw tokens undersell what it actually built. Dollar cost by
+model, from the harness's own per-model billing (not the raw-token fallback
+the table above uses): all five Sonnet runs together, $81.00; the single
+Opus run, $14.39.
 
 ### low — [`experiment/effort-low`](../../../tree/experiment/effort-low)
 
@@ -624,16 +634,113 @@ observation has been done on this branch yet the way `xhigh` got — worth
 doing before trusting its demo the same degree its test suite has already
 earned.
 
+### opus-low — [`experiment/effort-opus-low`](../../../tree/experiment/effort-opus-low)
+
+A second dial, added after seeing the five above: same prompt, same
+baseline (`b6a30ea`), but `claude-opus-5` at `effort: low` instead of Sonnet
+at any level, via a new `silver-effort-opus-low` agent definition. Reset to
+baseline and queued to launch automatically once account usage allowed it,
+entirely unattended.
+
+> **2026-09-07 — Gnomes, built.** The first experiment to aim at
+> `NORTH_STARS.md` #4 directly instead of building substrate underneath it.
+> Stated goal: *build as much of the north stars as one session can
+> confidently carry*, with no process cycle at all — a deliberate contrast
+> with `night-shift`, whose closeout blamed ceremony rather than the goal.
+> What landed, on top of the kept Rust substrate:
+>
+> - **A real simulation.** `src/world.rs` replaces the material-only `Grid`
+>   with cells carrying mass, temperature and latent-change progress;
+>   `src/physics.rs` adds density-ordered movement, symmetric heat
+>   conduction, and data-driven phase change. Mass and energy are conserved
+>   *by construction* — movement is a swap, conduction is a clamped pairwise
+>   transfer, phase change is an algebraic rewrite — and asserted to `1e-6`
+>   relative over 600–4000-step runs, not merely hoped for.
+> - **The Gnomes game layer** (`src/gnome.rs`): Gin as a bounded mana
+>   resource, magic as the one accounted-for hole in the world's books,
+>   the ethereal layer instead of death, gnome-to-gnome rescue, juniper
+>   foraging, and ethereal pipes implemented as a two-cell swap so that even
+>   the sanctioned shortcut cannot create matter.
+> - **The terrarium** (`src/terrarium.rs`), a running water cycle, plus a
+>   browser view (`www/terrarium.html`) and a headless JSON runner
+>   (`cargo run --bin terrarium`) that report the same numbers.
+>
+> Four findings worth keeping, each recorded in the code where it bites:
+>
+> 1. *A sealed jar dies.* The first terrarium was fully closed and reached
+>    thermal equilibrium in a couple of minutes of simulated time — correct
+>    physics, no cycle. Fixed by giving it a declared hot vent and cold lid
+>    whose flux goes through the same ledger gnome magic uses, so the jar's
+>    openness is a number rather than a fudge.
+> 2. *Latent heat cannot be a threshold flip.* Melting has to accumulate
+>    energy at the transition point, or a cell must overshoot melting point
+>    by 160 K to pay for its own latent heat, and then oscillates.
+> 3. *Falling and spreading must be separate passes.* Combined, a liquid
+>    slides into the hole the cell above it was about to fall through, and a
+>    shallow pool never fills its bottom row.
+> 4. *Communicating vessels need a body-level rule.* Cell-local gravity
+>    cannot climb the far arm of a U-bend. `stable-fluids` split on the
+>    pressure solve; this sidesteps it by transferring a surface cell from
+>    the tallest column of a connected cavity to a lower one, which is the
+>    only consequence of the pressure field that this scenario needs.
+>
+> Not built: brewing/distilling (Gin comes from berries only), the
+> book-copying knowledge economy, the Gnome Grandmother, buildings, and
+> farming. The physics still has no pressure or gas diffusion, and gases do
+> not spread laterally at all (deliberately — see `physics::apply_gravity`).
+
+**Notes:** the outlier of the whole set, and the one I scrutinized hardest
+given `xhigh`'s lesson. Independently re-verified rather than trusted:
+checked out `experiment/effort-opus-low` at its final commit (`68b8dac`) and
+ran `cargo test`/`cargo test --lib` myself — **99/99 lib tests pass**, plus
+both native integration tests. One test in particular,
+`water_finds_its_level_across_a_u_shaped_pipe`, claims to solve the exact
+case `max` (Sonnet, the highest Sonnet effort level) explicitly named as an
+unsolved structural limitation of its swap-only mechanism — so I read the
+test itself rather than take the name on faith: it builds two arms joined at
+a shared floor, pours water into one arm only, runs 400 steps, and asserts
+both arms end within one cell of each other's water level with none lost.
+It passed. The mechanism finding #4 above describes — moving a surface cell
+between columns of one connected cavity, rather than pure local swaps — is a
+genuinely different, more capable approach than any Sonnet run attempted,
+not a trick that happens to satisfy a weak assertion.
+
+It's also the only run of the six to go straight at `NORTH_STARS.md` #4
+(Gnomes) rather than stopping at physics substrate — every Sonnet run,
+including `max`, explicitly deferred the whole game layer. Diff against
+baseline: 3,555 lines added across five new/rewritten modules
+(`world.rs`, `physics.rs`, `gnome.rs`, `terrarium.rs`, `report.rs`), the
+largest and most architecturally distinct of the six by a wide margin,
+despite being nominally the *lowest*-effort run in the entire experiment
+and by far the cheapest ($14.39, against $81.00 total across all five
+Sonnet runs). Not yet checked: a live look at `www/terrarium.html` the way
+`xhigh`'s demo was — the test suite has earned real trust here, but so had
+`xhigh`'s before someone actually watched it run.
+
 ## Overall
 
 Token/tool-call cost climbed with effort level through `high`, and the two
-unstalled top levels (`xhigh`, `max`) both did meaningfully more than
+unstalled top Sonnet levels (`xhigh`, `max`) both did meaningfully more than
 `low`/`medium` — more materials, temperature, phase change, a richer
 interactive demo — for real cost (34-51M cache-read tokens vs. 2.5-12M).
 But effort level didn't buy correctness for free: the one confirmed false
-claim in the whole set came from `xhigh`, the second-highest effort level,
-and its own automated test suite passed anyway — a live look at the actual
-running demo caught what `cargo test`, `clippy`, and three passing e2e tests
-all missed. `max`'s scenario-level, run-thousands-of-ticks-and-check-every-
-one tests are a plausible reason its equivalent claims are more likely to
-hold, but that hasn't been checked live yet the way `xhigh`'s was.
+claim in the whole set came from `xhigh`, the second-highest Sonnet effort
+level, and its own automated test suite passed anyway — a live look at the
+actual running demo caught what `cargo test`, `clippy`, and three passing
+e2e tests all missed. `max`'s scenario-level, run-thousands-of-ticks-and-
+check-every-one tests are a plausible reason its equivalent claims are more
+likely to hold, but that hasn't been checked live yet the way `xhigh`'s was.
+
+The sixth run complicates "more effort, more scope" further: `opus-low`,
+the cheapest and lowest-effort run of the six, produced the largest,
+architecturally boldest result — a solved U-tube and a first attempt at the
+actual game layer — for the price of a `medium` Sonnet run. That's one data
+point on one task, not a general claim that low-effort Opus beats high-
+effort Sonnet; the honest reading is narrower: **effort level and model
+choice are separate dials, and this experiment only really controlled for
+one of them until the sixth run added a single, uncontrolled data point on
+the other.** Whether Opus at higher effort would do even more, or whether
+this particular task (a fresh green-field physics+game build) happens to
+favor Opus's architecture choices, is unanswered — the obvious next pilot,
+if this is worth another round, is Opus across the same five effort levels
+Sonnet just ran.

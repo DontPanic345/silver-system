@@ -242,4 +242,7 @@ token-usage table, every branch's own `JOURNAL.md` entry verbatim, and notes
 on each (including one live-observed false claim `cargo test`/`clippy`/e2e
 all missed) are in [`effort-level-experiment/README.md`](effort-level-experiment/README.md)
 rather than duplicated here. Branches: `experiment/effort-low`,
-`-medium`, `-high`, `-xhigh`, `-max`.
+`-medium`, `-high`, `-xhigh`, `-max`. A sixth run added a model-choice
+dial (`experiment/effort-opus-low`, Opus 5 at `effort: low`) — the cheapest
+run of the six, and the only one to solve the U-tube case or attempt the
+game layer at all; folded into the same write-up.
