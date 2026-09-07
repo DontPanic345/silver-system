@@ -118,25 +118,34 @@ back to a shared default).
 |---|---|---|---|---:|---:|---:|---:|---:|---|
 | low | Sonnet 5 | 77/77 | 5m 9s | 43 | 44 | 2,764 | 610 | 2.5M | no |
 | medium | Sonnet 5 | 156/156 | 17m 26s | 90 | 89 | 15,122 | 3,623 | 12.0M | no |
-| high | Sonnet 5 | 311/311 | 20h 14m* | 178 | 181 | 107,991 | 67,599 | 46.2M | **yes** |
+| ~~high~~* | Sonnet 5 | 311/311 | 20h 14m | 178 | 181 | 107,991 | 67,599 | 46.2M | **yes** |
 | xhigh | Sonnet 5 | 272/272 | 37m 13s | 153 | 143 | 16,798 | 7,988 | 34.3M | no |
 | max | Sonnet 5 | 294/294 | 53m 14s | 174 | 155 | 55,880 | 35,367 | 51.4M | no |
 | opus-low | Opus 5 | 153/153 | 31m 46s | 80 | 81 | 24,416 | 5,277 | 11.5M | no |
 
-\* `high`'s wall-clock includes a real overnight rate-limit stall (hit the
-account's session cap mid-run, resumed once it reset) — not a sign it did
-20 hours of actual work. Its own token/tool-call totals (comfortably the
-highest of the five) are the more honest measure of how much it actually
-did, and even those are inflated by the stall giving it more session budget
-to spend once it resumed than a same-day run would have had.
+\* **`high`'s row is struck out because it is not a valid data point, and
+should be excluded from any comparison below.** It hit the account's 5-hour
+session cap mid-run and stalled overnight — but it hit that cap because of
+*experiment sequencing*, not because of anything to do with `high` effort:
+`low` and `medium` had already been run back-to-back in the same 5-hour
+window, so `high` started with most of the window already spent and ran out
+partway through. That contaminates the row three separate ways. Its
+wall-clock (20h 14m) is mostly idle waiting. Its token and tool-call totals
+are inflated, because resuming after the reset handed it a *second* full
+session window to spend that no other run got. And its dollar cost carries a
+one-off cache-rebuild premium (see below) that the uninterrupted runs never
+paid. None of those three are properties of the `high` setting. Re-running
+`high` alone in a clean window would be needed to get a real number, and
+that was never done.
 
-Token counts climb roughly with effort level up to `high`, then `xhigh` and
-`max` both land *below* `high` on every raw count despite (by the harness's
-own definition) being higher effort settings — because `high` is the outlier
-here, not `xhigh`/`max` being unusually frugal. `xhigh` (37 min) and `max`
-(53 min) are the two genuinely comparable, unstalled, same-day runs, and
-`max` did roughly 3x `xhigh`'s output/thinking tokens for about 1.4x the
-wall-clock — the more informative same-conditions comparison.
+With `high` excluded, the remaining Sonnet trend is actually *cleaner* than
+it first appeared: `low` → `medium` → `xhigh` → `max` rises monotonically in
+turns, output tokens, and cost. What it also shows is sharply diminishing
+returns at the top — `max` bought about 16% more shipped code than `xhigh`
+(2,458 vs. 2,123 insertions) for about 56% more money ($18.38 vs. $11.79) —
+and `xhigh` is the run that shipped the one confirmed false claim in the
+whole experiment. More effort bought more *volume* reliably; it did not buy
+more *correctness*.
 
 `opus-low` isn't on the same axis as the five above — it's the cheapest,
 lowest-effort row in raw token counts, comparable in size to `medium`, but
@@ -164,7 +173,7 @@ up (those mix in everything else this session did):
 |---|---|---:|---:|
 | low | Sonnet 5 | $1.09 | $7.79 |
 | medium | Sonnet 5 | $4.52 | $36.83 |
-| high | Sonnet 5 | $19.19 | $143.17 |
+| ~~high~~ (excluded) | Sonnet 5 | $19.19 | $143.17 |
 | xhigh | Sonnet 5 | $11.79 | $104.16 |
 | max | Sonnet 5 | $18.38 | $156.70 |
 | opus-low | Opus 5 | $23.24 | $177.89 |
@@ -195,20 +204,24 @@ the cheap cache-read rate; a turn that arrives *after* the TTL expires
 doesn't just lose the discount, it pays a premium — cache-write is priced
 *above* plain fresh input (e.g. $3.75/MTok vs. $3.00/MTok on Sonnet) because
 the whole accumulated context has to be re-cached from scratch before that
-turn's own work even starts. `high` is the one run in this whole experiment
-that actually hit this: its wall-clock includes a real overnight stall
-against the account's session cap (the asterisk in the token table above),
-so somewhere in the middle of that run, one turn arrived hours after the
-last, forcing exactly this kind of expensive recache before it could
-resume. Its $19.19 estimate above is Sonnet's highest of the five *not*
-because `high` effort itself burns more per turn than `max`, but at least
-partly because it's the one run that paid a cache-miss tax the others
-didn't. The takeaway isn't "keep a run under an hour" — total run length
-doesn't matter, `max` ran fine at similar token volumes without incident —
-it's "don't let the *gap between two consecutive turns* exceed the TTL."
-An unattended one-shot run is a good way to avoid that by construction
-(nothing is waiting on a human to come back), but it isn't immune if the
-account's own rate limit forces the wait instead, as it did here.
+turn's own work even starts. The excluded `high` run is the one run in this
+whole experiment that actually hit this: it stalled overnight against the
+account's session cap, so somewhere in the middle of it, one turn arrived
+hours after the last, forcing exactly this kind of expensive recache before
+it could resume. Part of why its $19.19 estimate is the highest Sonnet
+figure here is that cache-miss tax — a cost none of the uninterrupted runs
+paid, and one more reason that row isn't comparable to the others.
+
+The takeaway is *not* "keep a run under an hour" — total run length doesn't
+matter, and `max` ran longer than `xhigh` at higher token volume without
+incident. It's "don't let the **gap between two consecutive turns** exceed
+the TTL." And the specific way that gap opened up here is worth naming,
+because it's entirely avoidable: the runs were executed back-to-back in a
+single 5-hour session window, so by the time `high` started, the window was
+nearly spent, and the cap forced the wait. **Space runs out so each one gets
+a fresh window.** An unattended one-shot run avoids TTL gaps by construction
+— nothing is waiting on a human to come back — but it is not immune when the
+account's own rate limit is what forces the wait.
 
 #### Account-level usage, for scale
 
