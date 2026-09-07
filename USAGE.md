@@ -61,3 +61,25 @@ Resets 3:49pm (UTC)
 Current week (all models)
 ██████████████                                     28% used
 ```
+
+**Snapshot 2026-09-07T19:40:43+00:00 UTC — after night 2**
+```
+Session
+
+Total cost:            $27.71
+Total duration (API):  1h 4m 33s
+Total duration (wall): 13h 50m 13s
+Total code changes:    2065 lines added, 334 lines removed
+Usage by model:
+     claude-sonnet-5:  11.3k input, 141.0k output, 35.8m cache read, 746.3k cache write ($11.57)
+       claude-opus-5:  52.7k input, 109.7k output, 18.3m cache read, 503.6k cache write ($16.14)
+Prompt cache (main):   190 requests · 97% of input tokens from cache · 4 misses (last 3h 48m 33s ago — likely cause: idle past the 1h TTL, 527.6k tokens re-cached) · 1 expected rebuild (compaction or tool-result clearing) · cold — idle 3h 16m 58s, next turn re-caches ~289.1k tokens
+
+Current session
+█████████████████                                  34% used
+Resets 8:50pm (UTC)
+
+Current week (all models)
+███████████████▌                                   31% used
+Resets Sep 12, 9am (UTC)
+```
