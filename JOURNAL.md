@@ -136,79 +136,31 @@ overlapping problems — an open duplication, not a decision that both should
 stay.
 
 **2026-09-05 — Real gravity/density physics on the kept Rust substrate.**
-Started the next experiment directly on `src/`'s existing grid/material/
-scenario substrate (kept from `night-shift`, otherwise idle since that
-shelving) rather than starting a new one from scratch — `Grid::step_once`
-had been a deliberate no-op identity transform since M1.1, waiting for
-exactly this. Replaced it with a real, generic movement rule driven entirely
-by `Material::density`/`Phase` data (never a per-material `if` chain): a
-denser cell may swap into a strictly-less-dense, non-`Solid` neighbour, tried
-in priority order (straight down, diagonal-down, then — liquids only —
-sideways). `Phase` grew a `Granular` variant (falls and piles, e.g. sand)
-distinct from immovable `Solid` (e.g. stone); `MaterialTable::reference`
-grew sand as a fourth material. Every move is a swap of two cells' contents,
-never a creation/deletion, so per-material cell counts are exactly
-conserved by construction — proven directly by tests, not just argued.
+*(Trimmed 2026-09-07 to match this file's own lean-entry policy — full
+prose, test names, and raw session metrics recoverable via `git show
+d6d2139:JOURNAL.md`.)* Replaced `Grid::step_once`'s deliberate no-op with a
+real, generic density/phase-driven swap rule (never a per-material `if`
+chain) directly on the kept `night-shift` substrate — a denser cell swaps
+into a less-dense, non-`Solid` neighbour, down before diagonal before
+(liquids only) sideways. `Phase` grew `Granular` (falls, doesn't level);
+`MaterialTable::reference` grew sand. Every move is a swap, so per-material
+mass is conserved by construction, proven by tests.
 
-Hit and fixed one real physics bug along the way: a naive "swap into any
-less-dense same-row neighbour" rule made a liquid column *oscillate* between
-two symmetric open containers forever (the whole column translates as a
-rigid block each step, then translates right back when the tie-break side
-flips next step) rather than levelling. Fixed by gating horizontal liquid
-flow on column occupancy (`Grid::column_count`, read progressively from the
-in-progress step so it reflects swaps already applied earlier in the same
-pass): a liquid cell may only flow sideways toward the column currently
-holding *strictly fewer* cells of its own material. That one condition turns
-"spreads out" into "spreads out and stops once level" — a cheap, real
-approximation of hydrostatic equalization, not a screenshot that merely
-looks flat once. Directly answers `NORTH_STARS.md` #3's callout: "a resting
-pool stays flat" and "a column of water finds its level" are now both
-pinned as exact, non-oscillating test assertions
-(`src/grid.rs::a_sealed_resting_pool_stays_exactly_unchanged_under_gravity`,
-`a_column_of_water_finds_its_level_across_an_open_container`), not just
-aspiration.
+Two findings worth keeping: (1) a naive "swap into any less-dense neighbour"
+rule made a liquid column *oscillate* between two open containers forever
+instead of levelling — fixed by gating horizontal flow on column occupancy,
+so a cell only flows toward a column currently holding strictly fewer cells
+of its own material. (2) the first draft passed every test written for it,
+including the water-levelling one, which only failed the way a debug trace
+predicted (rigid oscillation) once actually run and watched frame by frame —
+passing tests you wrote yourself proves less than it feels like it does, the
+same lesson `xhigh` re-taught, more expensively, below.
 
-Also: `mod timestep` promoted to `pub` — `Grid::step`'s own public signature
-already took a `&mut FixedTimestep`, so no code outside this crate could
-actually call it without that type being nameable; this had been latent
-since `step` first went public and only surfaced now that something
-(`src/bin/native_viewer.rs`) needed to call it from outside.
-
-Wired the physics up as something watchable, not just headless-proven: a new
-`scenario::physics_demo()` fixture (sealed stone container, a flat resting
-water pool, five sand grains suspended above), a `step_and_paint_physics_demo`
-wasm export driven by a real setInterval loop in the new `www/physics.html`,
-and a real-browser e2e test (`tests/e2e/physics_demo.test.mjs`) that reads
-actual canvas pixels after real wall-clock time passes rather than screenshot
-review — the repo's own established headless-verification discipline
-(`PRINCIPLES.md`'s "trust and verify"), applied to something that visibly
-moves for the first time. `src/bin/native_viewer.rs`'s native fallback path
-got the same fixture as a 4-frame PNG sequence for a cheap visual sanity
-check. All three e2e tests (`canvas_rectangle`, `scenario_canvas`,
-`physics_demo`) and the full `cargo test` suite pass; `cargo clippy
---all-targets -- -D warnings` is clean.
-
-Left for later, in the phased physics→chemistry→biology→game-layer ordering
-(`NORTH_STARS.md` #2/#3): gas movement/buoyancy (currently immobile
-background, displaceable but not itself a mover), temperature, pressure as
-its own tracked quantity (the current liquid-levelling rule is a cellular
-approximation, not a real pressure solve), and everything past physics.
-`CLAUDE.md`/`README.md` updated to describe this as the current experiment.
-
-*(Raw session metrics for this run — wall-clock, token usage by model,
-diff-stat — trimmed from the live copy of this entry 2026-09-07 to keep the
-file lean for nightly reads; recoverable via `git show
-d6d2139:JOURNAL.md` or the original transcript
-`967f66e9-d433-446a-81ac-0f0adade057c.jsonl` if ever needed.)*
-
-One finding worth keeping past the trim: the first draft of the physics rule
-compiled and passed every test written for it — including the water-
-levelling one, which only failed the way a debug trace predicted (rigid
-oscillation) once actually run and watched frame by frame, not just
-pass/fail. A plausible-sounding cellular rule can pass "does it compile and
-do something" while being wrong in a way only a concrete trace reveals —
-the same lesson `xhigh` re-taught, more expensively, in the effort-level
-experiment below.
+Wired to a live demo (`www/physics.html`) with a real-browser e2e check
+reading actual canvas pixels, not a screenshot. Left for later: gas
+movement/buoyancy, temperature, real pressure (the current levelling rule is
+a cellular approximation, not a solve) — everything past physics in
+`NORTH_STARS.md` #2/#3's ordering.
 
 **2026-09-07 — The effort-level experiment, written up.** Follow-on from
 this file's own prompt-3 entry above: re-ran that same prompt five more
