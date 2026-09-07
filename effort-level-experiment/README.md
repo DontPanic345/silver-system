@@ -10,6 +10,37 @@ one dial being turned. A sixth run added a second dial — model — by pairing
 `low` effort with Opus instead of Sonnet; see its own section below.
 
 ## Background: the prompt-ambition experiment
+_
+After the night-shift experiment results were clear. 12:1 lines of prose to code
+it was clear; I ready for a new experiment. the heavy and complicated skills and rules 
+were getting in the way of letting the model do its best work. I Much more liked the 
+very first promts I gave which was more like, "Build a falling sand sim", or 
+"Build a fulid-dynamics sim" which produced good results per turn. Part of the churn
+was micro sized milestones and goals. Each round, only one goal was picked up, only a
+ few lines of code required each. The size of each turn was prescriptive and wrong.
+
+At this point I was still set on using Sonnet-Medium (SM) as my work-horse (I use it 
+heavly at work). But I had no idea how much work SM would naturally do when given
+an open eneded task. I wanted a yard-stick measure of what SM could do, so then I could
+better craft the goals and milestones for a trache of work.
+
+After some back and forth with my current sesion, we settled on the Control prompt below.
+After giving the prompt to a new SM. I was surprised to find that the agent didn't reach
+at all, it gave a very small incrment to the project. Basically, the repo at the time had `grid.rs` `step()`
+as an identity function, and that lit up like a light bulb for all every agent given this problem
+"I need to increment physics sim with no physics - let me make my mark".
+(Confirmed against the actual commit: `step_once` copied every cell into
+itself unchanged, and the test suite even had a test named
+`stepping_the_identity_transformation_leaves_a_resting_scenario_unchanged`.)
+
+It was just a coincdence that I had stopped night-shift after M0.x Mathemtaics had been finished
+and before the first milestone of M1 Physics had landed. I stopped it there because it was going to hit
+the 5 hourly session before finishing the current round. I had left the substrate in a classic 
+problem - write a physics solver. And it turned out to be a very good baseline for comparison. 
+It's a known potentially very difficult and complex algorithm to try write (see stable-fluids)
+or is very simple (see the control prompt on Sonnet-Low). It allows for a more powerful 
+model show off what it can do.
+_
 
 Run 2026-09-05, kept out-of-repo at the time
 (`~/silver-system-prompt-ambition-experiment.md`, not yet decided whether it
