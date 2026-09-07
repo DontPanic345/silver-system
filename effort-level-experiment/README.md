@@ -146,6 +146,25 @@ model, from the harness's own per-model billing (not the raw-token fallback
 the table above uses): all five Sonnet runs together, $81.00; the single
 Opus run, $14.39.
 
+#### Account-level usage, for scale
+
+These are `/cost` snapshots of the *whole account*, not this experiment in
+isolation — this session was doing nothing else across this period, but the
+5-hour session window and the weekly window are both shared, rolling
+budgets, not per-run counters, so they can't be split cleanly across the
+six branches. Two snapshots landed at useful points:
+
+| Snapshot | Session cost so far | Session window used | Week used |
+|---|---:|---:|---:|
+| After `max`, before writing this doc up | $78.45 (Sonnet only) | 47% (resets 4:20am) | 18% |
+| After `opus-low` | $95.39 ($81.00 Sonnet + $14.39 Opus) | 43% (resets 9:20am) | 23% |
+
+The session-window percentage *dropping* between the two snapshots despite
+more work being done is the rolling window doing what it's supposed to —
+the session reset between the two snapshots (the whole reason `opus-low`
+was queued 3h30m out in the first place), so the second number reflects a
+fresh window, not the first one continuing to fill.
+
 ### low — [`experiment/effort-low`](../../../tree/experiment/effort-low)
 
 > **2026-09-05 — First real physics on the Rust substrate (effort-level
