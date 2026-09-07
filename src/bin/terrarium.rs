@@ -1,0 +1,40 @@
+//! Headless runner for the gnome terrarium.
+//!
+//! Prints a JSON snapshot every `--every` steps, and optionally an ASCII
+//! map, so a full run can be checked from a shell without a browser — this
+//! repo's standing preference for verifying a simulation by numbers.
+//!
+//! ```sh
+//! cargo run --release --bin terrarium -- --steps 4000 --every 500 --map
+//! ```
+
+use viewer::{report, terrarium};
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let flag = |name: &str, default: u64| -> u64 {
+        args.iter()
+            .position(|a| a == name)
+            .and_then(|i| args.get(i + 1))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+    };
+    let steps = flag("--steps", 3000);
+    let every = flag("--every", 500).max(1);
+    let show_map = args.iter().any(|a| a == "--map");
+
+    let mut terra = terrarium::default_terrarium();
+    println!("{}", report::snapshot_json(&terra.world, &terra.colony, 0));
+    for step in 1..=steps {
+        terra.step(0.05);
+        if step % every == 0 {
+            println!(
+                "{}",
+                report::snapshot_json(&terra.world, &terra.colony, step)
+            );
+            if show_map {
+                eprint!("{}", report::ascii_map(&terra.world));
+            }
+        }
+    }
+}

@@ -54,6 +54,7 @@ pub mod timestep;
 // RECT_COLOR_RGB etc. below are `pub` for tests/native_fallback.rs.
 pub mod grid;
 pub mod material;
+pub mod physics;
 
 // `Scenario`, the "one definition, two consumers" type the headless runner
 // and the renderer both build a Grid from — see src/scenario.rs.
@@ -71,6 +72,18 @@ pub mod measure;
 // for the same reason measure/scenario/grid/material are:
 // `src/bin/native_viewer.rs` and integration tests build on it directly.
 pub mod render;
+
+/// The simulated world — cells with mass, temperature and phase state.
+pub mod world;
+
+/// The gnomes: the game layer, Gin economy, and ethereal mechanics.
+pub mod gnome;
+
+/// The flagship sealed-jar scenario.
+pub mod terrarium;
+
+/// Headless JSON/ASCII reporting.
+pub mod report;
 
 use math::Scalar;
 use timestep::FixedTimestep;
@@ -474,6 +487,74 @@ fn material_colour_rgb(id: u16) -> Vec<u8> {
     let materials = material::MaterialTable::reference();
     let (r, g, b) = materials.get(material::MaterialId::new(id)).colour;
     vec![r, g, b]
+}
+
+// --- The gnome terrarium in the browser ---
+//
+// One live `Terrarium` behind a thread-local, because `wasm_bindgen`
+// exports are free functions and the page needs the same world back on
+// every animation frame. Single-threaded wasm, so a `RefCell` is the whole
+// synchronisation story.
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static TERRARIUM: std::cell::RefCell<Option<terrarium::Terrarium>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Creates (or resets) the terrarium the browser view drives.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn terrarium_start() {
+    TERRARIUM.with(|t| *t.borrow_mut() = Some(terrarium::default_terrarium()));
+}
+
+/// Advances the terrarium by `steps` fixed steps and paints it to
+/// `canvas_id`. Returns the step count reached.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn terrarium_tick_and_draw(canvas_id: &str, cell_px: u32, steps: u32) -> u32 {
+    TERRARIUM.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        let terra = match slot.as_mut() {
+            Some(t) => t,
+            None => return 0,
+        };
+        for _ in 0..steps {
+            terra.step(DT_SECONDS);
+        }
+        let buf = render::render_world_to_rgb8(&terra.world, &terra.colony, cell_px);
+        let width_px = terra.world.width() as u32 * cell_px;
+        let height_px = terra.world.height() as u32 * cell_px;
+        paint_rgb8_to_canvas(canvas_id, &buf, width_px, height_px);
+        terra.steps as u32
+    })
+}
+
+/// The current JSON snapshot — the same text `src/bin/terrarium.rs` prints,
+/// so the page shows exactly what a headless run would report rather than
+/// a second, drifting summary of its own.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn terrarium_report_json() -> String {
+    TERRARIUM.with(|cell| {
+        let slot = cell.borrow();
+        match slot.as_ref() {
+            Some(t) => report::snapshot_json(&t.world, &t.colony, t.steps),
+            None => "{}".to_string(),
+        }
+    })
+}
+
+/// The terrarium's dimensions in cells, as `[width, height]`, so the page
+/// can size its canvas without hard-coding them.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn terrarium_dimensions() -> Vec<u32> {
+    vec![
+        terrarium::DEFAULT_SIZE.0 as u32,
+        terrarium::DEFAULT_SIZE.1 as u32,
+    ]
 }
 
 #[cfg(test)]

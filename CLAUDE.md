@@ -13,11 +13,11 @@ a repeat.
 
 ## What's here
 
-- `src/`, `www/`, `tests/`, `scripts/` — Rust substrate, originally scaffolded
-  under the `night-shift` experiment (grid/material types, a scenario harness,
-  a minimal wasm renderer, a native fallback), now carrying real gravity/
-  density physics (`src/grid.rs`) under active process — see `README.md` for
-  how to build and test it.
+- `src/`, `www/`, `tests/`, `scripts/` — the live Rust code. Some of it
+  (`grid.rs`, `scenario.rs`, `measure.rs`, the native fallback) is leftover
+  substrate from the `night-shift` experiment, kept but no longer central;
+  the current experiment is listed below. See `README.md` for how to build,
+  run and test.
 - `terrarium/`, `stable-fluids/`, `night-shift/` — shelved experiments, kept for
   reference. Do not extend them.
 
@@ -43,20 +43,18 @@ a repeat.
 
 ## Current experiment
 
-**Gravity/density falling-sand physics on the Rust substrate**, started
-2026-09-05. `src/grid.rs`'s per-cell step went from a no-op identity
-transform to a real, generic (data-driven, not per-material) movement rule:
-denser cells swap into strictly-less-dense, non-`Solid` neighbours, in
-priority order (straight down, diagonal-down, then — liquids only —
-sideways, gated so it settles instead of sloshing forever). `Phase` grew a
-`Granular` variant distinct from immovable `Solid`; `MaterialTable::reference`
-grew a fourth material, sand. Every move is a swap of two cells' contents,
-never a creation or deletion, so per-material cell counts are exactly
-conserved by construction — see `src/measure.rs`'s and `src/grid.rs`'s own
-conservation tests. Watchable live at `www/physics.html`
-(`step_and_paint_physics_demo`), headless-verified both as unit/integration
-tests (`cargo test --lib`) and as a real-browser e2e check
-(`tests/e2e/physics_demo.test.mjs`, reading real canvas pixels after real
-wall-clock time, not a screenshot). Not yet done: gas movement/buoyancy,
-temperature, pressure, or anything past physics in the phased
-physics→chemistry→biology→game-layer ordering (`NORTH_STARS.md` #2/#3).
+**Gnomes** (started 2026-09-07) — the first run aimed at `NORTH_STARS.md` #4
+directly rather than at substrate under it. A conserving simulation (mass,
+energy, phase change, all conserved by construction) with a colony game on
+top, in which a gnome's magic is the single accounted-for exception to an
+otherwise closed world, paid for in Gin and recorded in a ledger.
+
+Live code: `src/world.rs`, `src/physics.rs`, `src/gnome.rs`,
+`src/terrarium.rs`, `src/report.rs`, `www/terrarium.html`. Run it headless
+with `cargo run --release --bin terrarium -- --map`. No process cycle
+governs this experiment — deliberately, after `night-shift`.
+
+The rule that matters when changing anything here: **every operation must
+conserve mass and energy, or go through `World::conjure_*` so the ledger
+records it.** The tests assert the residuals, so breaking this fails loudly
+rather than drifting quietly.
