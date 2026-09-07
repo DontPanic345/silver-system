@@ -75,7 +75,7 @@ conservation, gravity-defying pipes, gimmick gas, colony-failure-by-default).
 Archived verbatim as `dictation-dumps/gnomes.md`, distilled in full as
 `NORTH_STARS.md` #4.
 
-**Night 1/7 — 2026-09-07 — Gnomes, built.** *(Numbered retroactively when
+**Night 1/7 — 2026-09-07 — Opus 5/low — Gnomes, built.** *(Numbered retroactively when
 `NIGHTLY.md`'s seven-night compounding run was formalized: this was the
 first run that extended rather than reset the substrate, which is what
 qualifies it as night 1 of the real sequence, not just a date it happened

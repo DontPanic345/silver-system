@@ -57,9 +57,13 @@ that's for the human's own budget tracking, not for you to read or write.
 
 ## The prompt
 
-Swap nothing. Paste as-is.
+Swap nothing except the first line, which the person queuing the run fills
+in — an agent can't reliably introspect its own model/effort setting, so it
+has to be told.
 
 ```
+You are running as <model> at effort: <level>.
+
 Read JOURNAL.md, NORTH_STARS.md and PRINCIPLES.md first. They carry the
 history, the aspiration, and the aphorisms distilled along the way.
 JOURNAL.md's most recent entries are the previous night's work — you are
@@ -67,8 +71,8 @@ continuing that line, not starting a new one. This is a seven-night
 compounding run, not another disposable experiment: work is meant to build
 on last night's, not reset it. Find out which night this is by searching
 JOURNAL.md for headings starting "Night " and taking the highest N/7 found;
-tonight is N+1. Head your own entry the same way: "Night <N+1>/7 — <date> —
-<title>."
+tonight is N+1. Head your own entry the same way, including the model/effort
+you were told above: "Night <N+1>/7 — <date> — <model>/<effort> — <title>."
 
 If a commentary block signed by the user appears after last night's entry,
 read it — it's a steer on that specific night's work, and read-only unless
