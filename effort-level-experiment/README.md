@@ -186,6 +186,30 @@ Two things worth noting for min/maxing:
   about 1/20th of `opus-low`), and `high`/`max`/`opus-low` are all in the
   same rough ballpark ($18–23) despite being very different runs.
 
+**What actually drives the cache discount, and where `high` broke it.** The
+cheap "with caching" numbers above only apply while consecutive turns land
+inside the prompt cache's TTL (roughly an hour on this account — see the
+`/cost` output's own "warm (1h TTL)" / "cold — idle 3h 14m 30s" language).
+Every turn inside that window re-reads the shared, already-seen context at
+the cheap cache-read rate; a turn that arrives *after* the TTL expires
+doesn't just lose the discount, it pays a premium — cache-write is priced
+*above* plain fresh input (e.g. $3.75/MTok vs. $3.00/MTok on Sonnet) because
+the whole accumulated context has to be re-cached from scratch before that
+turn's own work even starts. `high` is the one run in this whole experiment
+that actually hit this: its wall-clock includes a real overnight stall
+against the account's session cap (the asterisk in the token table above),
+so somewhere in the middle of that run, one turn arrived hours after the
+last, forcing exactly this kind of expensive recache before it could
+resume. Its $19.19 estimate above is Sonnet's highest of the five *not*
+because `high` effort itself burns more per turn than `max`, but at least
+partly because it's the one run that paid a cache-miss tax the others
+didn't. The takeaway isn't "keep a run under an hour" — total run length
+doesn't matter, `max` ran fine at similar token volumes without incident —
+it's "don't let the *gap between two consecutive turns* exceed the TTL."
+An unattended one-shot run is a good way to avoid that by construction
+(nothing is waiting on a human to come back), but it isn't immune if the
+account's own rate limit forces the wait instead, as it did here.
+
 #### Account-level usage, for scale
 
 These are `/cost` snapshots of the *whole account*, not this experiment in
