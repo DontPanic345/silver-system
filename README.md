@@ -59,9 +59,20 @@ cargo run --release --bin still -- --steps 4000 --every 500 --map
 The interesting property is not that things fall convincingly; it is that
 **mass and energy are conserved by construction, and everything that isn't
 conserved is written down.** Movement is a swap of whole cells, conduction
-is a clamped symmetric pairwise transfer, and a phase change is an algebraic
-rewrite that holds a cell's energy fixed across the material switch. None of
-those can gain or lose a gram or a joule.
+is a clamped symmetric pairwise transfer, a phase change is an algebraic
+rewrite that holds a cell's energy fixed across the material switch, and a
+reaction is the same rewrite over a touching pair. None of those can gain or
+lose a gram or a joule.
+
+Mass is not the only thing that has to add up, though, and *volume* is the
+one the grid makes hard: one material per cell means a gram of water and the
+thirteen hundred cells' worth of steam it boils into have to take turns
+occupying the same amount of space. Two rules keep that honest — `gas::
+expand`, where an over-pressured vapour shoves a lighter gas aside and takes
+the room, and `physics::coalesce_liquids`, where a partly-empty liquid cell
+pours into a neighbour and hands the space back to the atmosphere. Both are
+built out of transfers that already conserve, so neither is an exception to
+the paragraph above.
 
 Two things are allowed to break that, and both go through the same ledger:
 gnome magic (paid for in Gin) and the terrarium's declared hot/cold boundary
@@ -82,8 +93,8 @@ live. `residual_mass_g` in that output is the whole argument in one number.
 | --- | --- |
 | `src/material.rs` | Materials, phase transitions and reactions as data; enthalpy offsets derived, not declared |
 | `src/world.rs` | Cells with mass, temperature and latent progress; the magic ledger |
-| `src/physics.rs` | Movement, buoyancy, hydrostatic levelling, conduction, phase change |
-| `src/gas.rs` | Gas pressure (`P = m·R·T`), pressure-driven diffusion and bulk flow |
+| `src/physics.rs` | Movement, buoyancy, hydrostatic levelling, liquid coalescence, conduction, phase change |
+| `src/gas.rs` | Gas pressure (`P = m·R·T`), pressure-driven diffusion, expansion and bulk flow |
 | `src/chemistry.rs` | Reactions between touching cells: mashing, combustion |
 | `src/chamber.rs` | The gas demonstration room, its bottle, vent and scrubber |
 | `src/gnome.rs` | Gin economy, the ethereal layer, rescue, foraging, drinking, ethereal pipes |

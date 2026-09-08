@@ -197,6 +197,14 @@ pub fn gnome_terrarium(width: usize, height: usize) -> Terrarium {
             world.fill(GridIndex::new(i, SHELL + 4), t::JUNIPER, 291.0);
         }
     }
+    // ...and a stone shelf over them. Lifting the bushes out of the pool
+    // was not enough once the gas work let steam actually fill the jar and
+    // rain back down: warm rain landing on a bush ferments it just as well
+    // as a pool does, and over 8000 steps every bush went that way and the
+    // colony's Gin supply with it. Rain does not fall through rock.
+    for i in plinth_from - 1..w - SHELL {
+        world.fill(GridIndex::new(i, SHELL + 5), t::STONE, 291.0);
+    }
 
     world.rebaseline();
 

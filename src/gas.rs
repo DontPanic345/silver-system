@@ -317,9 +317,157 @@ pub fn advect(world: &mut World) {
     }
 }
 
-/// Both gas rules, in the order `physics::step` runs them.
+/// How many times its neighbour's pressure a parcel must hold before it
+/// will force its way into that neighbour's cell rather than merely swap
+/// with it. Comfortably above anything a settled atmosphere or a
+/// rate-limited vent produces, so ordinary jostling never triggers it.
+const EXPANSION_RATIO: Scalar = 3.0;
+
+/// Expansion: a wildly over-pressured gas shoves a lighter one aside and
+/// takes the space.
+///
+/// This is the rule that stops "one material per cell" from being a lie
+/// about volume. Boiling a cell of water produces a cell of steam holding
+/// the same gram of mass — which is thirteen hundred atmospheres, because a
+/// gram of steam at room pressure would fill thirteen hundred cells. Until
+/// now that pocket had nowhere to go: [`diffuse`] only moves mass between
+/// cells of the *same* gas, and the neighbours were air. So the terrarium's
+/// boiled pool sat welded to the ceiling as a band of ultra-dense steam,
+/// visibly a solid white lid rather than a vapour filling a jar, and no
+/// amount of cooling could rain it back down because it was never anywhere
+/// near the cold roof.
+///
+/// The move is a three-cell one, and every part of it is an operation that
+/// already conserves:
+///
+/// 1. The victim cell's own mass is pushed into a neighbour of its own
+///    species — ordinary same-gas transfer, which is what [`move_gas`] is.
+/// 2. That leaves the victim holding nothing. A cell with no mass has no
+///    energy either, whatever it is labelled, so relabelling it as the
+///    expanding species costs nothing and can be done outright.
+/// 3. The expanding cell then hands over half its mass, again through
+///    [`move_gas`].
+///
+/// So the pocket halves its pressure per step per direction it can find
+/// room in, and a boiled cell reaches room pressure in a dozen steps
+/// instead of never. What it still is *not* is interdiffusion: the two
+/// gases never share a cell, they take turns occupying it. A dilute gas
+/// still cannot dissolve into another one, and partial pressures still do
+/// not exist. This makes bulk expansion right; mixing remains absent.
+pub fn expand(world: &mut World) {
+    let (w, h) = (world.width() as i32, world.height() as i32);
+    let mut touched = vec![false; (w * h) as usize];
+
+    for j in 0..h {
+        for i in 0..w {
+            let p = world.linear_index(GridIndex::new(i, j));
+            if touched[p] || !is_movable_gas(world, p) {
+                continue;
+            }
+            let here = pressure_at(world, p);
+            if here <= 0.0 || world.cell_at(p).mass <= 0.0 {
+                continue;
+            }
+            for n in [
+                GridIndex::new(i - 1, j),
+                GridIndex::new(i + 1, j),
+                GridIndex::new(i, j - 1),
+                GridIndex::new(i, j + 1),
+            ] {
+                if !world.in_bounds(n) {
+                    continue;
+                }
+                let q = world.linear_index(n);
+                if touched[q]
+                    || !is_movable_gas(world, q)
+                    || world.cell_at(q).material == world.cell_at(p).material
+                {
+                    continue;
+                }
+                // Climbing costs the same hydrostatic head advection pays —
+                // see `LIFT`. Expansion is a stronger move than a swap, so
+                // it must not be a way around the rule that keeps a heavy
+                // gas on the floor.
+                let lift = if n.j > j {
+                    LIFT * (world.material_of(p).density - world.material_of(q).density).max(0.0)
+                } else {
+                    0.0
+                };
+                if here <= (pressure_at(world, q) + lift) * EXPANSION_RATIO {
+                    continue;
+                }
+                let Some(r) = somewhere_to_push(world, q, p, &touched) else {
+                    continue;
+                };
+
+                let victim = world.cell_at(q);
+                move_gas(world, q, r, victim.mass);
+                // The victim is empty now, so it carries no energy and can
+                // be relabelled outright. It takes the expanding cell's
+                // temperature and latent progress so the transfer below is
+                // between two cells that agree about both.
+                let source = world.cell_at(p);
+                let mut vacated = world.cell_at(q);
+                vacated.material = source.material;
+                vacated.mass = 0.0;
+                vacated.temperature = source.temperature;
+                vacated.progress = source.progress;
+                vacated.pending = source.pending;
+                world.set_cell_at(q, vacated);
+                move_gas(world, p, q, source.mass * 0.5);
+
+                touched[p] = true;
+                touched[q] = true;
+                touched[r] = true;
+                break;
+            }
+        }
+    }
+}
+
+/// A neighbour of `victim` that its mass can be handed to: the same gas, at
+/// the same point in the same transition, untouched this pass, and not the
+/// cell doing the shoving. Lowest pressure first, so the displaced gas goes
+/// where there is most room for it.
+fn somewhere_to_push(
+    world: &World,
+    victim: usize,
+    pusher: usize,
+    touched: &[bool],
+) -> Option<usize> {
+    let w = world.width() as i32;
+    let (i, j) = ((victim as i32) % w, (victim as i32) / w);
+    let mut best: Option<(usize, Scalar)> = None;
+    for n in [
+        GridIndex::new(i - 1, j),
+        GridIndex::new(i + 1, j),
+        GridIndex::new(i, j - 1),
+        GridIndex::new(i, j + 1),
+    ] {
+        if !world.in_bounds(n) {
+            continue;
+        }
+        let r = world.linear_index(n);
+        if r == pusher || touched[r] || !is_movable_gas(world, r) {
+            continue;
+        }
+        if world.cell_at(r).material != world.cell_at(victim).material
+            || !same_transition(world, r, victim)
+        {
+            continue;
+        }
+        let pressure = pressure_at(world, r);
+        if best.is_none_or(|(_, lowest)| pressure < lowest) {
+            best = Some((r, pressure));
+        }
+    }
+    best.map(|(r, _)| r)
+}
+
+/// The gas rules, in the order `physics::step` runs them.
 pub fn step(world: &mut World, dt: Scalar) {
     diffuse(world, dt);
+    expand(world);
     advect(world);
 }
 
@@ -574,6 +722,75 @@ mod tests {
         assert!(
             w.cell(top).mass < heavy,
             "the heavy parcel should have started falling"
+        );
+    }
+    /// The rule `expand` exists for: a cell of vapour that has just boiled
+    /// holds a whole gram of gas, which is over a thousand atmospheres,
+    /// and its neighbours are a different species so `diffuse` cannot
+    /// touch it. It must spread out into the room, and the room's own air
+    /// must end up somewhere, and neither total may move.
+    #[test]
+    fn a_boiled_pocket_expands_into_the_room_it_is_let_into() {
+        let mut w = air_world(16, 16);
+        // One cell holding a gram of steam: what boiling a cell of water
+        // actually produces.
+        let hot = Cell {
+            material: t::STEAM,
+            mass: 1.0,
+            temperature: 380.0,
+            progress: 0.0,
+            pending: crate::world::NO_PENDING,
+            flow_dir: 0,
+        };
+        w.set_cell(GridIndex::new(8, 8), hot);
+        w.rebaseline();
+        let (m0, e0) = (w.total_mass(), w.total_energy());
+        let before = pressure(&w, GridIndex::new(8, 8));
+
+        for _ in 0..60 {
+            expand(&mut w);
+            diffuse(&mut w, 0.05);
+        }
+
+        let cells = w.count_of(t::STEAM);
+        assert!(
+            cells > 40,
+            "a gram of steam should fill a large part of the room, got {cells} cells"
+        );
+        let (lo, hi) = pressure_range_of(&w, t::STEAM).expect("steam");
+        assert!(
+            hi < before * 0.05,
+            "the pocket should have relaxed: {before} -> {hi} (lowest {lo})"
+        );
+        assert!((w.total_mass() - m0).abs() / m0 < 1e-5, "mass moved");
+        assert!(
+            (w.total_energy() - e0).abs() / e0.abs() < 1e-5,
+            "energy moved: {e0} -> {}",
+            w.total_energy()
+        );
+    }
+
+    /// ...and it must not be a way for a heavy gas to climb. A settled CO2
+    /// layer is at the same pressure as the air above it, nowhere near the
+    /// margin expansion needs, so it stays where it is.
+    #[test]
+    fn a_settled_heavy_layer_does_not_expand_upward() {
+        let mut w = air_world(12, 12);
+        for i in 0..12 {
+            for j in 0..3 {
+                w.fill(GridIndex::new(i, j), t::CO2, 291.0);
+            }
+        }
+        w.rebaseline();
+        let before = mean_height_of(&w, t::CO2).expect("co2");
+        for _ in 0..200 {
+            expand(&mut w);
+            diffuse(&mut w, 0.05);
+        }
+        let after = mean_height_of(&w, t::CO2).expect("co2");
+        assert!(
+            (after - before).abs() < 0.5,
+            "the layer drifted from {before} to {after}"
         );
     }
 }

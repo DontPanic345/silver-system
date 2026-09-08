@@ -352,11 +352,17 @@ impl Colony {
 
         if drowning {
             // Submerged in the drink is a different problem from submerged
-            // in the pool: drinking the cell you are stuck in both refills
-            // the flask and clears the obstruction, and costs nothing.
-            // Tried before the gasp so a gnome up to its neck in gin does
-            // the obvious thing.
-            if self.drink_or_forage(world, idx, pos, cell.temperature) {
+            // in the pool: drinking the cell you are *standing in* both
+            // refills the flask and clears the obstruction, and costs
+            // nothing. Tried before the gasp so a gnome up to its neck in
+            // gin does the obvious thing.
+            //
+            // Strictly its own cell, and not the wider reach a thirsty
+            // gnome has: a gnome that drank from the puddle beside it every
+            // time it ran out of breath emptied a working still as fast as
+            // the still could fill it, flask long since full, purely
+            // because it happened to be standing in the receiver.
+            if world.material_at(pos) == t::GIN && self.drink(world, idx, pos, cell.temperature) {
                 return;
             }
             // A cheap Gin-powered gasp: replace the cell you are stuck in
@@ -392,10 +398,10 @@ impl Colony {
         let goal = self.walk_direction(world, idx);
         let ahead = GridIndex::new(pos.i + goal as i32, pos.j);
         let step_up = GridIndex::new(pos.i + goal as i32, pos.j + 1);
-        if world.in_bounds(ahead) && self.is_walkable(world, ahead) {
+        if world.in_bounds(ahead) && self.is_steppable(world, ahead) {
             self.gnomes[idx].pos = ahead;
             self.gnomes[idx].last_act = Act::Walked;
-        } else if world.in_bounds(step_up) && self.is_walkable(world, step_up) {
+        } else if world.in_bounds(step_up) && self.is_steppable(world, step_up) {
             self.gnomes[idx].pos = step_up;
             self.gnomes[idx].last_act = Act::Walked;
         } else {
@@ -424,12 +430,7 @@ impl Colony {
         // floor, which is where a gnome stands — so its own cell is part of
         // the search, unlike a bush, which it has to stand next to.
         if let Some(cup) = self.find_within_reach(world, pos, t::GIN) {
-            let held = world.cell(cup).mass;
-            if held > 0.0 {
-                world.conjure_mass(cup, t::GIN, -held, temperature);
-                let g = &mut self.gnomes[idx];
-                g.gin = (g.gin + held * GIN_PER_GRAM_DRUNK).min(MAX_GIN);
-                g.last_act = Act::Drank;
+            if self.drink(world, idx, cup, temperature) {
                 return true;
             }
         }
@@ -441,6 +442,26 @@ impl Colony {
             return true;
         }
         false
+    }
+
+    /// Drinks the cell of gin at `cup`. The matter leaves the world, so it
+    /// goes on the ledger like every other thing a gnome consumes.
+    fn drink(
+        &mut self,
+        world: &mut World,
+        idx: usize,
+        cup: GridIndex,
+        temperature: Scalar,
+    ) -> bool {
+        let held = world.cell(cup).mass;
+        if held <= 0.0 {
+            return false;
+        }
+        world.conjure_mass(cup, t::GIN, -held, temperature);
+        let g = &mut self.gnomes[idx];
+        g.gin = (g.gin + held * GIN_PER_GRAM_DRUNK).min(MAX_GIN);
+        g.last_act = Act::Drank;
+        true
     }
 
     /// Which way to walk: toward the nearest juniper when hungry, otherwise
@@ -502,11 +523,27 @@ impl Colony {
         world.charge_gin(gin as f64);
     }
 
-    /// A cell a gnome can stand in: not solid, and not something it would
-    /// sink through like a stone.
+    /// A cell a gnome can end up in: not solid, and not something it would
+    /// sink through like a stone. Used for falling and for the checks that
+    /// decide whether a gnome is supported.
     fn is_walkable(&self, world: &World, index: GridIndex) -> bool {
         let m = world.materials().get(world.material_at(index));
         m.mobility != Mobility::Static && m.phase != Phase::Solid
+    }
+
+    /// A cell a gnome will *choose* to walk into — the same test, minus
+    /// liquids.
+    ///
+    /// A gnome can still fall into a pool, and a rising pool can still close
+    /// over one, so the drowning and ethereal-layer mechanics are untouched;
+    /// what it will no longer do is stroll into one on purpose. That was
+    /// costing more than it looked: a gnome wading through the still's
+    /// receiver ran out of breath every forty steps and drank the puddle it
+    /// was standing in to clear it, flask long since full, emptying a
+    /// working still about as fast as it could fill.
+    fn is_steppable(&self, world: &World, index: GridIndex) -> bool {
+        self.is_walkable(world, index)
+            && world.materials().get(world.material_at(index)).phase != Phase::Liquid
     }
 
     /// The gnome's own cell, or one of its four neighbours, holding

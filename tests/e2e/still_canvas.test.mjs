@@ -174,6 +174,15 @@ async function main() {
           `after ${second.step} steps.`
       );
     }
+    // The pot is being worked through: every bush the hatch drops takes a
+    // cell of the charge with it when it ferments, so a still that is
+    // actually running draws its own charge down.
+    if (!(massOf(second, 'water') < massOf(first, 'water'))) {
+      fail(
+        `FAIL still_canvas: the charge was never drawn down ` +
+          `(${massOf(first, 'water')} g -> ${massOf(second, 'water')} g of water).`
+      );
+    }
     const gin = massOf(second, 'gin');
     if (!(gin > 0.5)) {
       fail(`FAIL still_canvas: the still yielded ${gin} g of gin after ${second.step} steps.`);

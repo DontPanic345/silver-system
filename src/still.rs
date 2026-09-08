@@ -41,7 +41,7 @@
 //! [`World::conjure_energy`]: crate::world::World::conjure_energy
 
 use crate::gnome::{Colony, Gnome};
-use crate::material::{terrarium as t, MaterialTable};
+use crate::material::{terrarium as t, MaterialTable, Phase};
 use crate::math::{GridIndex, Scalar};
 use crate::physics;
 use crate::terrarium::Thermostat;
@@ -75,6 +75,15 @@ const CHARGE_ROWS: i32 = 5;
 /// The temperature the pot is charged at — already past mashing
 /// temperature, so fermentation starts on the first step.
 const CHARGE_K: Scalar = 320.0;
+/// How often the botanist's hatch drops a fresh bush into the pot.
+///
+/// Without it the scenario is a single batch: the ten bushes it is charged
+/// with ferment on the first step, run through the still over a couple of
+/// thousand steps, and then it is a warm pot of water with two full gnomes
+/// beside it forever. A hatch makes it a *process*, which is the thing
+/// actually worth showing — and it is a declared hole in the books like
+/// every other one here, so the conservation figures still balance.
+const HOPPER_PERIOD: u64 = 200;
 
 /// A runnable still: the world, the gnomes waiting on the receiver, and the
 /// two declared thermal boundaries that drive the whole thing.
@@ -92,9 +101,37 @@ impl Still {
         for th in &self.thermostats {
             th.apply(&mut self.world);
         }
+        if self.steps.is_multiple_of(HOPPER_PERIOD) {
+            self.charge_botanicals();
+        }
         physics::step(&mut self.world, dt);
         self.colony.update(&mut self.world);
         self.steps += 1;
+    }
+
+    /// Drops one bush into the pot, moving along the floor so successive
+    /// charges do not land on top of each other.
+    ///
+    /// It replaces a cell of whatever liquid is standing there, and
+    /// [`World::conjure_mass`] books both sides of that swap — so "this pot
+    /// is being fed from outside" is a figure in the ledger rather than an
+    /// unexplained appearance of matter, exactly like the terrarium's vent
+    /// and the gas chamber's scrubber.
+    ///
+    /// [`World::conjure_mass`]: crate::world::World::conjure_mass
+    fn charge_botanicals(&mut self) {
+        let span = (POT_WALL - 3).max(1);
+        let n = (self.steps / HOPPER_PERIOD) as i32;
+        let at = GridIndex::new(2 + (n * 5).rem_euclid(span), 1);
+        if !self.world.in_bounds(at) {
+            return;
+        }
+        if self.world.materials().get(self.world.material_at(at)).phase != Phase::Liquid {
+            return;
+        }
+        let temperature = self.world.cell(at).temperature;
+        let bush = self.world.materials().get(t::JUNIPER).density;
+        self.world.conjure_mass(at, t::JUNIPER, bush, temperature);
     }
 
     /// Grams of gin standing in the world right now — the run's yield, and
@@ -152,11 +189,23 @@ pub fn still(width: usize, height: usize) -> Still {
     let mut thermostats = Vec::new();
     for i in 1..POT_WALL {
         thermostats.push(Thermostat::new(GridIndex::new(i, 0), HOB_K));
+        // The pot is lagged, not just heated from below. Without it the
+        // vapour that fills the pot's head space touches a cold ceiling,
+        // condenses there and rains straight back into the wash — real
+        // reflux, and measured at three times as much gin ending up in the
+        // pot as in the receiver. A still keeps its column hot for exactly
+        // this reason; the only cold thing in the room should be the
+        // condenser.
+        thermostats.push(Thermostat::new(GridIndex::new(i, h - 1), HOB_K));
+    }
+    for j in 1..h - 1 {
+        thermostats.push(Thermostat::new(GridIndex::new(0, j), HOB_K));
     }
     for i in POT_WALL + 1..w - 1 {
         thermostats.push(Thermostat::new(GridIndex::new(i, 0), CONDENSER_K));
+        thermostats.push(Thermostat::new(GridIndex::new(i, h - 1), CONDENSER_K));
     }
-    for j in 1..h / 2 {
+    for j in 1..h - 1 {
         thermostats.push(Thermostat::new(GridIndex::new(w - 1, j), CONDENSER_K));
     }
 

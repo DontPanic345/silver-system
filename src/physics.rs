@@ -54,6 +54,7 @@ use std::collections::HashMap;
 pub fn step(world: &mut World, dt: Scalar) {
     apply_gravity(world);
     equalise_liquid_levels(world);
+    coalesce_liquids(world);
     crate::gas::step(world, dt);
     conduct_heat(world, dt);
     apply_phase_changes(world);
@@ -363,6 +364,140 @@ pub fn equalise_liquid_levels(world: &mut World) {
     for (src, dst) in pairs {
         world.swap_cells(src, dst);
     }
+}
+
+/// Fraction of its material's nominal density a liquid cell must be below
+/// before it counts as partly empty and starts trying to merge.
+const LIQUID_FULL: Scalar = 0.999;
+
+/// Coalescence: a partly-full liquid cell at a free surface pours itself
+/// into a neighbour with room, and the atmosphere fills the space it
+/// leaves.
+///
+/// This is the exact mirror of `gas::expand`, and it exists for the mirror
+/// reason. A cell of vapour holds however many grams are packed into it, so
+/// when it condenses, the liquid cell it becomes inherits that mass — and a
+/// cell of steam at ordinary room pressure holds about a thousandth of what
+/// a cell of water does. Condensation therefore used to produce *volume out
+/// of nothing*: a jar's worth of vapour raining out as several hundred cells
+/// of water, each one almost empty, which then behaved like water because
+/// nothing looks at how full a liquid cell is. The terrarium piled that
+/// into a blue dune halfway up the jar. Mass was conserved throughout, and
+/// the picture was nonsense — volume was not.
+///
+/// So a liquid cell that is not full looks for a same-material neighbour
+/// with room and empties into it, preferring downhill. When it succeeds
+/// completely, it stops being liquid at all: a cell with no mass carries no
+/// energy either, so it can be relabelled outright as whichever gas is next
+/// to it, which then fills the space by ordinary diffusion. Several hundred
+/// nearly-empty cells collapse into a handful of full ones and a pocket of
+/// air, which is what condensing a vapour actually does.
+///
+/// Requiring an adjacent gas cell is what keeps this honest: only a free
+/// surface can collapse, so the rule can never punch a void into the middle
+/// of a body of liquid, and it can never move a cell it has nowhere to put.
+pub fn coalesce_liquids(world: &mut World) {
+    let (w, h) = (world.width() as i32, world.height() as i32);
+    for j in 0..h {
+        for i in 0..w {
+            let here = GridIndex::new(i, j);
+            let p = world.linear_index(here);
+            let material = world.material_of(p);
+            if material.phase != crate::material::Phase::Liquid
+                || material.mobility == Mobility::Static
+            {
+                continue;
+            }
+            let nominal = material.density;
+            let cell = world.cell_at(p);
+            if nominal <= 0.0 || cell.mass >= nominal * LIQUID_FULL || cell.mass <= 0.0 {
+                continue;
+            }
+            let Some(atmosphere) = adjacent_gas(world, i, j) else {
+                continue;
+            };
+            // Downhill first, then across, then up: a liquid draining into
+            // its neighbours drains the way gravity points.
+            for n in [
+                GridIndex::new(i, j - 1),
+                GridIndex::new(i - 1, j),
+                GridIndex::new(i + 1, j),
+                GridIndex::new(i, j + 1),
+            ] {
+                if !world.in_bounds(n) {
+                    continue;
+                }
+                let q = world.linear_index(n);
+                let (source, dest) = (world.cell_at(p), world.cell_at(q));
+                if dest.material != source.material || dest.pending != source.pending {
+                    continue;
+                }
+                let room = nominal - dest.mass;
+                let moved = source.mass.min(room);
+                if moved <= 0.0 {
+                    continue;
+                }
+                pour(world, p, q, moved);
+                if world.cell_at(p).mass <= 0.0 {
+                    // Empty, so worth nothing, so free to become the gas
+                    // that is already touching it.
+                    let filler = world.cell_at(atmosphere);
+                    let mut vacated = world.cell_at(p);
+                    vacated.material = filler.material;
+                    vacated.mass = 0.0;
+                    vacated.temperature = filler.temperature;
+                    vacated.progress = 0.0;
+                    vacated.pending = NO_PENDING;
+                    vacated.flow_dir = 0;
+                    world.set_cell_at(p, vacated);
+                }
+                break;
+            }
+        }
+    }
+}
+
+/// A neighbouring cell holding a gas — the atmosphere that would rush into
+/// this cell if it emptied.
+fn adjacent_gas(world: &World, i: i32, j: i32) -> Option<usize> {
+    for n in [
+        GridIndex::new(i, j + 1),
+        GridIndex::new(i - 1, j),
+        GridIndex::new(i + 1, j),
+        GridIndex::new(i, j - 1),
+    ] {
+        if !world.in_bounds(n) {
+            continue;
+        }
+        let q = world.linear_index(n);
+        let m = world.material_of(q);
+        if m.phase == crate::material::Phase::Gas && m.gas_constant > 0.0 {
+            return Some(q);
+        }
+    }
+    None
+}
+
+/// Moves `grams` of liquid from one cell to another of the same material,
+/// mixing the destination's temperature and latent progress by mass.
+///
+/// Identical arithmetic to `gas::move_gas`, and conserving for the identical
+/// reason: the two cells hold the same material, so energy is
+/// `mass·(c·T + L + progress)` on both sides and both mixes are linear in
+/// mass.
+fn pour(world: &mut World, from: usize, to: usize, grams: Scalar) {
+    let mut source = world.cell_at(from);
+    let mut dest = world.cell_at(to);
+    let new_mass = dest.mass + grams;
+    if new_mass <= 0.0 {
+        return;
+    }
+    dest.temperature = (dest.mass * dest.temperature + grams * source.temperature) / new_mass;
+    dest.progress = (dest.mass * dest.progress + grams * source.progress) / new_mass;
+    dest.mass = new_mass;
+    source.mass -= grams;
+    world.set_cell_at(from, source);
+    world.set_cell_at(to, dest);
 }
 
 /// Whether the cell at `(i, j)` is walled in on both sides — the proxy this
@@ -850,5 +985,68 @@ mod tests {
         let total: usize = t::ALL.iter().map(|&m| w.count_of(m)).sum();
         assert_eq!(total, cells, "every cell must still hold some material");
         assert_eq!(w.count_of(t::WATER), 18, "water may not escape the box");
+    }
+
+    // --- Coalescence ---
+
+    /// The rule `coalesce_liquids` exists for: condensing a jar's worth of
+    /// vapour used to produce hundreds of nearly-empty water cells, which
+    /// behaved like water because nothing looked at how full they were, and
+    /// piled into a dune. They must collapse into a handful of full cells
+    /// and give the space back to the atmosphere.
+    #[test]
+    fn a_drizzle_of_nearly_empty_cells_collapses_into_a_few_full_ones() {
+        let mut w = air_world(10, 10);
+        let drizzle = Cell {
+            material: t::WATER,
+            mass: 0.05,
+            temperature: 300.0,
+            progress: 0.0,
+            pending: NO_PENDING,
+            flow_dir: 0,
+        };
+        for i in 0..10 {
+            for j in 0..4 {
+                w.set_cell(GridIndex::new(i, j), drizzle);
+            }
+        }
+        w.rebaseline();
+        let (m0, e0) = (w.total_mass(), w.total_energy());
+        let before = w.count_of(t::WATER);
+
+        run(&mut w, 200, 0.05);
+
+        let after = w.count_of(t::WATER);
+        assert!(
+            after * 4 < before,
+            "40 cells holding 2 g between them should collapse to a couple, \
+             went {before} -> {after}:\n{}",
+            crate::report::ascii_map(&w)
+        );
+        assert!(after > 0, "the water vanished entirely");
+        assert!((w.total_mass() - m0).abs() / m0 < 1e-5, "mass moved");
+        assert!(
+            (w.total_energy() - e0).abs() / e0.abs() < 1e-5,
+            "energy moved: {e0} -> {}",
+            w.total_energy()
+        );
+    }
+
+    /// ...and a pool that is already full of full cells is left alone, so
+    /// the rule cannot quietly shrink an ordinary body of water.
+    #[test]
+    fn a_full_pool_is_left_alone() {
+        let mut w = air_world(8, 8);
+        for i in 1..7 {
+            for j in 0..3 {
+                w.fill(GridIndex::new(i, j), t::WATER, 295.0);
+            }
+        }
+        w.rebaseline();
+        let before = w.count_of(t::WATER);
+        for _ in 0..50 {
+            coalesce_liquids(&mut w);
+        }
+        assert_eq!(w.count_of(t::WATER), before, "a full pool lost cells");
     }
 }

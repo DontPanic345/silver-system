@@ -255,3 +255,92 @@ or CO₂ production, and brewing.
 _Weekly usage was only 3%, thats not abitious enough. Targeting about ~10% for the rest of this week then aiming to track 14% per run after the next weekly reset. Will adjust effort level.
 I'm going to refrain from providing feedback at this stage, the "picked from shortlist" is working as expected. It's creative expression, you wouldn't interrupt the artist before they have finished the work. I will analyise the transcripts and aim to provide the feedback that the Agent needs, not the feedback I want to give. I'm also not very happy with the way NIGHTLY.md reads, too prescriptive, an agent **is** allowed to reset a previous nights work - that all part of iteration.
 NORTH_STARS.md isn't how I want it either, it was infact, not "written by the human". The distillation is good enough for now._
+
+
+**Night 3/7 — 2026-09-08 — Opus 5/high — Chemistry, and a still that makes
+the Gin.** Chose the chemistry tier, and used it for brewing. Three reasons
+over the alternatives. `NORTH_STARS.md` #2's stated content order is
+physics → chemistry → biology → game layer, and nights 1–2 finished the
+physics tier's headline items while nothing of chemistry existed. #4 names
+brewing and distilling as *core to the whole thing working, not flavour*,
+and Gin — the resource every sanctioned exception to conservation is paid
+for in — was still coming out of raw berries, which is the one thing the
+capstone says it should not. And chemistry unblocks more than anything else
+on the shortlist: combustion, respiration, the carbon cycle, steel by more
+than one route are all rows in the same table. The alternatives considered
+were gas mixtures with real partial pressures (a representational rewrite
+with no game-layer payoff — still deferred, see below), and the book/
+knowledge economy (pure game layer, skips the tier entirely).
+
+Built: `src/chemistry.rs`, reactions between touching cells, conserving by
+construction — each cell keeps its own mass, and the pair's shared
+temperature afterwards is *solved* from its total energy before, so the heat
+of a reaction is emergent rather than applied. `MaterialTable::
+with_transitions` became `with_chemistry`, one relaxation deriving every
+enthalpy offset from transitions and reaction arms together, so a material
+in both cannot end up with two answers. Then the payoff: `src/still.rs` and
+`www/still.html` — juniper in a warm pot ferments to wash (one row of the
+reaction table), wash boils at 351.5 K while the water beside it boils at
+373.15 K (two ordinary phase transitions, the 22 K gap being the whole of
+distilling), the vapour crawls sideways through a gap in the pot wall
+because ethanol vapour is genuinely denser than air, and it condenses to gin
+on a cold floor where two thirsty gnomes drink it. Nothing in the code names
+a brewing mechanic. A ledgered hatch keeps feeding botanicals so it runs as
+a process rather than one batch.
+
+Four findings worth keeping, each recorded where it bites:
+
+1. *A vapour sitting at its own boiling point was invisible to every gas
+   rule.* `is_mobile_gas` excluded cells mid-phase-change, which is
+   permanently true of anything at its transition temperature. The still's
+   entire charge boiled off and then lay on the wash unable to move. Only
+   partial-mass transfer ever needed the check.
+2. *"A heavy gas never moves up" was too strong by three orders of
+   magnitude.* Night 2's blanket veto also blocks a six-hundred-atmosphere
+   parcel, which is why kettles whistle. It is now a hydrostatic price
+   (`LIFT × Δρ`), and the settled CO₂ layer it was written for still does
+   not levitate.
+3. *Mass conservation does not imply volume conservation, and the grid makes
+   volume the hard one.* Boiling a cell of water gives a cell of steam at
+   1300 atmospheres that could not expand, because the neighbours were a
+   different species: the terrarium's boiled pool sat welded to the ceiling
+   as a white lid. Fixing that (`gas::expand`, a three-cell shove built from
+   transfers that already conserve) immediately exposed the mirror problem —
+   condensation making *hundreds* of nearly-empty water cells, which behave
+   like water because nothing looked at how full they were, and pile into a
+   dune. `physics::coalesce_liquids` is the other half. Neither is optional;
+   each without the other is worse than neither.
+4. *The scenario has to state what the chemistry now requires.* Juniper
+   standing in the terrarium's warm pool ferments — correctly — so the
+   colony's Gin supply quietly turned into wash. It is now on a plinth under
+   a stone shelf. Two similar ones: a still needs lagging or its head space
+   refluxes gin straight back into the pot, and a gnome that wades into the
+   receiver drinks the puddle it is standing in every time it runs out of
+   breath, so gnomes no longer walk into liquids voluntarily (they can still
+   fall in and still be flooded).
+
+Verified: 136 lib tests, clippy and rustfmt clean, all six e2e checks green,
+including a new one that runs the real page for nine wall-clock seconds and
+reads canvas pixels — the receiver's floor goes from 25.7 to 157.9 mean
+brightness against 29.6 at head height, with 11 g of gin and the water
+charge unboiled. I also *looked at* all three pages as rendered PNGs rather
+than trusting the numbers: the still reads correctly (vapour filling the
+pot, spilling through the lyne, gin pooling in the receiver) and the
+terrarium now reads as rain falling through a steam-filled jar instead of
+the blue dune the expansion rule first produced. What I did **not** verify:
+the terrarium over runs longer than 8000 steps (its bushes still ferment
+eventually, and its jar settles near 405 K rather than anything cool); the
+still past ~9500 steps, when the pot must run dry; and any of it at a
+different grid size. One honest number: the terrarium's *relative* energy
+residual now reaches ~9e-6 over 8000 steps where it used to be 1e-8 — that
+is 3 J of `f32` rounding against 112 kJ of ledgered boundary flux, and it
+grows sub-linearly (2.9 J at 4000, 3.2 J at 8000), so it reads as rounding
+rather than a leak, but it is close enough to the tests' 1e-5 bar to be
+worth watching.
+
+Deliberately left undone: gas *mixtures* — two species still cannot share a
+cell, so partial pressures do not exist and a dilute gas cannot dissolve
+into another one; bulk expansion is now right, molecular mixing is still
+absent, and that is the single biggest remaining lie in the physics. Also
+untouched: gnome respiration and CO₂ production, the book-copying knowledge
+economy, the Gnome Grandmother, farming, and buildings.
