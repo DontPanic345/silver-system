@@ -141,6 +141,10 @@ pub fn ascii_map(world: &World) -> String {
                 "lava" => '@',
                 "juniper" => 'Y',
                 "co2" => 'c',
+                "wash" => 'm',
+                "spirit" => 'v',
+                "gin" => 'g',
+                "charcoal" => 'x',
                 _ => '?',
             });
         }

@@ -153,11 +153,16 @@ pub fn gnome_terrarium(width: usize, height: usize) -> Terrarium {
         }
     }
 
-    // A pool of water sitting on the sand beside the vent.
+    // A pool of water sitting on the sand beside the vent, stopping short
+    // of the far wall to leave room for the juniper plinth below.
     let pool_from = vent_to + 1;
-    let pool_to = w - SHELL - 2;
+    let pool_to = w - SHELL - 7;
     for i in pool_from..pool_to {
-        for j in SHELL + 2..SHELL + 5 {
+        // Four courses deep rather than three: the plinth below took five
+        // columns off the pool's length, and the pool is also the jar's
+        // thermal ballast — with less of it the vent boils the jar dry
+        // sooner and the gnomes start cooking. Depth buys that back.
+        for j in SHELL + 2..SHELL + 6 {
             world.fill(GridIndex::new(i, j), t::WATER, 300.0);
         }
     }
@@ -169,11 +174,27 @@ pub fn gnome_terrarium(width: usize, height: usize) -> Terrarium {
     // lid a little above freezing condenses steam into liquid water, which
     // falls — which is the half of the cycle worth having.
 
-    // Juniper on the sand: the colony's only Gin supply.
+    // Juniper on a raised plinth in the far corner: the colony's Gin
+    // supply, and deliberately *dry*.
+    //
+    // The bushes used to stand in the pool itself, which was fine while
+    // juniper had no chemistry. It is not fine now: warm water touching
+    // juniper ferments both into wash (see `src/chemistry.rs`), so a bush
+    // standing in a pool that the vent is busy heating is not a Gin supply,
+    // it is a mash tun that the colony did not ask for — measured over
+    // 4000 steps, every bush and most of the pool went that way. Two stone
+    // courses lift them clear of anything that can slosh, which is the
+    // scenario stating a requirement the chemistry now imposes rather than
+    // the chemistry being softened to suit the scenario.
+    let plinth_from = pool_to + 1;
+    for i in plinth_from..w - SHELL {
+        world.fill(GridIndex::new(i, SHELL + 2), t::STONE, 291.0);
+        world.fill(GridIndex::new(i, SHELL + 3), t::SAND, 291.0);
+    }
     for k in 0..4 {
-        let i = pool_from + 1 + k * 3;
-        if i < pool_to {
-            world.fill(GridIndex::new(i, SHELL + 2), t::JUNIPER, 291.0);
+        let i = plinth_from + k;
+        if i < w - SHELL {
+            world.fill(GridIndex::new(i, SHELL + 4), t::JUNIPER, 291.0);
         }
     }
 
@@ -196,8 +217,22 @@ pub fn gnome_terrarium(width: usize, height: usize) -> Terrarium {
     for i in vent_from..vent_to {
         thermostats.push(Thermostat::new(GridIndex::new(i, SHELL), VENT_K));
     }
+    // The cold side of the jar is its whole outer skin, not just the lid.
+    //
+    // It used to be one row across the ceiling, and that was not enough of
+    // a sink to balance a 950 K vent: the stone shell conducts, so the vent
+    // heated the walls, the walls heated the interior, and the jar settled
+    // *above* water's boiling point — measured at 431 K after 2000 steps
+    // and still climbing at 6000. The water cycle in a jar like that runs
+    // exactly once, boils the pool dry, and then there is nothing left to
+    // rain. A jar sitting on a table is surrounded by a room; this says so.
     for i in SHELL..w - SHELL {
         thermostats.push(Thermostat::new(GridIndex::new(i, h - SHELL), ROOF_K));
+        thermostats.push(Thermostat::new(GridIndex::new(i, h - 1), ROOF_K));
+    }
+    for j in SHELL..h - SHELL {
+        thermostats.push(Thermostat::new(GridIndex::new(0, j), ROOF_K));
+        thermostats.push(Thermostat::new(GridIndex::new(w - 1, j), ROOF_K));
     }
 
     Terrarium {

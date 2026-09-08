@@ -238,6 +238,91 @@ pub struct Transition {
     pub latent_heat: Scalar,
 }
 
+/// One participant's half of a [`Reaction`]: the cell holding `from`
+/// becomes `to`, keeping its own mass.
+///
+/// `heat` is the energy this half releases, in joules per gram of that
+/// cell's mass, measured at the reaction's threshold temperature. It is
+/// **optional**, and the distinction matters:
+///
+/// - `Some(q)` is a *declaration*: it pins `to`'s [`Material::latent_energy`]
+///   relative to `from`'s, exactly the way a [`Transition`]'s `latent_heat`
+///   does. Use it for the arm whose chemistry you are actually specifying —
+///   the fuel that burns, the botanical that ferments.
+/// - `None` means "whatever the rest of the table already implies". Use it
+///   when both materials' offsets are already fixed by other rules;
+///   declaring a number there would be redundant at best and, since the
+///   implied figure depends on both heat capacities and the threshold, wrong
+///   at worst.
+///
+/// Either way the *runtime* is unaffected: `src/chemistry.rs` conserves
+/// energy by solving the reacting pair's shared temperature from its total
+/// energy, so a reaction's heat is emergent, not applied. `heat` only
+/// decides what the enthalpy offsets are, and therefore how much heat that
+/// emergent solve produces.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Arm {
+    pub from: MaterialId,
+    pub to: MaterialId,
+    pub heat: Option<Scalar>,
+}
+
+impl Arm {
+    /// An arm whose enthalpy change is declared: `heat` J/g released.
+    pub fn releasing(from: MaterialId, to: MaterialId, heat: Scalar) -> Self {
+        Arm {
+            from,
+            to,
+            heat: Some(heat),
+        }
+    }
+
+    /// An arm whose enthalpy change is already implied by the rest of the
+    /// table — see [`Arm::heat`].
+    pub fn implied(from: MaterialId, to: MaterialId) -> Self {
+        Arm {
+            from,
+            to,
+            heat: None,
+        }
+    }
+}
+
+/// A data-driven chemical reaction between two touching cells: "when a cell
+/// of `subject.from` is next to a cell of `partner.from` and the pair is
+/// past `threshold_k`, they become `subject.to` and `partner.to`".
+///
+/// This is the chemistry tier of `NORTH_STARS.md` #2's stated ordering
+/// (physics → chemistry → biology → game layer), and it is deliberately the
+/// same *shape* as [`Transition`]: data in this file, behaviour in one
+/// generic pass (`src/chemistry.rs`), no material named anywhere in code.
+///
+/// ## What it does and does not model
+///
+/// Each cell keeps its own mass across the reaction, so mass is conserved
+/// per cell — stronger than the global invariant the rest of the crate
+/// promises. Energy is conserved per *pair*: the two cells' total energy is
+/// computed before, and the shared temperature after is solved from it.
+///
+/// What it therefore does **not** model is stoichiometry. A cell holds one
+/// material and one mass, so there is no way to say "two grams of this and
+/// one of that make three of the other"; a reaction says which materials a
+/// touching pair turns into, not in what proportion. Where a real
+/// proportion matters — a liquid boiling off into a vapour that occupies a
+/// thousand times the space — that belongs to the phase-change machinery,
+/// which does move mass between materials honestly, and the terrarium's
+/// distilling uses it for exactly that reason.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Reaction {
+    pub subject: Arm,
+    pub partner: Arm,
+    /// Temperature the reacting pair must be past, in kelvin.
+    pub threshold_k: Scalar,
+    /// Whether the reaction fires above the threshold (`Heating`) or below
+    /// it (`Cooling`) — the same convention [`Transition`] uses.
+    pub direction: Direction,
+}
+
 /// A newtype index into a [`MaterialTable`], distinct from a bare integer so
 /// a cell's material reference can't be silently confused with, say, a
 /// `GridIndex` coordinate or a raw array offset.
@@ -268,6 +353,7 @@ impl MaterialId {
 pub struct MaterialTable {
     materials: Vec<Material>,
     transitions: Vec<Transition>,
+    reactions: Vec<Reaction>,
 }
 
 impl MaterialTable {
@@ -280,17 +366,27 @@ impl MaterialTable {
         MaterialTable {
             materials,
             transitions: Vec::new(),
+            reactions: Vec::new(),
         }
     }
 
     /// Attaches this table's phase-transition rules and derives every
     /// material's [`Material::latent_energy`] offset from them.
     ///
+    /// Shorthand for [`MaterialTable::with_chemistry`] with no reactions.
+    pub fn with_transitions(self, transitions: Vec<Transition>) -> Self {
+        self.with_chemistry(transitions, Vec::new())
+    }
+
+    /// Attaches this table's phase transitions *and* its reactions, and
+    /// solves every material's [`Material::latent_energy`] offset from both
+    /// at once.
+    ///
     /// ## Why the offsets are derived rather than declared
     ///
     /// Total world energy is defined as `Σ mass * (c·T + latent_energy)`.
-    /// For a transition A → B at temperature `Θ` absorbing `L` J/g, that
-    /// definition only produces the right answer if
+    /// For a material change A → B at temperature `Θ` absorbing `L` J/g,
+    /// that definition only produces the right answer if
     ///
     /// ```text
     /// (c_B·Θ + L_B) - (c_A·Θ + L_A) == L
@@ -298,47 +394,116 @@ impl MaterialTable {
     ///
     /// i.e. `L_B == L_A + L + (c_A - c_B)·Θ`. Hand-written offsets satisfy
     /// that only by accident — the `(c_A - c_B)·Θ` term is easy to forget,
-    /// and forgetting it silently makes every melt or boil create or
+    /// and forgetting it silently makes every melt, boil or burn create or
     /// destroy energy. So the offsets are solved for here instead: one
-    /// material per connected component of the transition graph is pinned
+    /// material per connected component of the constraint graph is pinned
     /// at zero (an arbitrary but harmless choice, since only differences
     /// are ever observed) and the rest are propagated out from it.
     ///
-    /// Panics if two transitions imply contradictory offsets for the same
+    /// ## Why transitions and reactions share one solve
+    ///
+    /// The equation above does not care whether the material change was a
+    /// phase transition or half of a reaction — both are "A becomes B at Θ,
+    /// with this much enthalpy change". Solving them separately would let
+    /// the two disagree about a material they share (water is both the
+    /// thing that freezes and the thing that ferments), and the disagreement
+    /// would show up as energy quietly appearing every time a brewer's tun
+    /// warmed up. Fed to one relaxation, a contradiction is instead a panic
+    /// at table-construction time.
+    ///
+    /// A [`Reaction`] arm with no declared `heat` contributes no equation —
+    /// see [`Arm::heat`] — and an arm whose `from` and `to` are the same
+    /// material contributes none either, since it changes nothing.
+    ///
+    /// Panics if two rules imply contradictory offsets for the same
     /// material — that is a badly specified table, and it should be loud.
-    pub fn with_transitions(mut self, transitions: Vec<Transition>) -> Self {
+    pub fn with_chemistry(
+        mut self,
+        transitions: Vec<Transition>,
+        reactions: Vec<Reaction>,
+    ) -> Self {
         let n = self.materials.len();
-        let mut offset: Vec<Option<Scalar>> = vec![None; n];
         let capacity = |i: usize, materials: &[Material]| materials[i].heat_capacity;
 
+        // One constraint per declared material change: `offset[to] ==
+        // offset[from] + shift`. Both rule kinds reduce to this.
+        struct Constraint {
+            from: usize,
+            to: usize,
+            shift: Scalar,
+            source: &'static str,
+        }
+        let mut constraints: Vec<Constraint> = Vec::new();
+        let mut push = |from: MaterialId,
+                        to: MaterialId,
+                        absorbed: Scalar,
+                        threshold_k: Scalar,
+                        source: &'static str,
+                        materials: &[Material]| {
+            let (a, b) = (from.0 as usize, to.0 as usize);
+            if a == b {
+                return;
+            }
+            constraints.push(Constraint {
+                from: a,
+                to: b,
+                shift: absorbed + (capacity(a, materials) - capacity(b, materials)) * threshold_k,
+                source,
+            });
+        };
+        for tr in &transitions {
+            push(
+                tr.from,
+                tr.to,
+                tr.latent_heat,
+                tr.threshold_k,
+                "transition",
+                &self.materials,
+            );
+        }
+        for r in &reactions {
+            for arm in [r.subject, r.partner] {
+                // `heat` is energy released, the opposite sign to a
+                // transition's absorbed `latent_heat`.
+                if let Some(heat) = arm.heat {
+                    push(
+                        arm.from,
+                        arm.to,
+                        -heat,
+                        r.threshold_k,
+                        "reaction",
+                        &self.materials,
+                    );
+                }
+            }
+        }
+
+        let mut offset: Vec<Option<Scalar>> = vec![None; n];
         // Relaxation: propagate from whatever is already pinned, seeding a
         // fresh component at zero whenever a pass makes no progress.
         loop {
             let mut progressed = false;
-            for tr in &transitions {
-                let (a, b) = (tr.from.0 as usize, tr.to.0 as usize);
-                let shift = tr.latent_heat
-                    + (capacity(a, &self.materials) - capacity(b, &self.materials))
-                        * tr.threshold_k;
-                match (offset[a], offset[b]) {
+            for c in &constraints {
+                match (offset[c.from], offset[c.to]) {
                     (Some(la), None) => {
-                        offset[b] = Some(la + shift);
+                        offset[c.to] = Some(la + c.shift);
                         progressed = true;
                     }
                     (None, Some(lb)) => {
-                        offset[a] = Some(lb - shift);
+                        offset[c.from] = Some(lb - c.shift);
                         progressed = true;
                     }
                     (Some(la), Some(lb)) => {
                         assert!(
-                            (lb - (la + shift)).abs() <= 1e-2 * (1.0 + lb.abs()),
-                            "transition {:?} -> {:?} implies a latent-energy offset of {} for \
-                             material {}, but another transition already fixed it at {} — the \
-                             table's transitions contradict each other",
-                            tr.from,
-                            tr.to,
-                            la + shift,
-                            b,
+                            (lb - (la + c.shift)).abs() <= 1e-2 * (1.0 + lb.abs()),
+                            "{} {} -> {} implies a latent-energy offset of {} for material {}, \
+                             but another rule already fixed it at {} — the table's chemistry \
+                             contradicts itself",
+                            c.source,
+                            c.from,
+                            c.to,
+                            la + c.shift,
+                            c.to,
                             lb
                         );
                     }
@@ -347,11 +512,8 @@ impl MaterialTable {
             }
             if !progressed {
                 // Seed the next unresolved component, if any remains.
-                match transitions
-                    .iter()
-                    .find(|tr| offset[tr.from.0 as usize].is_none())
-                {
-                    Some(tr) => offset[tr.from.0 as usize] = Some(0.0),
+                match constraints.iter().find(|c| offset[c.from].is_none()) {
+                    Some(c) => offset[c.from] = Some(0.0),
                     None => break,
                 }
             }
@@ -363,7 +525,13 @@ impl MaterialTable {
             }
         }
         self.transitions = transitions;
+        self.reactions = reactions;
         self
+    }
+
+    /// This table's reaction rules — see [`Reaction`].
+    pub fn reactions(&self) -> &[Reaction] {
+        &self.reactions
     }
 
     /// This table's phase-transition rules — see [`Transition`].
@@ -450,9 +618,31 @@ impl MaterialTable {
         const L_FUSION: Scalar = 334.0;
         const L_VAPORISATION: Scalar = 2260.0;
         const L_ROCK_MELT: Scalar = 400.0;
+        // Ethanol's real latent heat of vaporisation and real boiling
+        // point. The boiling point is the load-bearing number in the whole
+        // brewing chain: it sits 22 K below water's, which is the only
+        // reason heating a tun separates anything at all.
+        const L_SPIRIT: Scalar = 846.0;
         const T_FREEZE: Scalar = 273.15;
         const T_BOIL: Scalar = 373.15;
+        const T_SPIRIT_BOIL: Scalar = 351.5;
         const T_ROCK_MELT: Scalar = 1500.0;
+        /// Warm enough for a tun to work: below this, juniper sitting in
+        /// water is just a wet bush.
+        const T_MASH: Scalar = 310.0;
+        /// Ignition point for a botanical.
+        const T_IGNITE: Scalar = 620.0;
+        /// Heat released burning a gram of juniper.
+        ///
+        /// A real dry botanical is nearer 16 000 J/g, and that figure is
+        /// wrong *here* for a stated reason: a burning cell has nowhere to
+        /// put its combustion gases, because one cell holds one material at
+        /// one volume. Real flame is ~1200 K because it expands and mixes;
+        /// an adiabatic cell that cannot do either would reach 16 000 K and
+        /// melt the jar it is in. So this is a tuned number, in the same
+        /// category as `conductivity` below and flagged the same way, chosen
+        /// to put a flame front around 1300 K.
+        const Q_BURN: Scalar = 700.0;
 
         // The gases' densities are *derived*, not chosen: each is the mass
         // of that gas which sits at one atmosphere at room temperature,
@@ -464,10 +654,17 @@ impl MaterialTable {
         const R_AIR: Scalar = 0.287;
         const R_STEAM: Scalar = 0.4615;
         const R_CO2: Scalar = 0.1889;
+        // Ethanol vapour: a heavier molecule than air (46 g/mol against
+        // 29), so a smaller specific gas constant, so — at the same
+        // pressure and temperature — a denser gas. That single number is
+        // why spirit vapour crawls sideways out of a still along the top of
+        // the wash instead of rising to the ceiling, and it is not a rule
+        // anyone wrote: it is 8.314/46.07.
+        const R_SPIRIT: Scalar = 0.1805;
         const RHO_AIR: Scalar = 0.0012;
         const P0: Scalar = RHO_AIR * R_AIR * T0;
 
-        let mut materials = vec![Material::new(0.0, 0.0, 0.0, 0.0, Phase::Gas, (0, 0, 0)); 9];
+        let mut materials = vec![Material::new(0.0, 0.0, 0.0, 0.0, Phase::Gas, (0, 0, 0)); 13];
         materials[t::AIR.0 as usize] =
             Material::new(RHO_AIR, 0.02, 1.005, 0.05, Phase::Gas, (16, 18, 28))
                 .breathable()
@@ -510,6 +707,35 @@ impl MaterialTable {
             Material::new(2.4, 8.0, 1.0, 1.5, Phase::Liquid, (235, 110, 40));
         materials[t::JUNIPER.0 as usize] =
             Material::new(0.5, 0.0, 2.0, 0.2, Phase::Solid, (70, 130, 90));
+        // The brewing chain. `wash` is what a warm tun makes of juniper and
+        // water; it boils into `spirit` 22 K below water's boiling point,
+        // and `spirit` condenses back into `gin`. Nothing in that chain is
+        // special-cased anywhere: mashing is a row in the reaction table,
+        // and both halves of distilling are ordinary phase transitions.
+        // Wash's conductivity is high on purpose, and it is the one number
+        // in the brewing chain that is tuned rather than physical (the same
+        // licence this table's note above already takes with `conductivity`
+        // generally). Ethanol's 846 J/g really does take a quarter of an
+        // hour of simulated time to move through a water-like conductor,
+        // which is correct and unwatchable. A pot that is stirred, and made
+        // of metal rather than water, is the story; 6.0 puts the first drop
+        // off the still inside half a minute of simulated time.
+        materials[t::WASH.0 as usize] =
+            Material::new(1.02, 0.6, 3.9, 6.0, Phase::Liquid, (150, 112, 62));
+        materials[t::SPIRIT.0 as usize] = Material::new(
+            P0 / (R_SPIRIT * T0),
+            0.01,
+            1.42,
+            0.03,
+            Phase::Gas,
+            (196, 226, 200),
+        )
+        .with_gas_constant(R_SPIRIT);
+        materials[t::GIN.0 as usize] =
+            Material::new(0.94, 0.35, 2.44, 0.6, Phase::Liquid, (196, 224, 236));
+        materials[t::CHARCOAL.0 as usize] =
+            Material::new(0.45, 0.0, 0.84, 0.25, Phase::Solid, (38, 34, 32))
+                .with_mobility(Mobility::Granular);
 
         let heating = |from, to, threshold_k, latent_heat| Transition {
             from,
@@ -532,9 +758,41 @@ impl MaterialTable {
             cooling(t::STEAM, t::WATER, T_BOIL, L_VAPORISATION),
             heating(t::STONE, t::LAVA, T_ROCK_MELT, L_ROCK_MELT),
             cooling(t::LAVA, t::STONE, T_ROCK_MELT, L_ROCK_MELT),
+            // Distilling, as two ordinary phase changes. Wash boils into
+            // spirit; spirit condenses into gin, not back into wash — which
+            // is what makes the still a one-way concentrator rather than a
+            // loop, and is the only asymmetry in the whole chain.
+            heating(t::WASH, t::SPIRIT, T_SPIRIT_BOIL, L_SPIRIT),
+            heating(t::GIN, t::SPIRIT, T_SPIRIT_BOIL, L_SPIRIT),
+            cooling(t::SPIRIT, t::GIN, T_SPIRIT_BOIL, L_SPIRIT),
         ];
 
-        MaterialTable::new(materials).with_transitions(transitions)
+        // Chemistry. Two rows, and between them they cover both things a
+        // botanical can be turned into.
+        let reactions = vec![
+            // Mashing: juniper steeping in warm water makes wash of both.
+            // Declared enthalpy-neutral on the water arm, which is what
+            // ties the water component's arbitrary zero to the brewing
+            // component's — without one declared number joining them, the
+            // heat of mashing would be whatever the solver's seeding
+            // happened to make it.
+            Reaction {
+                subject: Arm::releasing(t::WATER, t::WASH, 0.0),
+                partner: Arm::releasing(t::JUNIPER, t::WASH, 0.0),
+                threshold_k: T_MASH,
+                direction: Direction::Heating,
+            },
+            // Burning: a botanical hot enough to ignite, with air to burn
+            // in, leaves charcoal and a cell of CO2 behind.
+            Reaction {
+                subject: Arm::releasing(t::JUNIPER, t::CHARCOAL, Q_BURN),
+                partner: Arm::releasing(t::AIR, t::CO2, 0.0),
+                threshold_k: T_IGNITE,
+                direction: Direction::Heating,
+            },
+        ];
+
+        MaterialTable::new(materials).with_chemistry(transitions, reactions)
     }
 }
 
@@ -552,10 +810,23 @@ pub mod terrarium {
     pub const LAVA: MaterialId = MaterialId(6);
     pub const JUNIPER: MaterialId = MaterialId(7);
     pub const CO2: MaterialId = MaterialId(8);
+    /// Fermented juniper mash: what water and juniper become in a warm
+    /// tun, and the only thing a still can usefully be charged with.
+    pub const WASH: MaterialId = MaterialId(9);
+    /// Alcohol vapour — what wash boils into, at a lower temperature than
+    /// water boils at, which is the whole of why distilling separates
+    /// anything.
+    pub const SPIRIT: MaterialId = MaterialId(10);
+    /// The drink itself: condensed spirit, and the colony's mana.
+    pub const GIN: MaterialId = MaterialId(11);
+    /// What is left of a botanical that burned instead of being brewed.
+    pub const CHARCOAL: MaterialId = MaterialId(12);
 
     /// Every id above, in table order — for tests and reporting that want
     /// to iterate the whole table by name.
-    pub const ALL: [MaterialId; 9] = [AIR, STEAM, WATER, ICE, SAND, STONE, LAVA, JUNIPER, CO2];
+    pub const ALL: [MaterialId; 13] = [
+        AIR, STEAM, WATER, ICE, SAND, STONE, LAVA, JUNIPER, CO2, WASH, SPIRIT, GIN, CHARCOAL,
+    ];
 
     /// Human-readable name for a terrarium id, for JSON reports.
     pub fn name(id: MaterialId) -> &'static str {
@@ -569,6 +840,10 @@ pub mod terrarium {
             6 => "lava",
             7 => "juniper",
             8 => "co2",
+            9 => "wash",
+            10 => "spirit",
+            11 => "gin",
+            12 => "charcoal",
             _ => "unknown",
         }
     }

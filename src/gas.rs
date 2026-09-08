@@ -60,7 +60,7 @@
 
 use crate::material::{Mobility, Phase};
 use crate::math::{GridIndex, Scalar};
-use crate::world::{World, NO_PENDING};
+use crate::world::World;
 
 /// How much of the pressure gap between two cells of the same gas is closed
 /// per second of simulated time, before viscosity is taken into account.
@@ -74,6 +74,28 @@ const RELAXATION_PER_SECOND: Scalar = 8.0;
 /// `>`: without one, two cells whose pressures differ in the last bit swap
 /// back and forth forever and the whole atmosphere shimmers.
 const ADVECTION_MARGIN: Scalar = 0.05;
+
+/// The hydrostatic head, in pressure units per unit of nominal density
+/// difference: how much extra pressure a parcel must hold to climb one cell
+/// against a gas lighter than itself.
+///
+/// This model has no gravity constant and its pressure field has no `ρgh`
+/// term, so up and down look identical to [`advect`] unless something says
+/// otherwise. The first version of that something (added with the gas work
+/// itself) was a blanket refusal: a denser gas never moves up into a
+/// lighter one, full stop. It did the job it was written for — a CO₂ vent
+/// stopped firing speckles of heavy gas at the ceiling — and it was too
+/// strong by a wide margin, because it is also false. A parcel at six
+/// hundred atmospheres absolutely does push upward through air, which is
+/// why a kettle whistles and why a pot still works at all; under the
+/// blanket rule the vapour sat on top of the wash forever and no still
+/// could ever be built.
+///
+/// So the refusal is now a *price*. Climbing costs `LIFT × Δρ` in pressure,
+/// which for CO₂ standing in air is about three atmospheres — enough that a
+/// settled layer never levitates and a gently-fed vent never fires upward,
+/// and nothing at all to a boiling still.
+const LIFT: Scalar = 500.0;
 
 /// The pressure of the cell at flat position `p`, or zero if it isn't a gas.
 pub fn pressure_at(world: &World, p: usize) -> Scalar {
@@ -89,19 +111,36 @@ pub fn pressure(world: &World, index: GridIndex) -> Scalar {
     pressure_at(world, world.linear_index(index))
 }
 
-/// Whether the cell at `p` is gas this module is allowed to move: a mobile
-/// gas with a real gas constant and no phase change in flight.
+/// Whether the cell at `p` is a gas these rules may move at all: mobile,
+/// with a real gas constant.
 ///
-/// Phase changes are excluded because a cell part-way through condensing
-/// carries latent progress *per unit mass*; moving some of its mass
-/// elsewhere would either duplicate or discard that progress. Letting it
-/// finish first costs nothing — it is one step.
-fn is_mobile_gas(world: &World, p: usize) -> bool {
+/// Note what this does *not* test. It used to also require that no phase
+/// change was in flight, which sounded careful and was in fact a
+/// show-stopper: a cell of vapour sitting at its own boiling point is
+/// *permanently* part-way through a transition, because that is what
+/// sitting at a boiling point means. Every such cell was invisible to both
+/// rules in this module — a still's entire charge boiled off and then lay
+/// on top of the wash like a solid, unable to diffuse, advect, or reach a
+/// condenser. Whole-cell movement never had a reason to care: a swap
+/// relocates `pending` and `progress` along with everything else. Only
+/// [`diffuse`], which moves *part* of a cell's mass, has to think about it,
+/// and it does so where it matters — see [`same_transition`].
+fn is_movable_gas(world: &World, p: usize) -> bool {
     let m = world.material_of(p);
-    m.phase == Phase::Gas
-        && m.mobility != Mobility::Static
-        && m.gas_constant > 0.0
-        && world.cell_at(p).pending == NO_PENDING
+    m.phase == Phase::Gas && m.mobility != Mobility::Static && m.gas_constant > 0.0
+}
+
+/// Whether two cells are at the same point in the same phase change — the
+/// condition under which mass may be moved between them.
+///
+/// Latent progress is carried *per unit mass*, so mass arriving from a cell
+/// half-way through condensing has to bring its share of that progress with
+/// it; [`move_gas`] mixes it by mass exactly the way it mixes temperature.
+/// That mix is only meaningful when both cells are working on the same
+/// transition, since `progress` is measured against one. Two cells at
+/// different stages simply wait: they are within a step or two of agreeing.
+fn same_transition(world: &World, p: usize, q: usize) -> bool {
+    world.cell_at(p).pending == world.cell_at(q).pending
 }
 
 /// Pressure-driven mass transfer between adjacent cells of the same gas.
@@ -117,7 +156,7 @@ pub fn diffuse(world: &mut World, dt: Scalar) {
     for j in 0..h {
         for i in 0..w {
             let p = world.linear_index(GridIndex::new(i, j));
-            if !is_mobile_gas(world, p) {
+            if !is_movable_gas(world, p) {
                 continue;
             }
             for n in [GridIndex::new(i + 1, j), GridIndex::new(i, j + 1)] {
@@ -125,10 +164,12 @@ pub fn diffuse(world: &mut World, dt: Scalar) {
                     continue;
                 }
                 let q = world.linear_index(n);
-                if !is_mobile_gas(world, q) {
+                if !is_movable_gas(world, q) {
                     continue;
                 }
-                if world.cell_at(p).material != world.cell_at(q).material {
+                if world.cell_at(p).material != world.cell_at(q).material
+                    || !same_transition(world, p, q)
+                {
                     continue;
                 }
                 exchange_gas(world, p, q, dt);
@@ -181,12 +222,14 @@ fn exchange_gas(world: &mut World, p: usize, q: usize, dt: Scalar) {
 ///
 /// Mass conservation is arithmetic: one cell loses exactly what the other
 /// gains. Energy conservation follows because the two cells hold the same
-/// material, so energy is `mass·(c·T + L)` on both sides and mixing the
-/// destination's temperature by mass leaves `m·T` summed over the pair
-/// unchanged. The source's temperature does not change — taking gas out of
-/// a body does not cool what stays behind.
+/// material, so energy is `mass·(c·T + L + progress)` on both sides, and
+/// mixing *both* the destination's temperature and its latent progress by
+/// mass leaves that sum over the pair unchanged. The source's temperature
+/// and progress do not change — taking gas out of a body does not cool what
+/// stays behind, nor un-boil it.
 fn move_gas(world: &mut World, from: usize, to: usize, grams: Scalar) {
     debug_assert_eq!(world.cell_at(from).material, world.cell_at(to).material);
+    debug_assert_eq!(world.cell_at(from).pending, world.cell_at(to).pending);
     let mut source = world.cell_at(from);
     let mut dest = world.cell_at(to);
     let new_mass = dest.mass + grams;
@@ -194,6 +237,7 @@ fn move_gas(world: &mut World, from: usize, to: usize, grams: Scalar) {
         return;
     }
     dest.temperature = (dest.mass * dest.temperature + grams * source.temperature) / new_mass;
+    dest.progress = (dest.mass * dest.progress + grams * source.progress) / new_mass;
     dest.mass = new_mass;
     source.mass -= grams;
     world.set_cell_at(from, source);
@@ -220,7 +264,7 @@ pub fn advect(world: &mut World) {
         for i_raw in 0..w {
             let i = if rightward { i_raw } else { w - 1 - i_raw };
             let p = world.linear_index(GridIndex::new(i, j));
-            if moved[p] || !is_mobile_gas(world, p) {
+            if moved[p] || !is_movable_gas(world, p) {
                 continue;
             }
             let here = pressure_at(world, p);
@@ -239,28 +283,24 @@ pub fn advect(world: &mut World) {
                     continue;
                 }
                 let q = world.linear_index(n);
-                if moved[q] || !is_mobile_gas(world, q) {
+                if moved[q] || !is_movable_gas(world, q) {
                     continue;
                 }
                 if world.cell_at(q).material == world.cell_at(p).material {
                     continue; // same species: `diffuse` handles this pair.
                 }
-                // Never carry a heavy gas *up* through a lighter one.
-                //
-                // The pressure computed here has no gravity term in it, so
-                // up and down look identical to it, and a vent puffing CO2
-                // into a room will happily fire parcels at the ceiling —
-                // where buoyancy then spends the next hundred steps
-                // dragging them back down, and a human watching sees a
-                // speckle of heavy gas hanging in mid-air that should never
-                // have been there. Refusing the upward move is the cheapest
-                // honest stand-in for the hydrostatic term this model does
-                // not have: the parcel spreads along the floor instead,
-                // which is where it would have ended up anyway.
-                if n.j > j && world.material_of(q).density < world.material_of(p).density {
-                    continue;
-                }
-                let there = pressure_at(world, q);
+                // Climbing into a lighter gas costs the hydrostatic head —
+                // see `LIFT`. Charged as a surcharge on the target's
+                // pressure rather than as a veto, so the comparison below
+                // stays one rule: a parcel moves to the cheapest place it
+                // can see, and up is dearer than sideways.
+                let there = pressure_at(world, q)
+                    + if n.j > j {
+                        LIFT * (world.material_of(p).density - world.material_of(q).density)
+                            .max(0.0)
+                    } else {
+                        0.0
+                    };
                 if best.is_none_or(|(_, p_best)| there < p_best) {
                     best = Some((q, there));
                 }

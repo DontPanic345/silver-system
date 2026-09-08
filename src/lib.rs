@@ -79,6 +79,9 @@ pub mod world;
 /// Compressible gas: pressure, diffusion and bulk flow.
 pub mod gas;
 
+/// Chemistry: data-driven reactions between touching cells.
+pub mod chemistry;
+
 /// The gnomes: the game layer, Gin economy, and ethereal mechanics.
 pub mod gnome;
 
@@ -87,6 +90,9 @@ pub mod chamber;
 
 /// The flagship sealed-jar scenario.
 pub mod terrarium;
+
+/// The still: brewing, distilling, and where Gin actually comes from.
+pub mod still;
 
 /// Headless JSON/ASCII reporting.
 pub mod report;
@@ -613,6 +619,69 @@ pub fn chamber_report_json() -> String {
             None => "{}".to_string(),
         }
     })
+}
+
+// --- The still in the browser ---
+//
+// Same shape as the terrarium and chamber bindings above. A third world
+// rather than a mode of either: the brewing scenario wants a pot, a wall
+// with a gap in it, and a cold receiver, which is neither a sealed jar nor
+// a pressurised room.
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static STILL: std::cell::RefCell<Option<still::Still>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Creates (or resets) the still the browser view drives.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn still_start() {
+    STILL.with(|s| *s.borrow_mut() = Some(still::default_still()));
+}
+
+/// Advances the still by `steps` fixed steps and paints it to `canvas_id`.
+/// Returns the step count reached.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn still_tick_and_draw(canvas_id: &str, cell_px: u32, steps: u32) -> u32 {
+    STILL.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        let s = match slot.as_mut() {
+            Some(s) => s,
+            None => return 0,
+        };
+        for _ in 0..steps {
+            s.step(DT_SECONDS);
+        }
+        let buf = render::render_world_to_rgb8(&s.world, &s.colony, cell_px);
+        let width_px = s.world.width() as u32 * cell_px;
+        let height_px = s.world.height() as u32 * cell_px;
+        paint_rgb8_to_canvas(canvas_id, &buf, width_px, height_px);
+        s.steps as u32
+    })
+}
+
+/// The still's current JSON snapshot — the same text `src/bin/still.rs`
+/// prints, so the page shows exactly what a headless run would report.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn still_report_json() -> String {
+    STILL.with(|cell| {
+        let slot = cell.borrow();
+        match slot.as_ref() {
+            Some(s) => report::snapshot_json(&s.world, &s.colony, s.steps),
+            None => "{}".to_string(),
+        }
+    })
+}
+
+/// The still's dimensions in cells, as `[width, height]`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn still_dimensions() -> Vec<u32> {
+    vec![still::DEFAULT_SIZE.0 as u32, still::DEFAULT_SIZE.1 as u32]
 }
 
 /// The chamber's dimensions in cells, as `[width, height]`.

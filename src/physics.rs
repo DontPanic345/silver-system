@@ -43,17 +43,21 @@ use crate::math::{GridIndex, Scalar};
 use crate::world::{Cell, World, NO_PENDING};
 use std::collections::HashMap;
 
-/// One fixed simulation step: movement, then conduction, then phase change.
+/// One fixed simulation step: movement, then conduction, then phase change,
+/// then chemistry.
 ///
 /// Order matters only for feel, not for conservation — each stage conserves
 /// on its own. Movement runs first so freshly fallen material conducts
-/// against its new neighbours in the same step.
+/// against its new neighbours in the same step, and chemistry runs last so
+/// a cell that has just finished condensing is a candidate reagent on the
+/// next step rather than being rewritten mid-transition.
 pub fn step(world: &mut World, dt: Scalar) {
     apply_gravity(world);
     equalise_liquid_levels(world);
     crate::gas::step(world, dt);
     conduct_heat(world, dt);
     apply_phase_changes(world);
+    crate::chemistry::react(world);
     world.step_count = world.step_count.wrapping_add(1);
 }
 

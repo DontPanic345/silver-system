@@ -61,13 +61,18 @@ Now running as the seven-night compounding sequence in
 [`NIGHTLY.md`](NIGHTLY.md) — one unattended session per night, each
 extending the last. Night 2 added compressible gas: pressure, diffusion,
 bulk flow, and a CO₂ that settles (`src/gas.rs`, `src/chamber.rs`,
-`www/gases.html`).
+`www/gases.html`). Night 3 added chemistry — data-driven reactions between
+touching cells — and used it to build the still, so Gin now comes from
+brewing rather than from eating berries (`src/chemistry.rs`, `src/still.rs`,
+`www/still.html`).
 
-Live code: `src/world.rs`, `src/physics.rs`, `src/gas.rs`, `src/gnome.rs`,
-`src/terrarium.rs`, `src/chamber.rs`, `src/report.rs`, `www/terrarium.html`,
-`www/gases.html`. Run it headless
-with `cargo run --release --bin terrarium -- --map`. No process cycle
-governs this experiment — deliberately, after `night-shift`.
+Live code: `src/world.rs`, `src/physics.rs`, `src/gas.rs`,
+`src/chemistry.rs`, `src/gnome.rs`, `src/terrarium.rs`, `src/chamber.rs`,
+`src/still.rs`, `src/report.rs`, `www/terrarium.html`, `www/gases.html`,
+`www/still.html`. Run them headless with
+`cargo run --release --bin terrarium -- --map` and
+`cargo run --release --bin still -- --map`. No process cycle governs this
+experiment — deliberately, after `night-shift`.
 
 The rule that matters when changing anything here: **every operation must
 conserve mass and energy, or go through `World::conjure_*` so the ledger

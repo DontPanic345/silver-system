@@ -33,11 +33,26 @@ bash scripts/build-wasm.sh
 python3 -m http.server -d www 8000   # then open /terrarium.html
 ```
 
-There is a second live page, `/gases.html`: a room with a ten-atmosphere
-bottle of air behind one small hole and a slab of CO₂ released at the
-ceiling. The bottle bleeds down to the room's pressure and the CO₂ falls,
-spreads and settles into a flat layer on the floor — with nothing in the
-code naming CO₂ or saying heavy gases sink. See `src/gas.rs`.
+There are two more live pages.
+
+`/gases.html`: a room with a ten-atmosphere bottle of air behind one small
+hole and a slab of CO₂ released at the ceiling. The bottle bleeds down to
+the room's pressure and the CO₂ falls, spreads and settles into a flat layer
+on the floor — with nothing in the code naming CO₂ or saying heavy gases
+sink. See `src/gas.rs`.
+
+`/still.html`: juniper standing in water in a pot held at 368 K, a wall with
+one gap in it, and a cold receiver on the other side. Gin comes out of the
+far end, and two thirsty gnomes drink it. Nothing in the code is a brewing
+mechanic: mashing is one row of a reaction table, and distilling is the
+ordinary phase change that boils a kettle, applied to a liquid whose boiling
+point (351.5 K) is 22 K below water's. Hold the pot between the two figures
+and one boils while the other does not. See `src/chemistry.rs` and
+`src/still.rs`.
+
+```sh
+cargo run --release --bin still -- --steps 4000 --every 500 --map
+```
 
 ### What it is actually claiming
 
@@ -65,13 +80,15 @@ live. `residual_mass_g` in that output is the whole argument in one number.
 
 | File | What it holds |
 | --- | --- |
-| `src/material.rs` | Materials and phase transitions as data; latent-heat offsets derived, not declared |
+| `src/material.rs` | Materials, phase transitions and reactions as data; enthalpy offsets derived, not declared |
 | `src/world.rs` | Cells with mass, temperature and latent progress; the magic ledger |
 | `src/physics.rs` | Movement, buoyancy, hydrostatic levelling, conduction, phase change |
 | `src/gas.rs` | Gas pressure (`P = m·R·T`), pressure-driven diffusion and bulk flow |
+| `src/chemistry.rs` | Reactions between touching cells: mashing, combustion |
 | `src/chamber.rs` | The gas demonstration room, its bottle, vent and scrubber |
-| `src/gnome.rs` | Gin economy, the ethereal layer, rescue, foraging, ethereal pipes |
+| `src/gnome.rs` | Gin economy, the ethereal layer, rescue, foraging, drinking, ethereal pipes |
 | `src/terrarium.rs` | The flagship scenario and its declared boundary conditions |
+| `src/still.rs` | The brewing scenario: mash tun, lyne arm, condenser, receiver |
 | `src/report.rs` | JSON snapshots and an ASCII map, for headless verification |
 
 ## Live deploy — the path actually in use
@@ -164,13 +181,15 @@ requires `www/pkg/` to already be built, see above):
 NODE_PATH=/usr/local/lib/node_modules node tests/e2e/canvas_rectangle.test.mjs
 NODE_PATH=/usr/local/lib/node_modules node tests/e2e/scenario_canvas.test.mjs
 NODE_PATH=/usr/local/lib/node_modules node tests/e2e/terrarium_canvas.test.mjs
+NODE_PATH=/usr/local/lib/node_modules node tests/e2e/gases_canvas.test.mjs
+NODE_PATH=/usr/local/lib/node_modules node tests/e2e/still_canvas.test.mjs
 ```
 
-`terrarium_canvas.test.mjs` is the one worth keeping green: it drives the
-real page in headless Chromium and checks that the step counter advances,
-that canvas pixels actually change, and that the conservation residuals
-reported by the browser build stay at zero — numbers read out of the running
-simulation, not a screenshot.
+The last three are the ones worth keeping green: each drives a real page in
+headless Chromium, lets it run for real wall-clock seconds, and then checks
+*both* the numbers the page reports and the actual canvas pixels — the CO₂
+layer arriving on the floor, the gin pooling in the receiver — so a claim
+has to survive being looked at as well as being computed.
 
 ## The fallback (M0.3, not in current use)
 

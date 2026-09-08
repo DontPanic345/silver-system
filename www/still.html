@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The still</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0; padding: 1.5rem;
+      background: #0e1014; color: #d6d9e0;
+      font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif;
+    }
+    h1 { font-size: 1.1rem; margin: 0 0 .25rem; letter-spacing: .01em; }
+    p.lede { margin: 0 0 1rem; color: #8b93a3; max-width: 64ch; }
+    .stage { display: flex; gap: 1.5rem; flex-wrap: wrap; align-items: flex-start; }
+    canvas {
+      image-rendering: pixelated;
+      border: 1px solid #2a2f3a; border-radius: 4px;
+      background: #06070a; max-width: 100%;
+    }
+    .panel { min-width: 22rem; flex: 1 1 22rem; }
+    table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+    th, td { text-align: left; padding: .2rem .6rem .2rem 0; }
+    th { color: #8b93a3; font-weight: 500; }
+    td.num { text-align: right; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .ok { color: #7fd18a; }
+    .warn { color: #e0a458; }
+    h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .08em;
+         color: #6d7688; margin: 1.25rem 0 .4rem; }
+    .swatch { display: inline-block; width: .7rem; height: .7rem; border-radius: 2px;
+              margin-right: .45rem; vertical-align: -1px; }
+    button { font: inherit; background: #1c212b; color: #d6d9e0; border: 1px solid #333a48;
+             border-radius: 4px; padding: .3rem .8rem; cursor: pointer; }
+    button:hover { background: #262d3a; }
+    ol.stages { margin: .2rem 0 0; padding-left: 1.2rem; color: #8b93a3; }
+    ol.stages b { color: #d6d9e0; font-weight: 500; }
+  </style>
+</head>
+<body>
+  <h1>The still</h1>
+  <p class="lede">
+    Juniper standing in water, in a pot held at 368&nbsp;K, and a cold
+    receiver on the other side of a wall with one gap in it. Gin comes out
+    of the far end. Nothing here is a brewing mechanic: the pot is warm,
+    so the botanicals ferment; the wash boils at 351.5&nbsp;K and the water
+    beside it boils at 373.15&nbsp;K, so holding the pot between those two
+    figures boils off one and not the other. That 22&nbsp;kelvin gap is the
+    whole of distilling.
+  </p>
+
+  <div class="stage">
+    <canvas id="canvas"></canvas>
+    <div class="panel">
+      <h2>The run</h2>
+      <table>
+        <tr><th>Step</th><td class="num" id="step">—</td></tr>
+        <tr><th>Gin in the receiver</th><td class="num" id="gin">—</td></tr>
+        <tr><th>Mean temperature</th><td class="num" id="temp">—</td></tr>
+      </table>
+      <p class="lede" id="verdict" style="margin:.5rem 0 0"></p>
+      <ol class="stages">
+        <li><b>Mash</b> — juniper touching water above 310 K becomes wash.
+            One row of the reaction table; nothing names juniper.</li>
+        <li><b>Boil</b> — wash past 351.5 K becomes spirit vapour, by the
+            same phase change that boils a kettle.</li>
+        <li><b>Cross</b> — spirit vapour is <em>denser than air</em>
+            (46&nbsp;g/mol against 29), so it lies on top of the wash and
+            creeps sideways through the gap rather than rising.</li>
+        <li><b>Condense</b> — on the cold floor it becomes gin, and pools.</li>
+        <li><b>Drink</b> — the two gnomes started thirsty.</li>
+      </ol>
+
+      <h2>The Gin economy</h2>
+      <table>
+        <tr><th>Gnomes</th><td class="num" id="gnomes">—</td></tr>
+        <tr><th>Gin in flasks</th><td class="num" id="flasks">—</td></tr>
+        <tr><th>Gin spent on magic</th><td class="num" id="spent">—</td></tr>
+      </table>
+
+      <h2>Conservation</h2>
+      <table>
+        <tr><th>Mass residual (relative)</th><td class="num" id="rmass">—</td></tr>
+        <tr><th>Energy residual (relative)</th><td class="num" id="renergy">—</td></tr>
+        <tr><th>Energy the hob and condenser moved</th><td class="num" id="lenergy">—</td></tr>
+      </table>
+      <p class="lede">
+        Boiling off a gram of spirit costs 846 J and gives it back on
+        condensing, so a still is a heat pump with a hole in it. The hob and
+        the cold receiver are declared boundaries — every joule they move
+        goes on the ledger, which is why the residuals above stay at
+        floating-point noise while the still runs.
+      </p>
+
+      <h2>Materials</h2>
+      <table id="materials"></table>
+
+      <h2>Controls</h2>
+      <p><button id="reset">Recharge the pot</button>
+         <button id="pause">Pause</button></p>
+    </div>
+  </div>
+
+  <script type="module">
+    import init, * as wasm from './pkg/viewer.js';
+
+    const CELL_PX = 11;
+    const STEPS_PER_FRAME = 6;
+    let paused = false;
+
+    const fmt = (x, digits = 4) =>
+      Math.abs(x) >= 1e5 || (x !== 0 && Math.abs(x) < 1e-3)
+        ? x.toExponential(2)
+        : x.toFixed(digits);
+
+    const massOf = (report, name) => {
+      const m = report.materials.find((x) => x.name === name);
+      return m ? m.mass_g : 0;
+    };
+    const cellsOf = (report, name) => {
+      const m = report.materials.find((x) => x.name === name);
+      return m ? m.cells : 0;
+    };
+
+    function paintStats(report) {
+      const set = (id, text, cls) => {
+        const el = document.getElementById(id);
+        el.textContent = text;
+        if (cls) el.className = 'num ' + cls;
+      };
+      const gin = massOf(report, 'gin');
+      set('step', String(report.step));
+      set('gin', gin.toFixed(3) + ' g', gin > 0 ? 'ok' : undefined);
+      set('temp', report.mean_temperature_k.toFixed(1) + ' K');
+
+      const wash = cellsOf(report, 'wash');
+      const spirit = cellsOf(report, 'spirit');
+      const juniper = cellsOf(report, 'juniper');
+      document.getElementById('verdict').textContent =
+        juniper > 0 && wash === 0 && spirit === 0
+          ? 'Warming the tun — nothing has fermented yet.'
+          : spirit > 0
+            ? 'Running: spirit vapour is crossing to the receiver.'
+            : gin > 0
+              ? 'The run is finished — what is in the receiver is the yield.'
+              : 'Fermenting.';
+
+      set('gnomes', `${report.colony.embodied} embodied, ${report.colony.ethereal} ethereal`);
+      set('flasks', report.colony.total_gin.toFixed(1));
+      set('spent', report.ledger.gin_spent.toFixed(2));
+
+      const massOk = Math.abs(report.residual_mass_relative) < 1e-5;
+      const energyOk = Math.abs(report.residual_energy_relative) < 1e-5;
+      set('rmass', fmt(report.residual_mass_relative), massOk ? 'ok' : 'warn');
+      set('renergy', fmt(report.residual_energy_relative), energyOk ? 'ok' : 'warn');
+      set('lenergy', fmt(report.ledger.energy_conjured_j, 0) + ' J');
+
+      const colours = {
+        air: '#101c20', steam: '#aab4c8', water: '#285ac8', ice: '#aad2f0',
+        sand: '#c8af69', stone: '#696973', lava: '#eb6e28', juniper: '#468258',
+        co2: '#5c4a6c', wash: '#96703e', spirit: '#c4e2c8', gin: '#c4e0ec',
+        charcoal: '#262220',
+      };
+      document.getElementById('materials').innerHTML = report.materials
+        .filter((m) => m.cells > 0)
+        .map((m) => `<tr><th><span class="swatch" style="background:${colours[m.name]}"></span>${m.name}</th>`
+                  + `<td class="num">${m.cells}</td><td class="num">${m.mass_g.toFixed(3)} g</td></tr>`)
+        .join('');
+    }
+
+    init().then(() => {
+      window.__wasm = wasm;
+      const [w, h] = wasm.still_dimensions();
+      const canvas = document.getElementById('canvas');
+      canvas.width = w * CELL_PX;
+      canvas.height = h * CELL_PX;
+      wasm.still_start();
+
+      document.getElementById('reset').onclick = () => wasm.still_start();
+      document.getElementById('pause').onclick = (e) => {
+        paused = !paused;
+        e.target.textContent = paused ? 'Resume' : 'Pause';
+      };
+
+      function frame() {
+        if (!paused) {
+          wasm.still_tick_and_draw('canvas', CELL_PX, STEPS_PER_FRAME);
+          const report = JSON.parse(wasm.still_report_json());
+          paintStats(report);
+          window.__lastReport = report;
+        }
+        requestAnimationFrame(frame);
+      }
+      window.__stillReady = true;
+      frame();
+    }).catch((e) => { window.__stillError = String(e); });
+  </script>
+</body>
+</html>
