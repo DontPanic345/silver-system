@@ -251,3 +251,7 @@ interdiffusion (two gases cannot share a cell, so partial pressures do not
 exist and a dilute heavy gas drifts along the floor as separate parcels
 rather than mixing), any gravity term in the pressure field, gnome breathing
 or CO₂ production, and brewing.
+
+_Weekly usage was only 3%, thats not abitious enough. Targeting about ~10% for the rest of this week then aiming to track 14% per run after the next weekly reset. Will adjust effort level.
+I'm going to refrain from providing feedback at this stage, the "picked from shortlist" is working as expected. It's creative expression, you wouldn't interrupt the artist before they have finished the work. I will analyise the transcripts and aim to provide the feedback that the Agent needs, not the feedback I want to give. I'm also not very happy with the way NIGHTLY.md reads, too prescriptive, an agent **is** allowed to reset a previous nights work - that all part of iteration.
+NORTH_STARS.md isn't how I want it either, it was infact, not "written by the human". The distillation is good enough for now._

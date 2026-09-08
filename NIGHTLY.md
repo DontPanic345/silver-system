@@ -39,7 +39,7 @@ sequence — there is deliberately no separate counter file, so it can't
 drift out of sync with the journal itself.
 
 `USAGE.md` separately tracks `/cost` percentages before/after each night —
-that's for the human's own budget tracking, not for you to read or write.
+that's for the user's own budget tracking, not for you to read or write.
 
 ## Operating rules
 
@@ -126,15 +126,13 @@ experiment's entry points at its own README instead of inlining it.
 The next session starts cold and has only what you wrote down.
 ```
 
-## Where your own commentary goes
+## Where the users commentary goes
 
 Directly under that night's `JOURNAL.md` entry, as its own paragraph,
-wrapped in `_..._` (italics in most Markdown viewers) — the same convention
-you're already using in `CLAUDE.md`. That placement is deliberate: the next
+wrapped in `_..._` — the same convention
+used in `CLAUDE.md`. That placement is deliberate: the next
 night's agent reads it in context, right next to the work it's reacting to,
-rather than in a separate file it would have no reason to open. It's
-optional — most nights won't need it — and it's read-only to the agent
-unless you say otherwise in it, same as your other commentary blocks.
+rather than in a separate file it would have no reason to open.
 
 `USAGE.md` is the one exception: `/cost` percentages go there instead,
 since that's for your own tracking and nothing nightly needs to read it.
