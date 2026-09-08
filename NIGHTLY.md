@@ -64,6 +64,8 @@ has to be told.
 ```
 You are running as <model> at effort: <level>.
 
+Note the weekly usage percentage.
+
 Read JOURNAL.md, NORTH_STARS.md and PRINCIPLES.md first. They carry the
 history, the aspiration, and the aphorisms distilled along the way.
 JOURNAL.md's most recent entries are the previous night's work — you are
@@ -85,8 +87,10 @@ better placed to judge what comes next than a plan written in advance.
 
 Build as much of it as you can CONFIDENTLY pull off in this session — don't
 default to something small or safe, and don't stop at the first thing that
-compiles. If you finish with room to spare, keep going into whatever that
-piece unblocks rather than polishing what you already have.
+compiles. A coherent stopping point is not the same as being finished: when
+the tree is green and you could write the journal, commit that as a
+checkpoint and carry on into whatever the work unblocks, rather than writing
+up or polishing what you already have.
 
 Build on what is in src/ already. Extend it, refactor it where it's in your
 way, but don't restart it — the point of tonight is that tomorrow starts
@@ -114,7 +118,7 @@ Finish by appending a dated JOURNAL.md entry: what you chose and why, what
 you built, what you learned that is worth keeping (findings, not narration),
 and what you deliberately left undone. State plainly what you verified and
 what you did NOT — an honest "I did not check X" is worth more than a
-confident claim that has to be disproved later. Then commit your work.
+confident claim that has to be disproved later. 
 
 Keep the entry itself short — a few paragraphs, not a report. Numbers
 (token counts, diff-stats, timestamps) belong in the commit message, which
@@ -122,6 +126,10 @@ nobody has to read every night, not in JOURNAL.md, which every night does.
 If something needs more space than that to explain, put the detail in its
 own file and point to it from one sentence here, the way the effort-level
 experiment's entry points at its own README instead of inlining it.
+
+Note the closing weekly usage percentage with /usage-check
+
+Then commit your work.
 
 The next session starts cold and has only what you wrote down.
 ```

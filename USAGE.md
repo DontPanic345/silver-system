@@ -80,3 +80,23 @@ Current week (all models)
 ███████████████▌                                   31% used
 Resets Sep 12, 9pm (Pacific/Auckland)
 ```
+
+**Snapshot 2026-09-08T23:53:45+12:00 - after night 3**
+```
+Session
+
+Total cost:            $21.95
+Total duration (API):  42m 20s
+Total duration (wall): 2h 14m 11s
+Total code changes:    1062 lines added, 11 lines removed
+Usage by model:
+    claude-haiku-4-5:  3.5k input, 29 output, 0 cache read, 0 cache write ($0.0037)
+       claude-opus-5:  324 input, 189.8k output, 27.6m cache read, 341.8k cache write ($21.95)
+Prompt cache (main):   115 requests · 99% of input tokens from cache · no misses · warm (1h TTL, last activity 38m 58s ago)
+
+Current session
+                                                   0% used
+
+Current week (all models)
+██████████████████                                 36% used
+```

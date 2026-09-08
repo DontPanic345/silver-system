@@ -344,3 +344,27 @@ into another one; bulk expansion is now right, molecular mixing is still
 absent, and that is the single biggest remaining lie in the physics. Also
 untouched: gnome respiration and CO₂ production, the book-copying knowledge
 economy, the Gnome Grandmother, farming, and buildings.
+
+_Observed the Chemistry in action.
+31% -> 36% weekly useage, still not ambitious enough.
+"steel by more than one route" is an intresting sentence to pop out.
+In the dictation I said 
+"Now we will introduce the state changes. We can introduce burning wood.  I would like to explore iron and carbon and how to make steel in different ways to make rust."
+Ah okay, now I read it I see whats happened. I shouldn't blame anyone. I said "and"
+by the voice to text heard "in". So I had intened to bring up the idea of differnt
+oxide states of iron, but it ended up saying something else. The different rust idea
+shouldn't be elevated by this comment, just drawing attention to a live
+example of the telephone game.
+
+The one run per night was supposed to allow me to start the run, then go to bed!
+And wake up to finished work. It hasn't succeeded in this regard (the going to bed part).
+
+This is weird, I'm writing the journal for myself but I have to explain it 
+to an audience.
+
+Discussions with night 3 yielded an update to the prompt._
+
+_2026-09-10T21:43:14+12:00 I've added /usage-check to global CLAUDE.md
+updating the prompt to use that. I don't need to manually run /cost from
+CC cli now. I also just built a Spellwise app, but that 5 hour window is almost closed now.
+shouldn't effect the nightly run._
