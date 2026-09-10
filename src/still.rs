@@ -11,19 +11,23 @@
 //! - **Mashing** is one row of the reaction table (`src/chemistry.rs`):
 //!   juniper touching water, warm enough, becomes wash. It is limited by
 //!   the botanicals in the pot, which is what makes gin scarce.
-//! - **Distilling** is not a special mechanic at all. It is the same phase
-//!   change that already boiled the terrarium's pool, applied to a liquid
-//!   whose boiling point is 351.5 K instead of 373.15 K. Hold the pot
-//!   between those two figures and the wash boils while the water beside it
-//!   does not. That gap is the entire trick, and it is a real physical
-//!   number sitting in the material table, not a rule.
+//! - **Distilling** is not a special mechanic at all. Wash and water each
+//!   evaporate along a vapour-pressure curve read off their boiling points
+//!   (`src/vapour.rs`) — 351.5 K for the spirit, 373.15 K for water — so
+//!   at the pot's 366 K the air over it holds several times as much spirit
+//!   as steam, and wash below the surface boils outright. That 22 K gap is
+//!   the entire trick, and it is real physical numbers in the material
+//!   table, not a rule. It is not a perfect separation, and does not
+//!   pretend to be: some water evaporates too and ends up in the receiver,
+//!   as it does from a real pot still.
 //! - **The lyne arm** is a gap in the pot wall just above the liquid, and
 //!   the vapour finds it without being told to, because ethanol vapour is
 //!   *denser than air* (46 g/mol against 29) and therefore crawls sideways
 //!   along the top of the wash rather than rising. That, too, is one number
 //!   — `8.314/46.07` — in `Material::gas_constant`.
-//! - **Condensing** is the cooling half of the same transition, on a cold
-//!   floor. Gin pools where it lands.
+//! - **Condensing** is the same curve run the other way: against the cold
+//!   floor and wall the vapour is past saturation, forms dew, and falls as
+//!   drops of gin that pool where they land.
 //!
 //! ## The energy bill is a number, not a shrug
 //!

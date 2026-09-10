@@ -31,9 +31,9 @@
 //!   explicitly magical, it costs Gin, and, because it is implemented as a
 //!   swap of two cells, it still cannot create or destroy anything.
 //!
-//! Not built here: brewing and distilling (Gin currently comes from
-//! foraging berries only), the knowledge economy, and buildings. See
-//! `JOURNAL.md`.
+//! Gin also comes from drinking the real thing, brewed and distilled in
+//! `src/still.rs`. Not built here: the knowledge economy, and buildings.
+//! See `JOURNAL.md`.
 
 use crate::material::{terrarium as t, Mobility, Phase};
 use crate::math::{GridIndex, Scalar};
