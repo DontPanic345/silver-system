@@ -368,3 +368,78 @@ _2026-09-10T21:43:14+12:00 I've added /usage-check to global CLAUDE.md
 updating the prompt to use that. I don't need to manually run /cost from
 CC cli now. I also just built a Spellwise app, but that 5 hour window is almost closed now.
 shouldn't effect the nightly run._
+**Night 4/7 — 2026-09-10 — Opus 5/xhigh — Gas that mixes, and water that
+evaporates.** Chose gas mixtures, the item night 3 named as the single
+biggest remaining lie in the physics, over gnome respiration (which needs a
+mixed atmosphere to breathe from), the biology tier (which would sit on air
+that could not mix), and the knowledge economy (pure game layer). A second
+reason turned up in the source. `NORTH_STARS.md` #4 says ONI's "CO2 doesn't
+actually settle the way ONI's simplified layers show it", and night 2 built
+exactly a CO₂ layer on the floor under clean air. The dictation behind that
+line says the opposite: *"a layer of CO2 at the bottom and O2 on top ...
+surely we can do better than that — gas is mix. CO2 is heavier but it
+doesn't all fall to the bottom of a room."* The distillation's parenthetical
+is ambiguous enough to have been built backwards; by that file's own rule
+the dictation wins, and I haven't touched the file.
+
+Built: a gas cell now holds a mixture (grams per species, plus liquid mist),
+so gases share cells. Bulk flow, which now carries momentum across each cell
+face, and per-species interdiffusion replace `advect` and `expand`.
+`src/vapour.rs` reads each vapour's saturation curve off the boiling point
+and latent heat its transition already carried (Clausius–Clapeyron), and
+runs evaporation below boiling, dew on cold surfaces, mist and rain on it.
+All three scenarios were re-grounded. The chamber's CO₂ sinks and then
+mixes (it has a headless runner now). The still distils by evaporation,
+with a relief valve and some water co-distilling. The terrarium is rebuilt
+as a warm spring under a level pool: the jar sits near 316 K rather than
+400 K, the gnomes no longer pay Gin to survive the weather, and for the
+first time they can reach their juniper, which every earlier layout had
+stranded across the pool. `Scalar` is `f64` now; `src/math.rs` records the
+measured reason.
+
+Findings worth keeping, each written up in the code where it bites:
+
+1. *Conserving energy is not obeying thermodynamics.* Twice tonight the
+   residuals sat at 1e-14 while the physics was badly wrong. Surface boiling
+   at a fixed one-atmosphere point, inside a pressurised pot, pumped heat
+   uphill. Condensation, relaxing toward the naive saturation gap, swung the
+   still's head space above 410 K beside a 368 K hob. The ledger cannot see
+   either. A temperature map can: a cell hotter than every heat source.
+   `report::temperature_map` and `--temps` exist for that.
+2. *Relax toward the equilibrium the step itself moves.* Latent heat going
+   into a gas cell's tiny heat capacity shifts saturation more than the step
+   does, so the linearised equilibrium is the right target, not the gap.
+   It's `conduct_heat`'s old clamp, generalised.
+3. *The grid's one-cell bubble is the standing artifact.* A boiled cell is
+   one cell of vapour at hundreds of atmospheres. The vapour rules
+   deliberately leave bubbles and bursts alone until flow has expanded them.
+   What survives of it: the still's opening boil puts roughly a third of
+   its gin back in the pot.
+4. *Relaxing pressure without momentum turns every narrow opening into a
+   bottleneck.* A two-cell lyne arm needed two atmospheres of drive, which
+   raised spirit's boiling point above the pot's walls. Momentum fixed it:
+   the pot now runs at 1.1–1.2 atm.
+5. *Every test was green on a sloped pool.* Convecting air spent its cells'
+   `moved` flags, so the water beside it never levelled. I only caught it by
+   looking at a render. It's now a pixel check in `terrarium_canvas`.
+
+Verified: 144 lib tests in both release and debug builds, clippy clean, and
+all six e2e checks, which read real canvas pixels after real time. Those
+now cover CO₂ visible above the floor, a level pool, the water cycle turning
+over with nothing boiling, and gin in the receiver. I measured energy drift
+per physics stage in a violent world, and every stage is exactly zero. I
+looked at all three pages as browser screenshots. What I did **not**
+verify: any run past ~8000 steps, any non-default grid size, or frame rate
+anywhere slower than headless Chromium (pages now step on a time budget).
+The terrarium's water cycle is real but hard to see: under a milligram of
+condensation per step, and no visible fog on the lid; raising the dew
+threshold did not change that. Gas conduction is about 200× real per cell
+and dissipates a hot parcel before it can rise, so the hot-air test isolates
+buoyancy rather than showing a plume. The CO₂ mixing rate is tuned (about
+10× molecular). The bubble/burst heuristic has not been tried on a genuine
+pressure vessel of vapour.
+
+Left undone: splitting air into N₂/O₂ so gnomes and fires consume oxygen
+and make CO₂ into a mixed room (the obvious next step now); gases dissolved
+in liquids; wash as a real water–ethanol solution; pressure-dependent
+boiling for submerged cells; and making the terrarium's cycle visible.

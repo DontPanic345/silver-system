@@ -19,39 +19,45 @@ aspirational statements this and every experiment has served, and
 
 ## The gnome terrarium — the current experiment
 
-A vent held hot under a lid held cold, water in between, four gnomes living
-in the gap. The boiling, the rain, the sand piling and the gnomes' scramble
-for Gin are all emergent: there is no script, only conduction, two phase
-transitions, a density rule, and a Gin budget.
+A warm spring under a pool, a lid held cold, and four gnomes on a meadow
+beside the water. The pool evaporates because warm water does, the humid air
+meets the cold lid, and dew falls back as drops; the gnomes forage juniper
+and pay Gin for the magic fountain. All of it is emergent: there is no
+script, only conduction, buoyancy, one vapour-pressure curve per liquid, and
+a Gin budget.
 
 ```sh
-# Headless: JSON snapshots (and an ASCII map on stderr) — no browser needed.
-cargo run --release --bin terrarium -- --steps 8000 --every 2000 --map
+# Headless: JSON snapshots (and ASCII maps on stderr) — no browser needed.
+cargo run --release --bin terrarium -- --steps 8000 --every 2000 --map --temps
 
 # In a browser, with a live conservation read-out:
 bash scripts/build-wasm.sh
 python3 -m http.server -d www 8000   # then open /terrarium.html
 ```
 
-There are two more live pages.
+There are two more live pages, each with a headless runner of its own
+(`--bin chamber`, `--bin still`; `--map` draws materials, `--temps` a
+temperature map).
 
 `/gases.html`: a room with a ten-atmosphere bottle of air behind one small
-hole and a slab of CO₂ released at the ceiling. The bottle bleeds down to
-the room's pressure and the CO₂ falls, spreads and settles into a flat layer
-on the floor — with nothing in the code naming CO₂ or saying heavy gases
-sink. See `src/gas.rs`.
+hole and a slab of CO₂ released at the ceiling. The bottle bleeds down until
+the whole room is at one pressure, and the CO₂ sinks — it is heavier — and
+then mixes up into the air rather than lying on the floor as a layer. Gas
+cells hold mixtures; nothing in the code names CO₂ or says heavy gases sink.
+See `src/gas.rs`.
 
-`/still.html`: juniper standing in water in a pot held at 368 K, a wall with
-one gap in it, and a cold receiver on the other side. Gin comes out of the
-far end, and two thirsty gnomes drink it. Nothing in the code is a brewing
-mechanic: mashing is one row of a reaction table, and distilling is the
-ordinary phase change that boils a kettle, applied to a liquid whose boiling
-point (351.5 K) is 22 K below water's. Hold the pot between the two figures
-and one boils while the other does not. See `src/chemistry.rs` and
-`src/still.rs`.
+`/still.html`: juniper standing in water in a pot held at 366 K, a wall
+with a gap in it, and a cold receiver on the other side. Gin comes out of
+the far end, and two thirsty gnomes drink it. Nothing in the code is a
+brewing mechanic: mashing is one row of a reaction table, and distilling is
+evaporation along two vapour-pressure curves read off the table's boiling
+points — spirit's (351.5 K) and water's (373.15 K). Some water comes over
+too, as it does from a real pot still. See `src/chemistry.rs`,
+`src/vapour.rs` and `src/still.rs`.
 
 ```sh
 cargo run --release --bin still -- --steps 4000 --every 500 --map
+cargo run --release --bin chamber -- --steps 4000 --every 500
 ```
 
 ### What it is actually claiming
@@ -64,15 +70,13 @@ rewrite that holds a cell's energy fixed across the material switch, and a
 reaction is the same rewrite over a touching pair. None of those can gain or
 lose a gram or a joule.
 
-Mass is not the only thing that has to add up, though, and *volume* is the
-one the grid makes hard: one material per cell means a gram of water and the
-thirteen hundred cells' worth of steam it boils into have to take turns
-occupying the same amount of space. Two rules keep that honest — `gas::
-expand`, where an over-pressured vapour shoves a lighter gas aside and takes
-the room, and `physics::coalesce_liquids`, where a partly-empty liquid cell
-pours into a neighbour and hands the space back to the atmosphere. Both are
-built out of transfers that already conserve, so neither is an exception to
-the paragraph above.
+Gas cells are the exception to "one material per cell": a gas cell holds a
+*mixture*, grams of each species plus any liquid mist, so gases share cells
+and mix, and every transfer between two gas cells moves mass with its own
+energy and re-solves the receiving cell's temperature from its books. A
+partly-empty liquid cell pours into its neighbours (`physics::
+coalesce_liquids`) and hands the space back to the atmosphere. All of it is
+built from transfers that already conserve.
 
 Two things are allowed to break that, and both go through the same ledger:
 gnome magic (paid for in Gin) and the terrarium's declared hot/cold boundary
@@ -94,9 +98,10 @@ live. `residual_mass_g` in that output is the whole argument in one number.
 | `src/material.rs` | Materials, phase transitions and reactions as data; enthalpy offsets derived, not declared |
 | `src/world.rs` | Cells with mass, temperature and latent progress; the magic ledger |
 | `src/physics.rs` | Movement, buoyancy, hydrostatic levelling, liquid coalescence, conduction, phase change |
-| `src/gas.rs` | Gas pressure (`P = m·R·T`), pressure-driven diffusion, expansion and bulk flow |
+| `src/gas.rs` | Gas mixtures: pressure (`P = T·Σ m·R`), bulk flow with momentum, interdiffusion |
+| `src/vapour.rs` | Vapour pressure: evaporation below boiling, condensation, dew, mist and rain |
 | `src/chemistry.rs` | Reactions between touching cells: mashing, combustion |
-| `src/chamber.rs` | The gas demonstration room, its bottle, vent and scrubber |
+| `src/chamber.rs` | The gas demonstration room, its bottle, vent and scrubber; the relief valve |
 | `src/gnome.rs` | Gin economy, the ethereal layer, rescue, foraging, drinking, ethereal pipes |
 | `src/terrarium.rs` | The flagship scenario and its declared boundary conditions |
 | `src/still.rs` | The brewing scenario: mash tun, lyne arm, condenser, receiver |

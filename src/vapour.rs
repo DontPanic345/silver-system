@@ -32,9 +32,14 @@
 //!   neighbour and what is left is a small cell of liquid, which the
 //!   ordinary gravity rule drops and `physics::coalesce_liquids` pools.
 //!
-//! Boiling is untouched: a liquid cell past its boiling point still
-//! accumulates latent heat and turns wholesale to vapour. What is new is
-//! everything below it.
+//! Boiling survives only where it belongs. A liquid cell *touching gas*
+//! never boils by threshold any more — it evaporates, here, and that is the
+//! only place the pressure it is evaporating against is known (see
+//! `physics::apply_phase_changes` for the second-law violation that
+//! motivated it). A liquid cell with no gas to evaporate into still
+//! accumulates latent heat past its boiling point and turns wholesale to
+//! vapour: a bubble, which rises and bursts, and which these rules leave
+//! alone until it has (see [`expanding`]).
 //!
 //! [`MaterialTable::saturation_pressure`]: crate::material::MaterialTable::saturation_pressure
 

@@ -64,14 +64,17 @@ bulk flow, and a CO₂ that settles (`src/gas.rs`, `src/chamber.rs`,
 `www/gases.html`). Night 3 added chemistry — data-driven reactions between
 touching cells — and used it to build the still, so Gin now comes from
 brewing rather than from eating berries (`src/chemistry.rs`, `src/still.rs`,
-`www/still.html`).
+`www/still.html`). Night 4 made gas cells hold mixtures and added vapour
+pressure, so gases mix instead of layering and water evaporates below
+boiling: the terrarium now runs on dew rather than a kettle
+(`src/vapour.rs`; `Scalar` is `f64` since then).
 
 Live code: `src/world.rs`, `src/physics.rs`, `src/gas.rs`,
-`src/chemistry.rs`, `src/gnome.rs`, `src/terrarium.rs`, `src/chamber.rs`,
+`src/vapour.rs`, `src/chemistry.rs`, `src/gnome.rs`, `src/terrarium.rs`, `src/chamber.rs`,
 `src/still.rs`, `src/report.rs`, `www/terrarium.html`, `www/gases.html`,
 `www/still.html`. Run them headless with
-`cargo run --release --bin terrarium -- --map` and
-`cargo run --release --bin still -- --map`. No process cycle governs this
+`cargo run --release --bin terrarium -- --map` (and `--bin still`,
+`--bin chamber`; add `--temps` for a temperature map). No process cycle governs this
 experiment — deliberately, after `night-shift`.
 
 The rule that matters when changing anything here: **every operation must
