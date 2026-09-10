@@ -8,6 +8,9 @@
 //! ```sh
 //! cargo run --release --bin still -- --steps 4000 --every 500 --map
 //! ```
+//!
+//! `--temps` adds a temperature map beside it (see
+//! `report::temperature_map` for the key).
 
 use viewer::{report, still};
 
@@ -23,15 +26,19 @@ fn main() {
     let steps = flag("--steps", 4000);
     let every = flag("--every", 500).max(1);
     let show_map = args.iter().any(|a| a == "--map");
+    let show_temps = args.iter().any(|a| a == "--temps");
 
     let mut s = still::default_still();
     println!("{}", report::snapshot_json(&s.world, &s.colony, 0));
     for step in 1..=steps {
-        s.step(0.05);
+        s.step(viewer::SIM_DT);
         if step % every == 0 {
             println!("{}", report::snapshot_json(&s.world, &s.colony, step));
             if show_map {
                 eprint!("{}", report::ascii_map(&s.world));
+            }
+            if show_temps {
+                eprint!("{}", report::temperature_map(&s.world));
             }
         }
     }

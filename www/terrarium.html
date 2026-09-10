@@ -39,11 +39,15 @@
 <body>
   <h1>Gnome terrarium</h1>
   <p class="lede">
-    A vent held hot under a lid held cold, water in between, and four gnomes
-    living in the gap. Nothing below is scripted: the boiling, the rain and
-    the gnomes' scramble for Gin all fall out of conduction, two phase
-    transitions and a density rule. The numbers on the right are the same
-    JSON a headless run prints.
+    A warm spring under a pool, a lid held cold, and four gnomes on a meadow
+    beside the water. Nothing below is scripted and nothing boils: the pool
+    evaporates because warm water does, the humid air rises and meets the
+    cold lid, dew gathers there and falls back as drops. That is a real
+    terrarium's water cycle, and it is slow the way a real one is — a jar of
+    air holds only a few hundredths of a gram of water. A magic fountain
+    (an ethereal pipe, paid for in Gin) lifts water from one end of the pool
+    to the other. The numbers on the right are the same JSON a headless run
+    prints.
   </p>
 
   <div class="stage">
@@ -63,6 +67,13 @@
         <tr><th>Energy conjured</th><td class="num" id="lenergy">—</td></tr>
         <tr><th>Mass conjured</th><td class="num" id="lmass">—</td></tr>
         <tr><th>Gin spent</th><td class="num" id="lgin">—</td></tr>
+      </table>
+
+      <h2>The water cycle</h2>
+      <table>
+        <tr><th>Evaporated from the pool</th><td class="num" id="evap">—</td></tr>
+        <tr><th>Condensed out of the air</th><td class="num" id="cond">—</td></tr>
+        <tr><th>Fallen back as dew and rain</th><td class="num" id="rain">—</td></tr>
       </table>
 
       <h2>Materials</h2>
@@ -90,7 +101,10 @@
     import init, * as wasm from './pkg/viewer.js';
 
     const CELL_PX = 12;
-    const STEPS_PER_FRAME = 2;
+    // Simulated steps per animation frame: as many as fit in a slice of the
+    // frame, up to a ceiling that keeps the jar's pace readable.
+    const MAX_STEPS = 12, BUDGET_MS = 10;
+    let steps = 4;
     let paused = false;
 
     const fmt = (x, digits = 3) =>
@@ -114,6 +128,10 @@
         ? 'Every gram and joule is accounted for: the world changed only by what the ledger admits to.'
         : 'Residual drifting — something is creating or destroying matter off the books.';
 
+      set('evap', report.vapour.evaporated_g.toFixed(3) + ' g');
+      set('cond', report.vapour.condensed_g.toFixed(3) + ' g');
+      set('rain', report.vapour.rained_g.toFixed(3) + ' g');
+
       set('lenergy', fmt(report.ledger.energy_conjured_j) + ' J');
       set('lmass', fmt(report.ledger.mass_conjured_g) + ' g');
       set('lgin', fmt(report.ledger.gin_spent));
@@ -121,11 +139,13 @@
       const colours = {
         air: '#101c20', steam: '#aab4c8', water: '#285ac8', ice: '#aad2f0',
         sand: '#c8af69', stone: '#696973', lava: '#eb6e28', juniper: '#468258',
+        co2: '#eb9637', wash: '#96703e', spirit: '#c4e2c8', gin: '#c4e0ec',
+        charcoal: '#262220',
       };
       document.getElementById('materials').innerHTML = report.materials
-        .filter((m) => m.cells > 0)
+        .filter((m) => m.cells > 0 || m.mass_g > 1e-4)
         .map((m) => `<tr><th><span class="swatch" style="background:${colours[m.name]}"></span>${m.name}</th>`
-                  + `<td class="num">${m.cells}</td><td class="num">${m.mass_g.toFixed(1)} g</td></tr>`)
+                  + `<td class="num">${m.cells}</td><td class="num">${m.mass_g.toFixed(m.mass_g < 1 ? 3 : 1)} g</td></tr>`)
         .join('');
 
       set('embodied', String(report.colony.embodied));
@@ -149,7 +169,10 @@
 
       function frame() {
         if (!paused) {
-          wasm.terrarium_tick_and_draw('canvas', CELL_PX, STEPS_PER_FRAME);
+          const t0 = performance.now();
+          wasm.terrarium_tick_and_draw('canvas', CELL_PX, steps);
+          const took = Math.max(0.1, performance.now() - t0);
+          steps = Math.max(1, Math.min(MAX_STEPS, Math.round(steps * BUDGET_MS / took)));
           const report = JSON.parse(wasm.terrarium_report_json());
           paintStats(report);
           window.__lastReport = report;

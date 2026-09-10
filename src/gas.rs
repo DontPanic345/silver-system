@@ -1,109 +1,81 @@
-//! Gas as a compressible fluid with a real pressure — the piece
+//! Gas as a compressible *mixture* with a real pressure — the piece
 //! `NORTH_STARS.md` #4 asks for by name.
 //!
 //! The capstone's list of things ONI got wrong has "gas behaves nothing
-//! like gas" on it: CO2 does not settle, layers are simplified to the point
-//! that players build gimmicks around the gaps. Up to tonight this
-//! simulation had exactly the same hole from the other direction. A gas
-//! cell was a *light solid*: it held one material at a fixed mass, it could
-//! be displaced by something heavier falling into it, and it did nothing
-//! else. Open a valve on a pressurised tank and nothing happened, because
-//! nothing in the world knew what a pressure was.
+//! like gas" on it, and the dictation behind it (`dictation-dumps/gnomes.md`)
+//! is specific about what it means: *"in a typical room you'd have a layer
+//! of CO2 at the bottom and O2 on top of that ... surely we can do better
+//! than that — gas is mix. CO2 is heavier but it doesn't all fall to the
+//! bottom of a room."*
 //!
-//! ## What a gas cell is now
+//! Night 2 built pressure but not mixing, because one cell held one
+//! material: a cell of CO₂ next to a cell of air could swap with it or push
+//! it, never blend into it. The result was the very thing the dictation
+//! objects to — a slab of CO₂ that fell, spread, and lay on the floor as a
+//! flat layer with clean air above it. Nights 2 and 3 then added two rules
+//! (`advect`, a whole-parcel swap toward low pressure, and `expand`, a
+//! three-cell shove) whose only job was to move gas between cells that could
+//! not share. Both are gone: a gas cell now holds a mixture (see
+//! [`Cell`](crate::world::Cell)), so any two gas cells can simply exchange
+//! mass, and two rules do everything the old three did and the thing none
+//! of them could.
 //!
-//! The [`Cell::mass`] field has been there all along and was, for gases,
-//! always equal to the material's density. It is now genuinely variable:
-//! a gas cell holds however many grams of gas are packed into it, and with
-//! [`Material::gas_constant`] that gives it a pressure,
+//! ## The two rules
 //!
-//! ```text
-//! P = m · R · T
-//! ```
+//! - [`flow`] — **bulk flow**. Mixture moves from the cell at higher total
+//!   pressure `P = T·Σ m·R` to the one at lower, carrying its composition
+//!   with it. This is sound-speed fast: it is what levels a pressurised
+//!   bottle into a room and what lets a boiled cell of steam expand to
+//!   thirteen hundred times its volume, and it is clamped to the exact
+//!   transfer that levels a pair, so no timestep makes it overshoot.
+//! - [`interdiffuse`] — **molecular diffusion**. Each species moves down
+//!   its own *partial*-pressure gradient, independently. At uniform total
+//!   pressure the partial-pressure gradients of two species are equal and
+//!   opposite, so this swaps them without disturbing the total — it is how
+//!   CO₂ spreads into air, and it is much slower than bulk flow.
 //!
-//! per unit cell volume. Two rules act on that field, and both are
-//! conserving by construction:
+//! Both move mass from one cell to another and re-solve the receiving
+//! cell's temperature from its energy, so both conserve mass and energy by
+//! construction.
 //!
-//! - [`diffuse`] moves **mass** between adjacent cells of the *same* gas,
-//!   down the pressure gradient. What leaves one cell arrives in the other
-//!   and carries its own energy with it, so both totals are unchanged to
-//!   floating-point noise. This is the rule that makes a gas fill the room
-//!   it is let into and equalise, and it is clamped to the exact transfer
-//!   that levels the pair, so no timestep can make it overshoot.
-//! - [`advect`] moves **whole parcels** of gas — a swap of two cells —
-//!   toward lower pressure, when the two cells hold *different* gases and
-//!   therefore cannot merge. A swap cannot change a sum either.
+//! ## Buoyancy is still not in here
 //!
-//! Buoyancy is not in this module at all, deliberately. `physics::
-//! apply_gravity` sinks and floats gas by the same one rule that drops sand
-//! through water, with no gas-specific code and no per-material `if`: two
-//! cells of the same gas are compared by their actual masses (so a
-//! compressed pocket sinks through a thin one), two cells of different
-//! materials by their nominal densities (so CO2 sinks through air) — see
-//! `pick_target` for why that second case cannot use mass.
-//!
-//! ## The honest limitation
-//!
-//! One cell holds one material, so two *different* gases in contact cannot
-//! interdiffuse: CO2 cannot spread into a cell of air the way it really
-//! would, it can only be carried there bodily by [`advect`] or sink there
-//! by buoyancy. Partial pressures of a mixture are not modelled. That means
-//! a lone over-pressured parcel of one species surrounded by another will
-//! wander down the gradient rather than dissolve into it. Bulk flow and
-//! stratification are right; molecular mixing is absent. Modelling it
-//! properly needs a cell that can hold a mixture, which is a bigger change
-//! than tonight, and pretending otherwise in the meantime would be exactly
-//! the sort of gap-plugging hack the north star complains about.
-//!
-//! [`Cell::mass`]: crate::world::Cell::mass
-//! [`Material::gas_constant`]: crate::material::Material::gas_constant
+//! `physics::apply_gravity` sinks and floats gas cells by the same rule that
+//! drops sand through water. What it compares for two gas cells is
+//! [`reference_density`] — what each would weigh at one atmosphere — so a
+//! CO₂-rich parcel sinks, a steam-rich or hot one rises, and a merely
+//! *compressed* one does neither, because it expands long before it could
+//! fall. Heavy gas therefore does sink, and does pool: what stops it being
+//! a layer forever is [`interdiffuse`] working on it the whole time it lies
+//! there.
 
-use crate::material::{Mobility, Phase};
+use crate::material::{MaterialId, Mobility, MIX_SLOTS};
 use crate::math::{GridIndex, Scalar};
-use crate::world::World;
+use crate::world::{World, NO_MIX};
 
-/// How much of the pressure gap between two cells of the same gas is closed
-/// per second of simulated time, before viscosity is taken into account.
-/// Large enough that a room equalises in a visible fraction of a minute,
-/// and harmless if it overshoots — the transfer is clamped to the exact
-/// levelling amount regardless.
-const RELAXATION_PER_SECOND: Scalar = 8.0;
+/// How much of the pressure gap between two gas cells bulk flow closes per
+/// second of simulated time, before viscosity. Deliberately far faster than
+/// any timestep resolves — sound crosses a cell in microseconds — so in
+/// practice every pair is levelled fully on every sweep, and the clamp to
+/// the exact levelling amount is what keeps that from overshooting.
+const RELAXATION_PER_SECOND: Scalar = 80.0;
 
-/// Relative pressure excess a parcel needs before it will bodily move into
-/// a neighbouring cell of a *different* gas. A margin rather than a bare
-/// `>`: without one, two cells whose pressures differ in the last bit swap
-/// back and forth forever and the whole atmosphere shimmers.
-const ADVECTION_MARGIN: Scalar = 0.05;
-
-/// The hydrostatic head, in pressure units per unit of nominal density
-/// difference: how much extra pressure a parcel must hold to climb one cell
-/// against a gas lighter than itself.
+/// How much of a species' partial-pressure gap between two neighbouring
+/// cells molecular diffusion closes per second.
 ///
-/// This model has no gravity constant and its pressure field has no `ρgh`
-/// term, so up and down look identical to [`advect`] unless something says
-/// otherwise. The first version of that something (added with the gas work
-/// itself) was a blanket refusal: a denser gas never moves up into a
-/// lighter one, full stop. It did the job it was written for — a CO₂ vent
-/// stopped firing speckles of heavy gas at the ceiling — and it was too
-/// strong by a wide margin, because it is also false. A parcel at six
-/// hundred atmospheres absolutely does push upward through air, which is
-/// why a kettle whistles and why a pot still works at all; under the
-/// blanket rule the vapour sat on top of the wash forever and no still
-/// could ever be built.
-///
-/// So the refusal is now a *price*. Climbing costs `LIFT × Δρ` in pressure,
-/// which for CO₂ standing in air is about three atmospheres — enough that a
-/// settled layer never levitates and a gently-fed vent never fires upward,
-/// and nothing at all to a boiling still.
-const LIFT: Scalar = 500.0;
+/// A tuned number, flagged the same way `conductivity` is in the material
+/// table. Real molecular diffusion of CO₂ through air is some minutes per
+/// ten centimetres; real rooms mix far faster than that because they are
+/// stirred by convection this grid only partly resolves. The figure is
+/// chosen so a released slab of CO₂ visibly sinks and spreads first, and
+/// then visibly mixes upward over the following minute of simulated time —
+/// both halves of the dictation's "heavier, but it doesn't all fall to the
+/// bottom".
+const DIFFUSION_PER_SECOND: Scalar = 1.5;
 
 /// The pressure of the cell at flat position `p`, or zero if it isn't a gas.
 pub fn pressure_at(world: &World, p: usize) -> Scalar {
-    let cell = world.cell_at(p);
-    world
-        .materials()
-        .get(cell.material)
-        .pressure(cell.mass, cell.temperature)
+    world.pressure_at(p)
 }
 
 /// The pressure at a grid coordinate — the reading a test or a report makes.
@@ -111,52 +83,267 @@ pub fn pressure(world: &World, index: GridIndex) -> Scalar {
     pressure_at(world, world.linear_index(index))
 }
 
-/// Whether the cell at `p` is a gas these rules may move at all: mobile,
-/// with a real gas constant.
-///
-/// Note what this does *not* test. It used to also require that no phase
-/// change was in flight, which sounded careful and was in fact a
-/// show-stopper: a cell of vapour sitting at its own boiling point is
-/// *permanently* part-way through a transition, because that is what
-/// sitting at a boiling point means. Every such cell was invisible to both
-/// rules in this module — a still's entire charge boiled off and then lay
-/// on top of the wash like a solid, unable to diffuse, advect, or reach a
-/// condenser. Whole-cell movement never had a reason to care: a swap
-/// relocates `pending` and `progress` along with everything else. Only
-/// [`diffuse`], which moves *part* of a cell's mass, has to think about it,
-/// and it does so where it matters — see [`same_transition`].
-fn is_movable_gas(world: &World, p: usize) -> bool {
-    let m = world.material_of(p);
-    m.phase == Phase::Gas && m.mobility != Mobility::Static && m.gas_constant > 0.0
+/// The partial pressure of `species` at flat position `p`.
+pub fn partial_pressure_at(world: &World, p: usize, species: MaterialId) -> Scalar {
+    let m = world.materials().get(species);
+    world.grams_of_at(p, species) * m.gas_constant * world.cell_at(p).temperature
 }
 
-/// Whether two cells are at the same point in the same phase change — the
-/// condition under which mass may be moved between them.
+/// What the gas cell at `p` would weigh per cell volume at the table's
+/// reference pressure — the density buoyancy compares between gas cells.
 ///
-/// Latent progress is carried *per unit mass*, so mass arriving from a cell
-/// half-way through condensing has to bring its share of that progress with
-/// it; [`move_gas`] mixes it by mass exactly the way it mixes temperature.
-/// That mix is only meaningful when both cells are working on the same
-/// transition, since `progress` is measured against one. Two cells at
-/// different stages simply wait: they are within a step or two of agreeing.
-fn same_transition(world: &World, p: usize, q: usize) -> bool {
-    world.cell_at(p).pending == world.cell_at(q).pending
+/// Comparing actual masses instead (which is what night 2 did for two cells
+/// of the same gas) makes a compressed pocket sink through thinner gas of
+/// its own kind. That is not what a compressed pocket does: it expands, at
+/// the speed of sound, long before it could fall. What decides whether a
+/// parcel of gas rises or sinks is its density *at the pressure around it*:
+///
+/// ```text
+/// ρ* = m / V_ref,   V_ref = P / P_ref  +  Σ m_mist / ρ_liquid
+/// ```
+///
+/// — the volume its gas would take up at one atmosphere, plus the volume of
+/// any droplets hanging in it. For a pure gas at one atmosphere that is its
+/// nominal density; hotter gas comes out lighter (so it rises); gas with
+/// more CO₂ in it comes out heavier (so it sinks); and a cell that is all
+/// mist comes out exactly as dense as the liquid it is made of, which is
+/// what a raindrop is. An empty cell weighs nothing.
+pub fn reference_density(world: &World, p: usize) -> Scalar {
+    let cell = world.cell_at(p);
+    if cell.mass <= 0.0 {
+        return 0.0;
+    }
+    let table = world.materials();
+    let reference = table.reference_pressure();
+    let mut volume = if reference > 0.0 {
+        cell.pressure(table) / reference
+    } else {
+        0.0
+    };
+    for (&id, &m) in table.slots().iter().zip(cell.mix.iter()) {
+        let material = table.get(id);
+        if !table.is_gas(id) && m > 0.0 && material.density > 0.0 {
+            volume += m / material.density;
+        }
+    }
+    if volume <= 0.0 {
+        return table.get(cell.material).density;
+    }
+    cell.mass / volume
 }
 
-/// Pressure-driven mass transfer between adjacent cells of the same gas.
+/// Whether the cell at `p` is a gas the rules here may move.
+fn is_flowing_gas(world: &World, p: usize) -> bool {
+    world.is_gas_at(p) && world.material_of(p).mobility != Mobility::Static
+}
+
+/// How many Gauss-Seidel sweeps of pressure relaxation run per step,
+/// alternating direction, so a disturbance propagates both ways.
+const FLOW_SWEEPS: usize = 2;
+
+/// How fast a flowing gas loses its momentum, per second — viscosity, in
+/// the only form this grid has. See [`flow`].
 ///
-/// One transfer per adjacent *pair*, visited once, applied immediately, so
-/// the sweep is Gauss-Seidel and converges in a handful of steps rather
-/// than diffusing one cell per step. Conservation does not depend on the
-/// order: every transfer removes from one cell exactly what it adds to the
-/// other, and mixes the receiving cell's temperature by mass, which for two
-/// bodies of the same material is an identity on energy.
-pub fn diffuse(world: &mut World, dt: Scalar) {
+/// Lower is more like a real gas and less like syrup: the pressure drop a
+/// steady current needs to keep going is roughly this times what it would
+/// need with no momentum at all. Too low and every disturbance rings round
+/// a sealed room for seconds as a standing wave. Tuned, and flagged as such.
+const FLOW_DAMPING_PER_SECOND: Scalar = 2.0;
+
+/// The most of a cell's contents a single face may carry away on momentum
+/// in one step. The faces are applied one after another, so even a cell
+/// being emptied through all four at once keeps a remainder.
+const MAX_CARRIED_FRACTION: Scalar = 0.5;
+
+/// Bulk flow: gas with momentum, driven by pressure.
+///
+/// Every face between two gas cells carries a mass flux, stored on the
+/// world, and each step does two things with it:
+///
+/// 1. **Carry.** Move the mass the flux says — a parcel of the upstream
+///    cell's mixture, composition and all — across each face.
+/// 2. **Push.** Relax pressure between every adjacent pair, Gauss-Seidel,
+///    [`FLOW_SWEEPS`] times; whatever mass that moves across a face is the
+///    push the pressure gradient gave it, and is added to the face's flux
+///    for next step, which then decays by [`FLOW_DAMPING_PER_SECOND`].
+///
+/// The first version had step 2 only, and gas had no momentum: every step,
+/// pressure had to start every current from rest. That is fine for a room
+/// levelling out and fatal for anything that has to *carry* gas somewhere
+/// steadily. Pressure relaxation between neighbours can pass only a
+/// fraction of a cell's contents across a face per sweep, so a steady
+/// current needs a steep gradient to drive it, and through a narrow opening
+/// the gradient needed is atmospheres. A still showed it at once: its pot
+/// had to sit at two atmospheres to push vapour through its lyne arm, which
+/// put spirit's boiling point above the pot's own walls, so the vapour
+/// condensed back into the pot. With momentum a current, once going, keeps
+/// going; pressure only has to correct it, and the gradient a steady flow
+/// needs falls by roughly the damping factor. That is also, not by
+/// coincidence, the first piece of *fluid dynamics* in this simulation, as
+/// opposed to fluid statics.
+///
+/// Both halves move mass through [`move_fraction`], so both conserve mass
+/// and energy by construction. The flux itself is not energy the world
+/// accounts for — there is no kinetic energy in the books, just as there is
+/// no `P·dV` work — and it cannot become any, because all it ever does is
+/// decide which conserving transfer happens next.
+pub fn flow(world: &mut World, dt: Scalar) {
+    if dt <= 0.0 {
+        return;
+    }
+    let (w, h) = (world.width(), world.height());
+    let n = w * h;
+    let mut carried_x = vec![0.0; n];
+    let mut carried_y = vec![0.0; n];
+    for p in 0..n {
+        let (i, j) = (p % w, p / w);
+        for axis in 0..2 {
+            let q = match axis {
+                0 if i + 1 < w => p + 1,
+                1 if j + 1 < h => p + w,
+                _ => continue,
+            };
+            let flux = if axis == 0 {
+                world.flux_x[p]
+            } else {
+                world.flux_y[p]
+            };
+            if flux == 0.0 {
+                continue;
+            }
+            if !is_flowing_gas(world, p) || !is_flowing_gas(world, q) {
+                // Something that is not gas now stands in the way; the
+                // current stops against it.
+                if axis == 0 {
+                    world.flux_x[p] = 0.0;
+                } else {
+                    world.flux_y[p] = 0.0;
+                }
+                continue;
+            }
+            let (up, down) = if flux > 0.0 { (p, q) } else { (q, p) };
+            let upstream = world.cell_at(up).mass;
+            if upstream <= 0.0 {
+                continue;
+            }
+            let fraction = (flux.abs() * dt / upstream).min(MAX_CARRIED_FRACTION);
+            let moved = move_fraction(world, up, down, fraction) * flux.signum();
+            if axis == 0 {
+                carried_x[p] = moved;
+            } else {
+                carried_y[p] = moved;
+            }
+        }
+    }
+
+    let mut pushed_x = vec![0.0; n];
+    let mut pushed_y = vec![0.0; n];
+    let (wi, hi) = (w as i32, h as i32);
+    let sub_dt = dt / FLOW_SWEEPS as Scalar;
+    for sweep in 0..FLOW_SWEEPS {
+        let forward = sweep % 2 == 0;
+        for jj in 0..hi {
+            for ii in 0..wi {
+                let (i, j) = if forward {
+                    (ii, jj)
+                } else {
+                    (wi - 1 - ii, hi - 1 - jj)
+                };
+                let p = world.linear_index(GridIndex::new(i, j));
+                if !is_flowing_gas(world, p) {
+                    continue;
+                }
+                let step = if forward { 1 } else { -1 };
+                for n_idx in [GridIndex::new(i + step, j), GridIndex::new(i, j + step)] {
+                    if !world.in_bounds(n_idx) {
+                        continue;
+                    }
+                    let q = world.linear_index(n_idx);
+                    if !is_flowing_gas(world, q) {
+                        continue;
+                    }
+                    let moved = bulk_exchange(world, p, q, sub_dt);
+                    if moved == 0.0 {
+                        continue;
+                    }
+                    // Record it on the face, signed toward +i / +j.
+                    match (n_idx.i - i, n_idx.j - j) {
+                        (1, _) => pushed_x[p] += moved,
+                        (-1, _) => pushed_x[q] -= moved,
+                        (_, 1) => pushed_y[p] += moved,
+                        _ => pushed_y[q] -= moved,
+                    }
+                }
+            }
+        }
+    }
+
+    let keep = (-FLOW_DAMPING_PER_SECOND * dt).exp();
+    for p in 0..n {
+        let fx = (carried_x[p] + pushed_x[p]) / dt * keep;
+        let fy = (carried_y[p] + pushed_y[p]) / dt * keep;
+        // A current too small to move anything a test could see is let go,
+        // so a settled room is genuinely still rather than faintly ringing.
+        world.flux_x[p] = if (fx * dt).abs() > 1e-12 { fx } else { 0.0 };
+        world.flux_y[p] = if (fy * dt).abs() > 1e-12 { fy } else { 0.0 };
+    }
+}
+
+/// Moves mixture from the higher-pressure cell of a pair to the lower, as
+/// far toward equal pressure as `dt` allows. Returns the grams moved from
+/// `p` to `q` (negative if they went the other way).
+fn bulk_exchange(world: &mut World, p: usize, q: usize, dt: Scalar) -> Scalar {
+    let (pp, pq) = (pressure_at(world, p), pressure_at(world, q));
+    // Already level, to the precision anything downstream could notice —
+    // most of a settled room, skipped before any cell is rewritten.
+    if (pp - pq).abs() <= 1e-12 * pp.max(pq) {
+        return 0.0;
+    }
+    let (src, dst, high, low) = if pp > pq {
+        (p, q, pp, pq)
+    } else {
+        (q, p, pq, pp)
+    };
+    let (source, dest) = (world.cell_at(src), world.cell_at(dst));
+    let ts = source.temperature;
+    // An empty cell's temperature is a leftover label, not a property of
+    // anything; whatever flows in will bring its own.
+    let td = if dest.mass > 0.0 {
+        dest.temperature
+    } else {
+        ts
+    };
+    if high <= 0.0 || ts <= 0.0 || td <= 0.0 {
+        return 0.0;
+    }
+    // The fraction `f` of the source's contents that levels the pair,
+    // holding temperatures fixed: from `(1 − f)·P_s == P_d + f·P_s·T_d/T_s`.
+    let levelling = (high - low) * ts / (high * (ts + td));
+    let viscosity = world.material_of(src).viscosity;
+    let rate = (RELAXATION_PER_SECOND * dt / (1.0 + viscosity)).clamp(0.0, 1.0);
+    let moved = move_fraction(world, src, dst, (levelling * rate).clamp(0.0, 1.0));
+    if src == p {
+        moved
+    } else {
+        -moved
+    }
+}
+
+/// Molecular diffusion: every gas species relaxes its own partial-pressure
+/// gradient between every adjacent pair of gas cells.
+///
+/// Mist is left alone — droplets do not diffuse, they are carried by bulk
+/// flow and they fall.
+pub fn interdiffuse(world: &mut World, dt: Scalar) {
+    let rate = (DIFFUSION_PER_SECOND * dt).clamp(0.0, 0.5);
+    if rate <= 0.0 {
+        return;
+    }
     let (w, h) = (world.width() as i32, world.height() as i32);
     for j in 0..h {
         for i in 0..w {
             let p = world.linear_index(GridIndex::new(i, j));
-            if !is_movable_gas(world, p) {
+            if !is_flowing_gas(world, p) {
                 continue;
             }
             for n in [GridIndex::new(i + 1, j), GridIndex::new(i, j + 1)] {
@@ -164,338 +351,166 @@ pub fn diffuse(world: &mut World, dt: Scalar) {
                     continue;
                 }
                 let q = world.linear_index(n);
-                if !is_movable_gas(world, q) {
-                    continue;
+                if is_flowing_gas(world, q) {
+                    exchange_species(world, p, q, rate);
                 }
-                if world.cell_at(p).material != world.cell_at(q).material
-                    || !same_transition(world, p, q)
-                {
-                    continue;
-                }
-                exchange_gas(world, p, q, dt);
             }
         }
     }
 }
 
-/// Moves gas between two cells of the same material until their pressures
-/// agree, or as far toward that as `dt` allows.
-fn exchange_gas(world: &mut World, p: usize, q: usize, dt: Scalar) {
-    let (a, b) = (world.cell_at(p), world.cell_at(q));
-    let material = world.material_of(p);
-    if a.temperature <= 0.0 || b.temperature <= 0.0 {
-        return;
-    }
-
-    // The transfer q -> p that would leave both cells at one pressure,
-    // holding temperatures fixed: from `(m_a + x)·T_a == (m_b - x)·T_b`.
-    let levelling =
-        (b.mass * b.temperature - a.mass * a.temperature) / (a.temperature + b.temperature);
-    if levelling == 0.0 {
-        return;
-    }
-
-    // Viscosity slows the approach; nothing about this can overshoot,
-    // because the fraction is clamped into [0, 1] and applied to the exact
-    // levelling amount.
-    let fraction = (RELAXATION_PER_SECOND * dt / (1.0 + material.viscosity)).clamp(0.0, 1.0);
-    let mut transfer = levelling * fraction;
-
-    // Never move more than a cell actually holds.
-    let available = if transfer > 0.0 { b.mass } else { a.mass };
-    if transfer.abs() > available {
-        transfer = available * transfer.signum();
-    }
-    if transfer == 0.0 {
-        return;
-    }
-
-    if transfer > 0.0 {
-        move_gas(world, q, p, transfer);
+/// One pair's worth of [`interdiffuse`]: every gas species moves `rate` of
+/// the way to equal partial pressure, all at once, and each cell's
+/// temperature is solved once from what it gained and lost.
+///
+/// Doing the species one at a time would be the same arithmetic and four
+/// times the work, and this runs on every adjacent pair of gas cells every
+/// step; a pair that is already level — most of any settled room — is
+/// skipped before anything is written.
+fn exchange_species(world: &mut World, p: usize, q: usize, rate: Scalar) {
+    let (mut a, mut b) = (world.cell_at(p), world.cell_at(q));
+    // An empty cell's temperature is only a label; level against the
+    // other's.
+    let ta = if a.mass > 0.0 {
+        a.temperature
     } else {
-        move_gas(world, p, q, -transfer);
+        b.temperature
+    };
+    let tb = if b.mass > 0.0 {
+        b.temperature
+    } else {
+        a.temperature
+    };
+    if ta <= 0.0 || tb <= 0.0 {
+        return;
     }
+    let props = *world.materials().slot_props();
+    let negligible = 1e-12 * (a.mass + b.mass);
+    // Grams of each species, q -> p, that would equalise its partial
+    // pressure across the pair. Its gas constant cancels: only its own
+    // masses and the two temperatures matter.
+    let mut moved = NO_MIX;
+    let mut any = false;
+    for (s, slot) in moved.iter_mut().enumerate() {
+        if !props.is_gas[s] {
+            continue;
+        }
+        let levelling = (b.mix[s] * tb - a.mix[s] * ta) / (ta + tb);
+        let grams = (levelling * rate).clamp(-a.mix[s], b.mix[s]);
+        if grams.abs() > negligible {
+            *slot = grams;
+            any = true;
+        }
+    }
+    if !any {
+        return;
+    }
+    let table = world.materials();
+    let (ea, eb) = (a.energy(table), b.energy(table));
+    // Energy into `a`: what arrives from `b` at `b`'s temperature, less what
+    // leaves `a` at its own.
+    let mut into_a = 0.0;
+    for (s, &grams) in moved.iter().enumerate() {
+        if grams == 0.0 {
+            continue;
+        }
+        let from_t = if grams > 0.0 {
+            b.temperature
+        } else {
+            a.temperature
+        };
+        into_a += grams * (props.heat_capacity[s] * from_t + props.latent_energy[s]);
+        a.mix[s] += grams;
+        b.mix[s] -= grams;
+    }
+    a.refresh(table);
+    b.refresh(table);
+    a.solve_temperature(table, ea + into_a);
+    b.solve_temperature(table, eb - into_a);
+    world.set_cell_at(p, a);
+    world.set_cell_at(q, b);
 }
 
-/// Moves `grams` of gas from one cell to another, both holding the same
-/// material.
+/// Moves `fraction` of *everything* in one gas cell into another — the
+/// parcel keeps the source's composition, mist and all.
 ///
-/// Mass conservation is arithmetic: one cell loses exactly what the other
-/// gains. Energy conservation follows because the two cells hold the same
-/// material, so energy is `mass·(c·T + L + progress)` on both sides, and
-/// mixing *both* the destination's temperature and its latent progress by
-/// mass leaves that sum over the pair unchanged. The source's temperature
-/// and progress do not change — taking gas out of a body does not cool what
-/// stays behind, nor un-boil it.
-fn move_gas(world: &mut World, from: usize, to: usize, grams: Scalar) {
-    debug_assert_eq!(world.cell_at(from).material, world.cell_at(to).material);
-    debug_assert_eq!(world.cell_at(from).pending, world.cell_at(to).pending);
+/// The source's temperature does not change (taking part of a body away
+/// leaves the rest exactly as hot as it was); the destination's is
+/// re-solved from its energy plus the parcel's. That is the whole of why
+/// this conserves.
+pub(crate) fn move_fraction(world: &mut World, from: usize, to: usize, fraction: Scalar) -> Scalar {
+    if fraction <= 0.0 {
+        return 0.0;
+    }
     let mut source = world.cell_at(from);
     let mut dest = world.cell_at(to);
-    let new_mass = dest.mass + grams;
-    if new_mass <= 0.0 {
+    let mut parcel = NO_MIX;
+    for (x, &m) in parcel.iter_mut().zip(source.mix.iter()) {
+        *x = m * fraction;
+    }
+    let table = world.materials();
+    let props = table.slot_props();
+    let parcel_energy: f64 = (0..MIX_SLOTS)
+        .map(|s| parcel[s] * (props.heat_capacity[s] * source.temperature + props.latent_energy[s]))
+        .sum();
+    let dest_energy = dest.energy(table) + parcel_energy;
+    for (s, &x) in parcel.iter().enumerate() {
+        source.mix[s] -= x;
+        dest.mix[s] += x;
+    }
+    source.refresh(table);
+    dest.refresh(table);
+    dest.solve_temperature(table, dest_energy);
+    world.set_cell_at(from, source);
+    world.set_cell_at(to, dest);
+    parcel.iter().sum()
+}
+
+/// Moves `grams` of the species in mixture slot `slot` from one gas cell to
+/// another. Same bookkeeping as [`move_fraction`], one species at a time.
+pub(crate) fn move_species(world: &mut World, from: usize, to: usize, slot: usize, grams: Scalar) {
+    if grams <= 0.0 {
         return;
     }
-    dest.temperature = (dest.mass * dest.temperature + grams * source.temperature) / new_mass;
-    dest.progress = (dest.mass * dest.progress + grams * source.progress) / new_mass;
-    dest.mass = new_mass;
-    source.mass -= grams;
+    let mut source = world.cell_at(from);
+    let mut dest = world.cell_at(to);
+    let table = world.materials();
+    let species = table.get(table.slots()[slot]);
+    let dest_energy = dest.energy(table) + grams * species.specific_energy(source.temperature);
+    source.mix[slot] -= grams;
+    dest.mix[slot] += grams;
+    source.refresh(table);
+    dest.refresh(table);
+    dest.solve_temperature(table, dest_energy);
     world.set_cell_at(from, source);
     world.set_cell_at(to, dest);
 }
 
-/// Bulk flow: a parcel of gas moves into a neighbouring cell of a
-/// *different* gas when it is at meaningfully higher pressure.
-///
-/// This is the only way one species reaches a region occupied by another —
-/// see the module doc's note on interdiffusion. It is a swap, so it cannot
-/// change any total; it moves a high-pressure parcel toward the lowest
-/// pressure it can see, and stops as soon as pressures agree to within
-/// [`ADVECTION_MARGIN`], which is what stops the atmosphere churning
-/// forever once it has settled.
-pub fn advect(world: &mut World) {
-    let (w, h) = (world.width() as i32, world.height() as i32);
-    let mut moved = vec![false; (w * h) as usize];
-    // Alternate the scan direction, for the same reason `apply_gravity`
-    // does: a fixed order gives the whole atmosphere a slow preferred drift.
-    let rightward = world.step_count.is_multiple_of(2);
-
-    for j in 0..h {
-        for i_raw in 0..w {
-            let i = if rightward { i_raw } else { w - 1 - i_raw };
-            let p = world.linear_index(GridIndex::new(i, j));
-            if moved[p] || !is_movable_gas(world, p) {
-                continue;
-            }
-            let here = pressure_at(world, p);
-            if here <= 0.0 {
-                continue;
-            }
-
-            let mut best: Option<(usize, Scalar)> = None;
-            for n in [
-                GridIndex::new(i - 1, j),
-                GridIndex::new(i + 1, j),
-                GridIndex::new(i, j - 1),
-                GridIndex::new(i, j + 1),
-            ] {
-                if !world.in_bounds(n) {
-                    continue;
-                }
-                let q = world.linear_index(n);
-                if moved[q] || !is_movable_gas(world, q) {
-                    continue;
-                }
-                if world.cell_at(q).material == world.cell_at(p).material {
-                    continue; // same species: `diffuse` handles this pair.
-                }
-                // Climbing into a lighter gas costs the hydrostatic head —
-                // see `LIFT`. Charged as a surcharge on the target's
-                // pressure rather than as a veto, so the comparison below
-                // stays one rule: a parcel moves to the cheapest place it
-                // can see, and up is dearer than sideways.
-                let there = pressure_at(world, q)
-                    + if n.j > j {
-                        LIFT * (world.material_of(p).density - world.material_of(q).density)
-                            .max(0.0)
-                    } else {
-                        0.0
-                    };
-                if best.is_none_or(|(_, p_best)| there < p_best) {
-                    best = Some((q, there));
-                }
-            }
-
-            if let Some((q, there)) = best {
-                if here > there * (1.0 + ADVECTION_MARGIN) {
-                    world.swap_cells(p, q);
-                    moved[p] = true;
-                    moved[q] = true;
-                }
-            }
-        }
-    }
-}
-
-/// How many times its neighbour's pressure a parcel must hold before it
-/// will force its way into that neighbour's cell rather than merely swap
-/// with it. Comfortably above anything a settled atmosphere or a
-/// rate-limited vent produces, so ordinary jostling never triggers it.
-const EXPANSION_RATIO: Scalar = 3.0;
-
-/// Expansion: a wildly over-pressured gas shoves a lighter one aside and
-/// takes the space.
-///
-/// This is the rule that stops "one material per cell" from being a lie
-/// about volume. Boiling a cell of water produces a cell of steam holding
-/// the same gram of mass — which is thirteen hundred atmospheres, because a
-/// gram of steam at room pressure would fill thirteen hundred cells. Until
-/// now that pocket had nowhere to go: [`diffuse`] only moves mass between
-/// cells of the *same* gas, and the neighbours were air. So the terrarium's
-/// boiled pool sat welded to the ceiling as a band of ultra-dense steam,
-/// visibly a solid white lid rather than a vapour filling a jar, and no
-/// amount of cooling could rain it back down because it was never anywhere
-/// near the cold roof.
-///
-/// The move is a three-cell one, and every part of it is an operation that
-/// already conserves:
-///
-/// 1. The victim cell's own mass is pushed into a neighbour of its own
-///    species — ordinary same-gas transfer, which is what [`move_gas`] is.
-/// 2. That leaves the victim holding nothing. A cell with no mass has no
-///    energy either, whatever it is labelled, so relabelling it as the
-///    expanding species costs nothing and can be done outright.
-/// 3. The expanding cell then hands over half its mass, again through
-///    [`move_gas`].
-///
-/// So the pocket halves its pressure per step per direction it can find
-/// room in, and a boiled cell reaches room pressure in a dozen steps
-/// instead of never. What it still is *not* is interdiffusion: the two
-/// gases never share a cell, they take turns occupying it. A dilute gas
-/// still cannot dissolve into another one, and partial pressures still do
-/// not exist. This makes bulk expansion right; mixing remains absent.
-pub fn expand(world: &mut World) {
-    let (w, h) = (world.width() as i32, world.height() as i32);
-    let mut touched = vec![false; (w * h) as usize];
-
-    for j in 0..h {
-        for i in 0..w {
-            let p = world.linear_index(GridIndex::new(i, j));
-            if touched[p] || !is_movable_gas(world, p) {
-                continue;
-            }
-            let here = pressure_at(world, p);
-            if here <= 0.0 || world.cell_at(p).mass <= 0.0 {
-                continue;
-            }
-            for n in [
-                GridIndex::new(i - 1, j),
-                GridIndex::new(i + 1, j),
-                GridIndex::new(i, j - 1),
-                GridIndex::new(i, j + 1),
-            ] {
-                if !world.in_bounds(n) {
-                    continue;
-                }
-                let q = world.linear_index(n);
-                if touched[q]
-                    || !is_movable_gas(world, q)
-                    || world.cell_at(q).material == world.cell_at(p).material
-                {
-                    continue;
-                }
-                // Climbing costs the same hydrostatic head advection pays —
-                // see `LIFT`. Expansion is a stronger move than a swap, so
-                // it must not be a way around the rule that keeps a heavy
-                // gas on the floor.
-                let lift = if n.j > j {
-                    LIFT * (world.material_of(p).density - world.material_of(q).density).max(0.0)
-                } else {
-                    0.0
-                };
-                if here <= (pressure_at(world, q) + lift) * EXPANSION_RATIO {
-                    continue;
-                }
-                let Some(r) = somewhere_to_push(world, q, p, &touched) else {
-                    continue;
-                };
-
-                let victim = world.cell_at(q);
-                move_gas(world, q, r, victim.mass);
-                // The victim is empty now, so it carries no energy and can
-                // be relabelled outright. It takes the expanding cell's
-                // temperature and latent progress so the transfer below is
-                // between two cells that agree about both.
-                let source = world.cell_at(p);
-                let mut vacated = world.cell_at(q);
-                vacated.material = source.material;
-                vacated.mass = 0.0;
-                vacated.temperature = source.temperature;
-                vacated.progress = source.progress;
-                vacated.pending = source.pending;
-                world.set_cell_at(q, vacated);
-                move_gas(world, p, q, source.mass * 0.5);
-
-                touched[p] = true;
-                touched[q] = true;
-                touched[r] = true;
-                break;
-            }
-        }
-    }
-}
-
-/// A neighbour of `victim` that its mass can be handed to: the same gas, at
-/// the same point in the same transition, untouched this pass, and not the
-/// cell doing the shoving. Lowest pressure first, so the displaced gas goes
-/// where there is most room for it.
-fn somewhere_to_push(
-    world: &World,
-    victim: usize,
-    pusher: usize,
-    touched: &[bool],
-) -> Option<usize> {
-    let w = world.width() as i32;
-    let (i, j) = ((victim as i32) % w, (victim as i32) / w);
-    let mut best: Option<(usize, Scalar)> = None;
-    for n in [
-        GridIndex::new(i - 1, j),
-        GridIndex::new(i + 1, j),
-        GridIndex::new(i, j - 1),
-        GridIndex::new(i, j + 1),
-    ] {
-        if !world.in_bounds(n) {
-            continue;
-        }
-        let r = world.linear_index(n);
-        if r == pusher || touched[r] || !is_movable_gas(world, r) {
-            continue;
-        }
-        if world.cell_at(r).material != world.cell_at(victim).material
-            || !same_transition(world, r, victim)
-        {
-            continue;
-        }
-        let pressure = pressure_at(world, r);
-        if best.is_none_or(|(_, lowest)| pressure < lowest) {
-            best = Some((r, pressure));
-        }
-    }
-    best.map(|(r, _)| r)
-}
-
 /// The gas rules, in the order `physics::step` runs them.
 pub fn step(world: &mut World, dt: Scalar) {
-    diffuse(world, dt);
-    expand(world);
-    advect(world);
+    flow(world, dt);
+    interdiffuse(world, dt);
 }
 
 /// The spread of pressures across every gas cell in the world, as
 /// `(min, max)` — the number a headless test asserts on to say "the
-/// atmosphere has equalised", and `None` if there is no gas at all.
+/// atmosphere has equalised", and `None` if there is no gas at all. Now that
+/// gases mix, this is the meaningful figure: CO₂ and air share cells and
+/// share one pressure.
 pub fn pressure_range(world: &World) -> Option<(Scalar, Scalar)> {
     range_over(world, None)
 }
 
-/// [`pressure_range`] restricted to one gas. Worth having separately
-/// because two *different* gases in this model cannot share a cell and so
-/// cannot equalise with each other (see the module doc): "has this gas
-/// settled" is a question about one species at a time.
-pub fn pressure_range_of(
-    world: &World,
-    material: crate::material::MaterialId,
-) -> Option<(Scalar, Scalar)> {
+/// [`pressure_range`] restricted to gas cells whose largest component is
+/// `material`.
+pub fn pressure_range_of(world: &World, material: MaterialId) -> Option<(Scalar, Scalar)> {
     range_over(world, Some(material))
 }
 
-fn range_over(
-    world: &World,
-    only: Option<crate::material::MaterialId>,
-) -> Option<(Scalar, Scalar)> {
+fn range_over(world: &World, only: Option<MaterialId>) -> Option<(Scalar, Scalar)> {
     let mut range: Option<(Scalar, Scalar)> = None;
     for p in 0..world.width() * world.height() {
-        if world.material_of(p).phase != Phase::Gas || world.material_of(p).gas_constant <= 0.0 {
+        if !world.is_gas_at(p) {
             continue;
         }
         if only.is_some_and(|m| world.cell_at(p).material != m) {
@@ -510,26 +525,50 @@ fn range_over(
     range
 }
 
-/// Mass-weighted mean height of a material, in cell rows — how a test says
-/// "the CO2 ended up underneath the air" in a number rather than a picture.
-/// `None` if the world holds none of it.
-pub fn mean_height_of(world: &World, material: crate::material::MaterialId) -> Option<f64> {
+/// Mass-weighted mean height of a material, in cell rows, counting its
+/// share of every mixture — how a test says "the CO₂ ended up low in the
+/// room" in a number rather than a picture. `None` if the world holds none.
+pub fn mean_height_of(world: &World, material: MaterialId) -> Option<f64> {
     let w = world.width();
     let mut mass = 0.0f64;
     let mut weighted = 0.0f64;
     for p in 0..w * world.height() {
-        let cell = world.cell_at(p);
-        if cell.material != material {
-            continue;
-        }
-        mass += cell.mass as f64;
-        weighted += cell.mass as f64 * (p / w) as f64;
+        let grams = world.grams_of_at(p, material);
+        mass += grams;
+        weighted += grams * (p / w) as f64;
     }
     if mass <= 0.0 {
         None
     } else {
         Some(weighted / mass)
     }
+}
+
+/// The mole fraction of `species` in each row's gas, bottom row first —
+/// its partial pressure summed across the row over the row's total. `None`
+/// for a row with no gas in it.
+///
+/// This is the number the dictation's claim is actually about. A layer is a
+/// profile that is 1 at the floor and 0 above it; a mixed room is a profile
+/// that is the same all the way up; "heavier, but it doesn't all fall to the
+/// bottom" is one that leans toward the floor without reaching zero at the
+/// ceiling.
+pub fn fraction_profile(world: &World, species: MaterialId) -> Vec<Option<f64>> {
+    let (w, h) = (world.width(), world.height());
+    (0..h)
+        .map(|j| {
+            let (mut part, mut total) = (0.0f64, 0.0f64);
+            for i in 0..w {
+                let p = j * w + i;
+                if !world.is_gas_at(p) {
+                    continue;
+                }
+                part += partial_pressure_at(world, p, species) as f64;
+                total += pressure_at(world, p) as f64;
+            }
+            (total > 0.0).then(|| part / total)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -543,13 +582,27 @@ mod tests {
         World::new(w, h, MaterialTable::terrarium(), t::AIR, 291.0)
     }
 
+    /// Scales everything in a gas cell by `factor` — a pressurised or
+    /// evacuated cell, painted for a test.
+    fn compress(w: &mut World, index: GridIndex, factor: Scalar) {
+        let mut cell = w.cell(index);
+        for m in cell.mix.iter_mut() {
+            *m *= factor;
+        }
+        w.set_cell(index, cell);
+    }
+
+    fn mixture(w: &World, parts: &[(MaterialId, Scalar)], temperature: Scalar) -> Cell {
+        Cell::gas(w.materials(), parts, temperature)
+    }
+
     /// The table's gas densities are derived from one atmosphere, so a
     /// freshly painted world of mixed gases starts out at uniform pressure
     /// — no phantom gradient to level.
     #[test]
     fn every_gas_at_room_temperature_starts_at_the_same_pressure() {
         let table = MaterialTable::terrarium();
-        let pressures: Vec<Scalar> = [t::AIR, t::STEAM, t::CO2]
+        let pressures: Vec<Scalar> = [t::AIR, t::STEAM, t::CO2, t::SPIRIT]
             .iter()
             .map(|&id| {
                 let m = table.get(id);
@@ -567,13 +620,7 @@ mod tests {
     #[test]
     fn a_compressed_pocket_equalises_across_a_room_and_conserves_mass() {
         let mut w = air_world(16, 8);
-        w.rebaseline();
-        // Ten times the mass in one corner cell: a pressurised bottle.
-        let idx = GridIndex::new(0, 0);
-        let mut cell = w.cell(idx);
-        let extra = cell.mass * 9.0;
-        cell.mass += extra;
-        w.set_cell(idx, cell);
+        compress(&mut w, GridIndex::new(0, 0), 10.0);
         w.rebaseline();
 
         let before = w.total_mass();
@@ -581,7 +628,7 @@ mod tests {
         assert!(hi0 > lo0 * 5.0, "the bottle should start far from level");
 
         for _ in 0..400 {
-            diffuse(&mut w, 0.05);
+            flow(&mut w, 0.05);
         }
 
         let (lo, hi) = pressure_range(&w).unwrap();
@@ -596,32 +643,29 @@ mod tests {
         // live where f32 has only ~7 digits to give.
         assert!(
             (w.total_mass() - before).abs() < 1e-6 * before,
-            "gas diffusion must not create or destroy mass: {before} -> {}",
+            "gas flow must not create or destroy mass: {before} -> {}",
             w.total_mass()
         );
         let r = w.conservation_residuals();
         assert!(
             r.mass_relative.abs() < 1e-6 && r.energy_relative.abs() < 1e-6,
-            "gas diffusion must not create or destroy mass or energy, residuals {r:?}"
+            "gas flow must not create or destroy mass or energy, residuals {r:?}"
         );
     }
 
     #[test]
     fn gas_expands_into_a_vacuum_rather_than_leaving_it_empty() {
         let mut w = air_world(12, 4);
-        // Empty the right-hand half: air cells with essentially no gas in
-        // them, which is what a vacuum is here.
+        // Empty the right-hand half: cells with essentially no gas in them,
+        // which is what a vacuum is here.
         for j in 0..4 {
             for i in 6..12 {
-                let idx = GridIndex::new(i, j);
-                let mut cell = w.cell(idx);
-                cell.mass = 1e-9;
-                w.set_cell(idx, cell);
+                compress(&mut w, GridIndex::new(i, j), 1e-6);
             }
         }
         w.rebaseline();
         for _ in 0..300 {
-            diffuse(&mut w, 0.05);
+            flow(&mut w, 0.05);
         }
         let (lo, hi) = pressure_range(&w).unwrap();
         assert!(
@@ -635,14 +679,13 @@ mod tests {
     fn a_transfer_between_gas_cells_of_different_temperature_conserves_energy() {
         let mut w = air_world(2, 1);
         let hot = GridIndex::new(0, 0);
-        let mut cell = w.cell(hot);
-        cell.temperature = 600.0;
-        cell.mass *= 4.0;
+        let mut cell = mixture(&w, &[(t::AIR, 0.0048), (t::STEAM, 0.001)], 600.0);
+        cell.flow_dir = 0;
         w.set_cell(hot, cell);
         w.rebaseline();
         let energy = w.total_energy();
         for _ in 0..50 {
-            diffuse(&mut w, 0.05);
+            step(&mut w, 0.05);
         }
         assert!(
             (w.total_energy() - energy).abs() < 1e-6 * energy.abs(),
@@ -652,129 +695,46 @@ mod tests {
         );
     }
 
-    /// The ONI complaint, as a test: CO2 must end up under the air on its
-    /// own, with no rule anywhere naming CO2.
+    /// Two gases in contact, at one pressure, mix — which a
+    /// one-material-per-cell grid could never do.
     #[test]
-    fn co2_settles_below_air_without_a_rule_that_says_so() {
-        let mut w = air_world(10, 12);
-        // A ceiling-high slab of CO2, released at the top of the room.
-        for i in 2..8 {
-            for j in 9..11 {
-                w.fill(GridIndex::new(i, j), t::CO2, 291.0);
-            }
+    fn two_gases_at_one_pressure_interdiffuse() {
+        let mut w = air_world(12, 1);
+        for i in 0..6 {
+            w.fill(GridIndex::new(i, 0), t::CO2, 291.0);
         }
         w.rebaseline();
-        let start = mean_height_of(&w, t::CO2).unwrap();
-        physics::run(&mut w, 300, 0.05);
-        let end = mean_height_of(&w, t::CO2).unwrap();
-        let air = mean_height_of(&w, t::AIR).unwrap();
+        let (p0, _) = pressure_range(&w).unwrap();
+        for _ in 0..2000 {
+            step(&mut w, 0.05);
+        }
+        let far_left = w.grams_of_at(0, t::CO2) / w.cell_at(0).mass;
+        let far_right = w.grams_of_at(11, t::CO2) / w.cell_at(11).mass;
         assert!(
-            end < 3.0,
-            "CO2 should have sunk to the floor, mean height {start} -> {end}"
+            far_right > 0.3 && far_left < 0.8,
+            "the two halves should have mixed, CO2 mass fraction {far_left} .. {far_right}"
         );
+        let (lo, hi) = pressure_range(&w).unwrap();
         assert!(
-            end < air,
-            "CO2 should sit below the air, CO2 at {end}, air at {air}"
+            hi - lo < 0.02 * p0,
+            "mixing should not disturb the total pressure: {lo} .. {hi}"
         );
         let r = w.conservation_residuals();
         assert!(
-            r.mass.abs() < 1e-9 && r.energy.abs() < 1e-3,
-            "residuals {r:?}"
+            r.mass_relative.abs() < 1e-6 && r.energy_relative.abs() < 1e-6,
+            "{r:?}"
+        );
+        assert!(
+            (w.mass_of(t::CO2) - 6.0 * w.materials().get(t::CO2).density).abs() < 1e-7,
+            "no CO2 may be made or lost by mixing"
         );
     }
 
-    /// And, having settled, it must *stop*. A layered atmosphere that keeps
-    /// shuffling is the shimmer this repo has already been bitten by once.
+    /// Bulk flow alone never lifts a heavy gas: it answers to total
+    /// pressure, and a settled layer is at the same total pressure as the
+    /// air above it. (Mixing is `interdiffuse`'s job, tested above.)
     #[test]
-    fn a_settled_atmosphere_stops_moving() {
-        let mut w = air_world(10, 12);
-        for i in 0..10 {
-            for j in 0..3 {
-                w.fill(GridIndex::new(i, j), t::CO2, 291.0);
-            }
-        }
-        w.rebaseline();
-        physics::run(&mut w, 200, 0.05);
-        let before: Vec<Cell> = (0..w.width() * w.height()).map(|p| w.cell_at(p)).collect();
-        physics::run(&mut w, 50, 0.05);
-        let changed = (0..w.width() * w.height())
-            .filter(|&p| w.cell_at(p).material != before[p].material)
-            .count();
-        assert_eq!(
-            changed, 0,
-            "a stratified atmosphere should be at rest, {changed} cells still swapping"
-        );
-    }
-
-    /// Buoyancy reads a cell's real mass, not its material's nominal
-    /// density — so a compressed pocket of gas sinks through a thin one of
-    /// the very same material.
-    #[test]
-    fn a_compressed_parcel_sinks_through_thinner_gas_of_the_same_material() {
-        let mut w = air_world(3, 8);
-        let top = GridIndex::new(1, 7);
-        let mut cell = w.cell(top);
-        cell.mass *= 20.0;
-        w.set_cell(top, cell);
-        w.rebaseline();
-        let heavy = w.cell(top).mass;
-        physics::apply_gravity(&mut w);
-        assert!(
-            w.cell(top).mass < heavy,
-            "the heavy parcel should have started falling"
-        );
-    }
-    /// The rule `expand` exists for: a cell of vapour that has just boiled
-    /// holds a whole gram of gas, which is over a thousand atmospheres,
-    /// and its neighbours are a different species so `diffuse` cannot
-    /// touch it. It must spread out into the room, and the room's own air
-    /// must end up somewhere, and neither total may move.
-    #[test]
-    fn a_boiled_pocket_expands_into_the_room_it_is_let_into() {
-        let mut w = air_world(16, 16);
-        // One cell holding a gram of steam: what boiling a cell of water
-        // actually produces.
-        let hot = Cell {
-            material: t::STEAM,
-            mass: 1.0,
-            temperature: 380.0,
-            progress: 0.0,
-            pending: crate::world::NO_PENDING,
-            flow_dir: 0,
-        };
-        w.set_cell(GridIndex::new(8, 8), hot);
-        w.rebaseline();
-        let (m0, e0) = (w.total_mass(), w.total_energy());
-        let before = pressure(&w, GridIndex::new(8, 8));
-
-        for _ in 0..60 {
-            expand(&mut w);
-            diffuse(&mut w, 0.05);
-        }
-
-        let cells = w.count_of(t::STEAM);
-        assert!(
-            cells > 40,
-            "a gram of steam should fill a large part of the room, got {cells} cells"
-        );
-        let (lo, hi) = pressure_range_of(&w, t::STEAM).expect("steam");
-        assert!(
-            hi < before * 0.05,
-            "the pocket should have relaxed: {before} -> {hi} (lowest {lo})"
-        );
-        assert!((w.total_mass() - m0).abs() / m0 < 1e-5, "mass moved");
-        assert!(
-            (w.total_energy() - e0).abs() / e0.abs() < 1e-5,
-            "energy moved: {e0} -> {}",
-            w.total_energy()
-        );
-    }
-
-    /// ...and it must not be a way for a heavy gas to climb. A settled CO2
-    /// layer is at the same pressure as the air above it, nowhere near the
-    /// margin expansion needs, so it stays where it is.
-    #[test]
-    fn a_settled_heavy_layer_does_not_expand_upward() {
+    fn bulk_flow_alone_does_not_lift_a_settled_heavy_layer() {
         let mut w = air_world(12, 12);
         for i in 0..12 {
             for j in 0..3 {
@@ -784,13 +744,167 @@ mod tests {
         w.rebaseline();
         let before = mean_height_of(&w, t::CO2).expect("co2");
         for _ in 0..200 {
-            expand(&mut w);
-            diffuse(&mut w, 0.05);
+            flow(&mut w, 0.05);
         }
         let after = mean_height_of(&w, t::CO2).expect("co2");
         assert!(
-            (after - before).abs() < 0.5,
+            (after - before).abs() < 0.05,
             "the layer drifted from {before} to {after}"
+        );
+    }
+
+    /// The dictation's complaint, as a test. A slab of CO2 released near
+    /// the ceiling is heavier than the air, so it sinks — and then it does
+    /// not simply lie on the floor as a layer with clean air over it.
+    #[test]
+    fn co2_sinks_but_does_not_all_fall_to_the_bottom() {
+        let mut w = air_world(10, 12);
+        for i in 2..8 {
+            for j in 9..11 {
+                w.fill(GridIndex::new(i, j), t::CO2, 291.0);
+            }
+        }
+        w.rebaseline();
+        let start = mean_height_of(&w, t::CO2).unwrap();
+        physics::run(&mut w, 300, 0.05);
+        let sunk = mean_height_of(&w, t::CO2).unwrap();
+        assert!(
+            sunk < start - 3.0,
+            "CO2 is heavier than air and should have sunk, mean height {start} -> {sunk}"
+        );
+        physics::run(&mut w, 3000, 0.05);
+        let profile = fraction_profile(&w, t::CO2);
+        let floor = profile[0].unwrap();
+        let ceiling = profile[w.height() - 1].unwrap();
+        assert!(
+            floor > ceiling,
+            "it should still lean toward the floor: floor {floor}, ceiling {ceiling}"
+        );
+        assert!(
+            ceiling > 0.25 * floor,
+            "but the ceiling should not be clean air: floor {floor}, ceiling {ceiling}"
+        );
+        let r = w.conservation_residuals();
+        assert!(
+            r.mass_relative.abs() < 1e-6 && r.energy_relative.abs() < 1e-6,
+            "residuals {r:?}"
+        );
+    }
+
+    /// And, once mixed, it must *stop*. A uniform atmosphere that keeps
+    /// shuffling is the shimmer this repo has already been bitten by once.
+    #[test]
+    fn a_uniform_mixed_atmosphere_stays_put() {
+        let mut w = air_world(10, 12);
+        for i in 0..10 {
+            for j in 0..12 {
+                let cell = mixture(&w, &[(t::AIR, 0.0009), (t::CO2, 0.0005)], 291.0);
+                w.set_cell(GridIndex::new(i, j), cell);
+            }
+        }
+        w.rebaseline();
+        let before: Vec<Cell> = (0..w.width() * w.height()).map(|p| w.cell_at(p)).collect();
+        physics::run(&mut w, 50, 0.05);
+        let moved = (0..w.width() * w.height())
+            .filter(|&p| {
+                let (a, b) = (w.cell_at(p), before[p]);
+                (a.mass - b.mass).abs() > 1e-6 * b.mass
+                    || (a.temperature - b.temperature).abs() > 1e-3
+            })
+            .count();
+        assert_eq!(moved, 0, "{moved} cells of a uniform atmosphere changed");
+    }
+
+    /// A compressed parcel expands — it does not sink through thinner gas
+    /// of its own kind, which is what comparing raw masses used to make it
+    /// do.
+    #[test]
+    fn a_compressed_parcel_expands_rather_than_sinking() {
+        let mut w = air_world(3, 12);
+        compress(&mut w, GridIndex::new(1, 11), 20.0);
+        w.rebaseline();
+        physics::run(&mut w, 40, 0.05);
+        let top_row: f64 = (0..3).map(|i| w.cell(GridIndex::new(i, 11)).mass).sum();
+        let bottom_row: f64 = (0..3).map(|i| w.cell(GridIndex::new(i, 0)).mass).sum();
+        assert!(
+            (top_row - bottom_row).abs() < 0.05 * bottom_row,
+            "the pocket should have spread evenly, not fallen: top {top_row}, bottom {bottom_row}"
+        );
+    }
+
+    /// ...while a *hot* parcel of the same gas genuinely is lighter at the
+    /// same pressure, and rises.
+    ///
+    /// Buoyancy and bulk flow only, without conduction, and that is a
+    /// finding rather than a convenience. Every gas cell's conductivity is
+    /// a per-second exchange coefficient tuned for feel, about two hundred
+    /// times what real air manages across a centimetre-sized cell; against a
+    /// gas cell's tiny heat capacity it levels a hot parcel with its
+    /// neighbours inside a single step, so in the full step a lone hot cell
+    /// of air diffuses its heat away rather than rising as a thermal. The
+    /// rule under test — hot gas weighs less — is right; what the full step
+    /// does with it is decided by that conductivity.
+    #[test]
+    fn hot_air_rises_through_cold_air() {
+        let mut w = air_world(3, 12);
+        w.fill(GridIndex::new(1, 0), t::AIR, 600.0);
+        w.rebaseline();
+        for _ in 0..30 {
+            physics::apply_gravity(&mut w);
+            flow(&mut w, 0.05);
+        }
+        let hottest = (0..w.width() * w.height())
+            .max_by(|&a, &b| {
+                w.cell_at(a)
+                    .temperature
+                    .partial_cmp(&w.cell_at(b).temperature)
+                    .unwrap()
+            })
+            .unwrap();
+        let row = hottest / w.width();
+        assert!(
+            row > 5,
+            "the hot parcel should have risen, it is at row {row}"
+        );
+        let r = w.conservation_residuals();
+        assert!(
+            r.mass_relative.abs() < 1e-9 && r.energy_relative.abs() < 1e-9,
+            "{r:?}"
+        );
+    }
+
+    /// A cell of vapour that has just boiled holds a whole gram of gas —
+    /// over a thousand atmospheres. It must spread out into the room.
+    #[test]
+    fn a_boiled_pocket_expands_into_the_room_it_is_let_into() {
+        let mut w = air_world(16, 16);
+        let hot = mixture(&w, &[(t::STEAM, 1.0)], 380.0);
+        w.set_cell(GridIndex::new(8, 8), hot);
+        w.rebaseline();
+        let (m0, e0) = (w.total_mass(), w.total_energy());
+        let before = pressure(&w, GridIndex::new(8, 8));
+
+        for _ in 0..60 {
+            step(&mut w, 0.05);
+        }
+
+        let with_steam = (0..w.width() * w.height())
+            .filter(|&p| w.grams_of_at(p, t::STEAM) > 1e-4)
+            .count();
+        assert!(
+            with_steam > 100,
+            "a gram of steam should reach a large part of the room, got {with_steam} cells"
+        );
+        let (_, hi) = pressure_range(&w).expect("gas");
+        assert!(
+            hi < before * 0.05,
+            "the pocket should have relaxed: {before} -> {hi}"
+        );
+        assert!((w.total_mass() - m0).abs() / m0 < 1e-5, "mass moved");
+        assert!(
+            (w.total_energy() - e0).abs() / e0.abs() < 1e-5,
+            "energy moved: {e0} -> {}",
+            w.total_energy()
         );
     }
 }

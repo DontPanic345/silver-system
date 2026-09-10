@@ -1,17 +1,25 @@
 // Scenario: "A person opens www/gases.html in a real browser tab and watches
-// the CO2 settle" — a headless Playwright check on the gas chamber.
+// the CO2 sink, and then mix" — a headless Playwright check on the gas
+// chamber.
+//
+// The claim changed on night 4. This page used to demonstrate CO2 settling
+// into a flat layer on the floor under clean air — which, read against the
+// dictation it was meant to answer ("gas is mix. CO2 is heavier but it
+// doesn't all fall to the bottom of a room"), was the complaint rather than
+// the fix. Gases can share cells now, and the page claims both halves.
 //
 // The point of this file is that it does not trust the simulation's own
 // summary of itself. It reads two independent things and requires them to
 // agree:
 //
-//  1. The JSON the page exposes: the air's pressure spread must collapse as
-//     the bottle vents, the CO2's mean height must fall to the floor, and
-//     the conservation residuals must stay at noise.
-//  2. The actual canvas pixels: the bottom rows of the image must end up
-//     visibly more CO2-coloured than they started, and the top rows less so.
-//     That is the claim "the CO2 sank" checked against what a person would
-//     actually see, rather than against the number the simulation computed.
+//  1. The JSON the page exposes: the room's pressure spread must collapse
+//     as the bottle vents, the CO2's mean height must fall (it sank), the
+//     row-by-row CO2 profile must lean toward the floor without being empty
+//     at the ceiling (it mixed), and the residuals must stay at noise.
+//  2. The actual canvas pixels: a band well above the floor must end up
+//     visibly CO2-coloured — which a layer on the floor never is — and the
+//     floor band must be more so. That is "it sank, and then it mixed"
+//     checked against what a person would see.
 //
 // Prerequisite: the wasm build must already exist at www/pkg/ (see
 // scripts/build-wasm.sh).
@@ -123,70 +131,87 @@ async function main() {
       timeout: 10000,
     });
     const first = await page.evaluate(() => window.__lastReport);
-    // The CO2 starts as a slab near the ceiling, so the top band is the one
-    // holding it at the start.
-    const topBefore = await bandColour(page, 0.05, 0.25);
-    const bottomBefore = await bandColour(page, 0.85, 0.98);
+    // The same band the mixing is judged in, sampled before any CO2 can have
+    // reached it (the slab starts at the ceiling): the colour of clean air
+    // and walls in that part of the picture.
+    const clean = await bandColour(page, 0.55, 0.72);
 
-    // Real wall-clock time, not a fast-forward: this is the same rate a
-    // person watching the tab would see.
+    // Real wall-clock time, not a fast-forward: the same rate a person
+    // watching the tab would see. The page steps as fast as its frame budget
+    // allows, so how many steps that is depends on the machine; wait for
+    // enough simulated time for the mixing to show, with a ceiling.
     await page.waitForTimeout(6000);
+    await page
+      .waitForFunction(() => window.__lastReport && window.__lastReport.step >= 4000, {
+        timeout: 40000,
+      })
+      .catch(() => {});
 
     const second = await page.evaluate(() => window.__lastReport);
-    const topAfter = await bandColour(page, 0.05, 0.25);
-    const bottomAfter = await bandColour(page, 0.85, 0.98);
+    // Bands measured from the top of the image. The floor band is the
+    // bottom tenth of the room; the middle band sits well above it, below
+    // the shelf — clean air, if the CO2 had merely settled.
+    const floorBand = await bandColour(page, 0.86, 0.96);
+    const middleBand = await bandColour(page, 0.55, 0.72);
 
     if (!(second.step > first.step)) {
       fail(`FAIL gases_canvas: simulation did not advance (${first.step} -> ${second.step}).`);
     }
+    if (!(second.step >= 4000)) {
+      fail(`FAIL gases_canvas: only ${second.step} steps in the time allowed — too slow to judge.`);
+    }
 
-    // The CO2 layer, in numbers.
-    if (!(second.co2_mean_height < 4)) {
+    // It sank: heavier than air, by the same rule that sinks sand.
+    if (!(second.co2_mean_height < first.co2_mean_height / 2)) {
       fail(
-        `FAIL gases_canvas: CO2 did not settle on the floor ` +
-          `(mean height ${first.co2_mean_height} -> ${second.co2_mean_height}, ` +
-          `in a room ${'32'} rows tall).`
+        `FAIL gases_canvas: the CO2 did not sink ` +
+          `(mean height ${first.co2_mean_height} -> ${second.co2_mean_height}).`
       );
     }
+    // ...and then it mixed: the profile leans toward the floor but does not
+    // run to zero at the ceiling.
+    const prof = second.co2_profile.filter((f) => f >= 0);
+    const floor = prof[0];
+    const ceiling = prof[prof.length - 1];
+    if (!(floor > 2 * ceiling)) {
+      fail(`FAIL gases_canvas: no lean toward the floor (floor ${floor}, ceiling ${ceiling}).`);
+    }
+    if (!(ceiling > 0.1 * floor)) {
+      fail(
+        `FAIL gases_canvas: the CO2 is lying on the floor as a layer ` +
+          `(floor ${floor}, ceiling ${ceiling}).`
+      );
+    }
+
     // ...and in pixels. The measure is redness (red minus green), not plain
     // brightness, and that distinction was found the hard way: the page
     // brightens a gas cell in proportion to its pressure, so as the bottle
     // vents into the room *every* band gets brighter and a brightness test
-    // passes for the wrong reason. CO2 paints purple (red above green) where
-    // air paints blue-grey (red below green), and the pressure shading adds
-    // the same amount to every channel, so red-minus-green tracks how much
-    // CO2 is in a band and ignores how compressed it is.
-    const brightness = ([r, g]) => r - g;
-    if (!(brightness(bottomAfter) > brightness(bottomBefore) + 2)) {
+    // passes for the wrong reason. CO2 paints amber (red well above green)
+    // where air paints blue-grey (red below green), and the pressure shading
+    // adds the same amount to every channel, so red-minus-green tracks how
+    // much CO2 is in a band and ignores how compressed it is.
+    const redness = ([r, g]) => r - g;
+    if (!(redness(middleBand) > redness(clean) + 4)) {
       fail(
-        `FAIL gases_canvas: the floor never filled with CO2 in the actual pixels ` +
-          `(${JSON.stringify(bottomBefore)} -> ${JSON.stringify(bottomAfter)}).`
+        `FAIL gases_canvas: no CO2 visible above the floor — a layer, not a mixture ` +
+          `(middle ${JSON.stringify(middleBand)} vs clean air ${JSON.stringify(clean)}).`
       );
     }
-    // The other half of "it settled into a layer": the floor must be
-    // redder than the ceiling at the end, i.e. the CO2 is *down there* and
-    // not spread evenly through the room.
-    //
-    // Deliberately a comparison between two bands of the same final frame
-    // rather than before-and-after at the ceiling. The CO2 falls the height
-    // of the room in well under a second of wall-clock time, which is faster
-    // than this script can take its "before" sample — an earlier version
-    // compared the ceiling against itself and was really comparing two
-    // already-settled frames.
-    if (!(brightness(bottomAfter) > brightness(topAfter) + 5)) {
+    if (!(redness(floorBand) > redness(middleBand) + 2)) {
       fail(
-        `FAIL gases_canvas: no CO2 layer visible on the floor at the end ` +
-          `(floor ${JSON.stringify(bottomAfter)} vs ceiling ${JSON.stringify(topAfter)}).`
+        `FAIL gases_canvas: the floor is not visibly richer than the room above it ` +
+          `(floor ${JSON.stringify(floorBand)} vs middle ${JSON.stringify(middleBand)}).`
       );
     }
 
-    // The bottle vents: the air's pressure spread must be shrinking.
-    if (!(second.air_pressure_max - second.air_pressure_min <
-          first.air_pressure_max - first.air_pressure_min)) {
+    // The bottle vents: the room's pressure spread must collapse.
+    if (!(second.pressure_max - second.pressure_min <
+          0.2 * (first.pressure_max - first.pressure_min))) {
       fail(
-        `FAIL gases_canvas: the air's pressure spread did not shrink ` +
-          `(${first.air_pressure_max - first.air_pressure_min} -> ` +
-          `${second.air_pressure_max - second.air_pressure_min}).`
+        `FAIL gases_canvas: the room's pressure spread did not collapse ` +
+          `(${first.pressure_max - first.pressure_min} -> ` +
+          `${second.pressure_max - second.pressure_min}).`
       );
     }
 
@@ -206,10 +231,11 @@ async function main() {
       console.log(
         `PASS gases_canvas: advanced ${first.step} -> ${second.step} steps, ` +
           `CO2 mean height ${first.co2_mean_height.toFixed(2)} -> ${second.co2_mean_height.toFixed(2)}, ` +
-          `floor redness ${brightness(bottomBefore).toFixed(1)} -> ${brightness(bottomAfter).toFixed(1)}, ` +
-          `ceiling redness ${brightness(topBefore).toFixed(1)} -> ${brightness(topAfter).toFixed(1)}, ` +
-          `air pressure spread ${(first.air_pressure_max - first.air_pressure_min).toFixed(4)} -> ` +
-          `${(second.air_pressure_max - second.air_pressure_min).toFixed(4)}, ` +
+          `profile floor ${(100 * floor).toFixed(1)}% ceiling ${(100 * ceiling).toFixed(1)}%, ` +
+          `redness clean ${redness(clean).toFixed(1)} middle ${redness(middleBand).toFixed(1)} ` +
+          `floor ${redness(floorBand).toFixed(1)}, ` +
+          `pressure spread ${(first.pressure_max - first.pressure_min).toFixed(4)} -> ` +
+          `${(second.pressure_max - second.pressure_min).toFixed(4)}, ` +
           `mass residual ${second.residual_mass_relative}.`
       );
     }

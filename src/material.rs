@@ -139,7 +139,23 @@ pub struct Material {
     /// temperature, CO₂ ends up the densest gas in the jar and settles
     /// under the others without any rule saying so.
     pub gas_constant: Scalar,
+    /// Volumetric thermal expansion, per kelvin, for a liquid; `0.0` for
+    /// anything else (a gas's expansion is already in its gas constant).
+    ///
+    /// Read by buoyancy only — the Boussinesq approximation. A cell of hot
+    /// water still holds a gram; it is only *weighed* as slightly lighter
+    /// than a cold one when gravity decides which of the two sinks. That is
+    /// the whole of what makes a pot heated from below turn over instead of
+    /// sitting as a hot bottom under a cool top, and a still needs its pot
+    /// to turn over: with the surface left cool, the vapour over it
+    /// condenses straight back onto it. See [`Material::buoyant_density`].
+    pub thermal_expansion: Scalar,
 }
+
+/// The temperature the material table's densities are quoted at — room
+/// temperature, and the one [`Material::thermal_expansion`] is measured
+/// from.
+pub const DENSITY_REFERENCE_K: Scalar = 291.0;
 
 impl Material {
     /// Builds a material from its properties. Plain field construction, no
@@ -169,7 +185,22 @@ impl Material {
             },
             breathable: false,
             gas_constant: 0.0,
+            thermal_expansion: 0.0,
         }
+    }
+
+    /// Sets [`Material::thermal_expansion`], builder-style.
+    pub fn with_thermal_expansion(mut self, per_kelvin: Scalar) -> Self {
+        self.thermal_expansion = per_kelvin;
+        self
+    }
+
+    /// `mass` of this material at `temperature`, as buoyancy weighs it:
+    /// scaled down by its thermal expansion above the reference
+    /// temperature (and up below it). Identical to `mass` for anything that
+    /// does not expand.
+    pub fn buoyant_density(&self, mass: Scalar, temperature: Scalar) -> Scalar {
+        mass * (1.0 - self.thermal_expansion * (temperature - DENSITY_REFERENCE_K))
     }
 
     /// Overrides [`Material::mobility`], builder-style.
@@ -323,6 +354,32 @@ pub struct Reaction {
     pub direction: Direction,
 }
 
+/// The most species a single gas cell can hold at once — every gas in the
+/// table plus every liquid a gas condenses into (carried as suspended mist).
+/// A fixed-size array rather than a map because it is copied with every
+/// cell, and the table asserts at construction that it fits.
+pub const MIX_SLOTS: usize = 8;
+
+/// A liquid and the vapour it evaporates into, with the two numbers that
+/// fix its vapour-pressure curve: the boiling point at the table's
+/// [reference pressure](MaterialTable::reference_pressure), and the latent
+/// heat of vaporisation.
+///
+/// Nothing here is declared separately. Every `Volatile` is *read off* a
+/// [`Transition`] the table already carries — a liquid's heating transition
+/// into a gas is an evaporation, a gas's cooling transition into a liquid is
+/// a condensation — so a boiling point written once in the transition table
+/// is the same boiling point the humidity of the air is computed from, and
+/// the two cannot drift apart. See [`MaterialTable::saturation_pressure`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Volatile {
+    pub liquid: MaterialId,
+    pub vapour: MaterialId,
+    pub boiling_k: Scalar,
+    /// Real latent heat of vaporisation, J/g (always positive).
+    pub latent_heat: Scalar,
+}
+
 /// A newtype index into a [`MaterialTable`], distinct from a bare integer so
 /// a cell's material reference can't be silently confused with, say, a
 /// `GridIndex` coordinate or a raw array offset.
@@ -354,6 +411,33 @@ pub struct MaterialTable {
     materials: Vec<Material>,
     transitions: Vec<Transition>,
     reactions: Vec<Reaction>,
+    /// The pressure at which this table's boiling points hold — see
+    /// [`MaterialTable::reference_pressure`].
+    reference_pressure: Scalar,
+    /// Which species each mixture slot holds, in slot order: every gas,
+    /// then every liquid some gas condenses into.
+    slots: Vec<MaterialId>,
+    /// The inverse of `slots`, indexed by material id.
+    slot_of: Vec<Option<u8>>,
+    /// Liquids that evaporate, read off heating transitions into a gas.
+    evaporating: Vec<Volatile>,
+    /// Vapours that condense, read off cooling transitions into a liquid.
+    condensing: Vec<Volatile>,
+    /// Per-slot copies of the properties every mixture sum reads — see
+    /// [`SlotProps`].
+    slot_props: SlotProps,
+}
+
+/// The properties of each mixture slot's species, laid out as arrays so
+/// the sums a gas cell is made of (`Σ m·c`, `Σ m·L`, `Σ m·R`) are tight
+/// loops rather than a table lookup per term. A cache of the materials,
+/// rebuilt whenever they change; never a second source of truth.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct SlotProps {
+    pub heat_capacity: [Scalar; MIX_SLOTS],
+    pub latent_energy: [Scalar; MIX_SLOTS],
+    pub gas_constant: [Scalar; MIX_SLOTS],
+    pub is_gas: [bool; MIX_SLOTS],
 }
 
 impl MaterialTable {
@@ -363,11 +447,180 @@ impl MaterialTable {
     /// vector is that material's [`MaterialId`] under the id convention —
     /// see [`MaterialTable::get`].
     pub fn new(materials: Vec<Material>) -> Self {
-        MaterialTable {
+        let mut table = MaterialTable {
             materials,
             transitions: Vec::new(),
             reactions: Vec::new(),
+            reference_pressure: 0.0,
+            slots: Vec::new(),
+            slot_of: Vec::new(),
+            evaporating: Vec::new(),
+            condensing: Vec::new(),
+            slot_props: SlotProps::default(),
+        };
+        table.index_mixtures();
+        table
+    }
+
+    /// Per-slot species properties — see [`SlotProps`].
+    pub fn slot_props(&self) -> &SlotProps {
+        &self.slot_props
+    }
+
+    /// Sets the pressure this table's boiling points are quoted at,
+    /// builder-style.
+    pub fn with_reference_pressure(mut self, pressure: Scalar) -> Self {
+        self.reference_pressure = pressure;
+        self
+    }
+
+    /// The pressure at which every boiling point in this table holds: one
+    /// atmosphere, in this simulation's units.
+    ///
+    /// It is also the pressure every gas's nominal density is quoted at,
+    /// which is why buoyancy between two gas cells can be compared at it —
+    /// see `physics::pick_target`.
+    pub fn reference_pressure(&self) -> Scalar {
+        self.reference_pressure
+    }
+
+    /// Whether `id` is a gas species — a material that lives in a gas
+    /// cell's mixture rather than filling a cell on its own.
+    pub fn is_gas(&self, id: MaterialId) -> bool {
+        let m = self.get(id);
+        m.phase == Phase::Gas && m.gas_constant > 0.0
+    }
+
+    /// The mixture slot `id` occupies in a gas cell, if it can be part of a
+    /// mixture at all.
+    pub fn slot(&self, id: MaterialId) -> Option<usize> {
+        self.slot_of
+            .get(id.0 as usize)
+            .copied()
+            .flatten()
+            .map(|s| s as usize)
+    }
+
+    /// Species in slot order — see [`MaterialTable::slot`].
+    pub fn slots(&self) -> &[MaterialId] {
+        &self.slots
+    }
+
+    /// The label a gas cell with nothing in it carries: the first gas in
+    /// the table. Only a label — a cell holding no mass has no energy and
+    /// no pressure, and the first gas to flow into it relabels it.
+    pub fn vacuum_label(&self) -> MaterialId {
+        self.slots
+            .iter()
+            .copied()
+            .find(|&id| self.is_gas(id))
+            .expect("a table with gas cells in it needs at least one gas species")
+    }
+
+    /// What `liquid` evaporates into, if anything.
+    pub fn evaporation_of(&self, liquid: MaterialId) -> Option<&Volatile> {
+        self.evaporating.iter().find(|v| v.liquid == liquid)
+    }
+
+    /// Whether any liquid in the table evaporates into `vapour`.
+    pub fn evaporation_of_any_into(&self, vapour: MaterialId) -> bool {
+        self.evaporating.iter().any(|v| v.vapour == vapour)
+    }
+
+    /// What `vapour` condenses into, if anything.
+    pub fn condensation_of(&self, vapour: MaterialId) -> Option<&Volatile> {
+        self.condensing.iter().find(|v| v.vapour == vapour)
+    }
+
+    /// The partial pressure of `volatile`'s vapour that is in equilibrium
+    /// with its liquid at `temperature` — the most of it the air can hold.
+    ///
+    /// The Clausius–Clapeyron relation, integrated with a constant latent
+    /// heat:
+    ///
+    /// ```text
+    /// p_sat(T) = P_ref · exp( (L / R_v) · (1/T_b − 1/T) )
+    /// ```
+    ///
+    /// Every number in it was already in the table: the boiling point `T_b`
+    /// and latent heat `L` come off the transition, the vapour's specific gas
+    /// constant `R_v` off the gas, and `P_ref` is the pressure the boiling
+    /// point was quoted at. So at the boiling point the air can hold exactly
+    /// one atmosphere of vapour, which is what boiling *means*, and below it
+    /// the curve falls off the way real vapour pressure does — water at
+    /// 283 K comes out at 0.015 atmospheres against a measured 0.012. That
+    /// one curve is what makes a pond evaporate without boiling, humid air
+    /// fog on a cold lid, and a still's spirit leave its water behind.
+    pub fn saturation_pressure(&self, volatile: &Volatile, temperature: Scalar) -> Scalar {
+        if temperature <= 0.0 {
+            return 0.0;
         }
+        let r_v = self.get(volatile.vapour).gas_constant;
+        if r_v <= 0.0 {
+            return 0.0;
+        }
+        let exponent =
+            (volatile.latent_heat / r_v) * (1.0 / volatile.boiling_k - 1.0 / temperature);
+        // Clamped so an absurd temperature cannot overflow `f32`; e^60 is
+        // already some 10^26 atmospheres, far past anything a cell reaches.
+        self.reference_pressure * exponent.clamp(-80.0, 60.0).exp()
+    }
+
+    /// Assigns mixture slots and reads the liquid–vapour pairs off the
+    /// transition table. Re-run whenever transitions change, so the two can
+    /// never disagree.
+    fn index_mixtures(&mut self) {
+        let n = self.materials.len();
+        let is_gas = |m: &Material| m.phase == Phase::Gas && m.gas_constant > 0.0;
+        let mut slots: Vec<MaterialId> = (0..n)
+            .filter(|&i| is_gas(&self.materials[i]))
+            .map(|i| MaterialId(i as u16))
+            .collect();
+
+        self.evaporating.clear();
+        self.condensing.clear();
+        for tr in &self.transitions {
+            let (from, to) = (
+                &self.materials[tr.from.0 as usize],
+                &self.materials[tr.to.0 as usize],
+            );
+            let volatile = |liquid, vapour| Volatile {
+                liquid,
+                vapour,
+                boiling_k: tr.threshold_k,
+                latent_heat: tr.latent_heat.abs(),
+            };
+            match tr.direction {
+                Direction::Heating if from.phase == Phase::Liquid && is_gas(to) => {
+                    self.evaporating.push(volatile(tr.from, tr.to));
+                }
+                Direction::Cooling if is_gas(from) && to.phase == Phase::Liquid => {
+                    self.condensing.push(volatile(tr.to, tr.from));
+                    if !slots.contains(&tr.to) {
+                        slots.push(tr.to);
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            slots.len() <= MIX_SLOTS,
+            "{} species can share a gas cell in this table, but a cell only has {MIX_SLOTS} slots",
+            slots.len()
+        );
+        let mut slot_of = vec![None; n];
+        let mut props = SlotProps::default();
+        for (s, id) in slots.iter().enumerate() {
+            slot_of[id.0 as usize] = Some(s as u8);
+            let m = &self.materials[id.0 as usize];
+            props.heat_capacity[s] = m.heat_capacity;
+            props.latent_energy[s] = m.latent_energy;
+            props.gas_constant[s] = m.gas_constant;
+            props.is_gas[s] = is_gas(m);
+        }
+        self.slots = slots;
+        self.slot_of = slot_of;
+        self.slot_props = props;
     }
 
     /// Attaches this table's phase-transition rules and derives every
@@ -524,8 +777,31 @@ impl MaterialTable {
                 self.materials[i].latent_energy = value;
             }
         }
+
+        // A reaction arm acting on a gas rewrites one species *inside* a
+        // mixture (`src/chemistry.rs`), so it must turn a gas into a gas —
+        // there is no honest way to turn one component of a shared cell into
+        // a solid without saying where the rest of the cell goes.
+        let is_gas = |id: MaterialId| {
+            let m = &self.materials[id.0 as usize];
+            m.phase == Phase::Gas && m.gas_constant > 0.0
+        };
+        for r in &reactions {
+            for arm in [r.subject, r.partner] {
+                assert_eq!(
+                    is_gas(arm.from),
+                    is_gas(arm.to),
+                    "reaction arm {} -> {} crosses between a gas and a non-gas; a gas arm \
+                     converts one species of a mixture and must produce another gas",
+                    arm.from.0,
+                    arm.to.0
+                );
+            }
+        }
+
         self.transitions = transitions;
         self.reactions = reactions;
+        self.index_mixtures();
         self
     }
 
@@ -685,17 +961,28 @@ impl MaterialTable {
         // settle the way ONI's simplified layers show it". Here it settles
         // because it is genuinely heavier, by the same one rule that sinks
         // sand through air.
+        // Drawn amber, and bright. Every gas here is false-coloured, and now
+        // that a gas cell is drawn as the blend of what is in it, a gas
+        // only shows up in a mixture if its colour is far from the air's:
+        // the dusky purple CO₂ used to be was invisible at a quarter of a
+        // room's air, which is exactly the concentration worth seeing.
         materials[t::CO2.0 as usize] = Material::new(
             P0 / (R_CO2 * T0),
             0.03,
             0.844,
             0.04,
             Phase::Gas,
-            (92, 74, 108),
+            (235, 150, 55),
         )
         .with_gas_constant(R_CO2);
+        // Thermal expansion: water's real coefficient is 2e-4 per kelvin at
+        // room temperature, rising to 7e-4 near boiling; ethanol's is about
+        // 1.1e-3. Taken near the top of water's range, because what it
+        // decides here is whether a pot heated from below turns over, and a
+        // real one very much does.
         materials[t::WATER.0 as usize] =
-            Material::new(1.0, 0.5, 4.186, 0.6, Phase::Liquid, (40, 90, 200));
+            Material::new(1.0, 0.5, 4.186, 0.6, Phase::Liquid, (40, 90, 200))
+                .with_thermal_expansion(5e-4);
         materials[t::ICE.0 as usize] =
             Material::new(0.92, 0.0, 2.093, 2.2, Phase::Solid, (170, 210, 240));
         materials[t::SAND.0 as usize] =
@@ -721,7 +1008,8 @@ impl MaterialTable {
         // of metal rather than water, is the story; 6.0 puts the first drop
         // off the still inside half a minute of simulated time.
         materials[t::WASH.0 as usize] =
-            Material::new(1.02, 0.6, 3.9, 6.0, Phase::Liquid, (150, 112, 62));
+            Material::new(1.02, 0.6, 3.9, 6.0, Phase::Liquid, (150, 112, 62))
+                .with_thermal_expansion(5e-4);
         materials[t::SPIRIT.0 as usize] = Material::new(
             P0 / (R_SPIRIT * T0),
             0.01,
@@ -732,7 +1020,8 @@ impl MaterialTable {
         )
         .with_gas_constant(R_SPIRIT);
         materials[t::GIN.0 as usize] =
-            Material::new(0.94, 0.35, 2.44, 0.6, Phase::Liquid, (196, 224, 236));
+            Material::new(0.94, 0.35, 2.44, 0.6, Phase::Liquid, (196, 224, 236))
+                .with_thermal_expansion(1.1e-3);
         materials[t::CHARCOAL.0 as usize] =
             Material::new(0.45, 0.0, 0.84, 0.25, Phase::Solid, (38, 34, 32))
                 .with_mobility(Mobility::Granular);
@@ -792,7 +1081,9 @@ impl MaterialTable {
             },
         ];
 
-        MaterialTable::new(materials).with_chemistry(transitions, reactions)
+        MaterialTable::new(materials)
+            .with_chemistry(transitions, reactions)
+            .with_reference_pressure(P0)
     }
 }
 

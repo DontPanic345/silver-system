@@ -173,6 +173,11 @@ pub struct EtherealPipe {
     pub output: GridIndex,
     /// Gin per cell moved.
     pub gin_per_transfer: Scalar,
+    /// Steps between transfers: 1 moves a cell every step. A pipe is gnome
+    /// infrastructure, and a gnome can build a trickle as easily as a
+    /// torrent — a whole cell of water a step is twenty grams a second, a
+    /// flood in a jar this size.
+    pub period: u32,
 }
 
 impl EtherealPipe {
@@ -181,7 +186,14 @@ impl EtherealPipe {
             input,
             output,
             gin_per_transfer: 0.5,
+            period: 1,
         }
+    }
+
+    /// Sets [`EtherealPipe::period`], builder-style.
+    pub fn every(mut self, steps: u32) -> Self {
+        self.period = steps.max(1);
+        self
     }
 }
 
@@ -193,6 +205,8 @@ pub struct Colony {
     /// unreproducible for no gain here; this crate's habit is numbers a
     /// test can assert on.
     seed: u64,
+    /// Updates run so far, for pipes that only fire every so often.
+    tick: u64,
 }
 
 impl Colony {
@@ -201,6 +215,7 @@ impl Colony {
             gnomes,
             pipes: Vec::new(),
             seed: 0x9E3779B97F4A7C15,
+            tick: 0,
         }
     }
 
@@ -220,7 +235,7 @@ impl Colony {
     /// How much Gin the colony holds in total — the resource the whole
     /// design hangs on, so worth reading directly.
     pub fn total_gin(&self) -> f64 {
-        self.gnomes.iter().map(|g| g.gin as f64).sum()
+        self.gnomes.iter().map(|g| g.gin).sum()
     }
 
     pub fn embodied_count(&self) -> usize {
@@ -233,6 +248,7 @@ impl Colony {
 
     /// One step of gnome behaviour, run after the physics step.
     pub fn update(&mut self, world: &mut World) {
+        self.tick = self.tick.wrapping_add(1);
         self.run_pipes(world);
         for idx in 0..self.gnomes.len() {
             match self.gnomes[idx].body {
@@ -248,6 +264,9 @@ impl Colony {
     fn run_pipes(&mut self, world: &mut World) {
         for pipe_idx in 0..self.pipes.len() {
             let pipe = self.pipes[pipe_idx];
+            if !self.tick.is_multiple_of(pipe.period as u64) {
+                continue;
+            }
             if !world.in_bounds(pipe.input) || !world.in_bounds(pipe.output) {
                 continue;
             }
@@ -267,7 +286,7 @@ impl Colony {
                 continue;
             };
             self.gnomes[payer].gin -= pipe.gin_per_transfer;
-            world.charge_gin(pipe.gin_per_transfer as f64);
+            world.charge_gin(pipe.gin_per_transfer);
             let a = world.linear_index(pipe.input);
             let b = world.linear_index(pipe.output);
             world.swap_cells(a, b);
@@ -324,7 +343,19 @@ impl Colony {
         let here = *world.materials().get(cell.material);
 
         // --- Breathing ---
-        if here.breathable {
+        //
+        // A cell that is mostly empty is breathable whatever it is labelled.
+        // Liquid cells can now be a raindrop's worth of water — a hundredth
+        // of a cell — and a gnome that one landed on used to count as
+        // submerged, run out of breath, and pay Gin to conjure away a drop
+        // it could have stepped out of.
+        let fill = if here.density > 0.0 {
+            cell.mass / here.density
+        } else {
+            1.0
+        };
+        let mostly_empty = here.phase == Phase::Liquid && fill < 0.5;
+        if here.breathable || mostly_empty {
             self.gnomes[idx].breath = BREATH_STEPS;
         } else if self.gnomes[idx].breath > 0 {
             self.gnomes[idx].breath -= 1;
@@ -337,9 +368,9 @@ impl Colony {
 
         if too_hot || too_cold {
             let target = if too_hot { COMFORT_MAX } else { COMFORT_MIN };
-            let capacity = cell.mass as f64 * here.heat_capacity as f64;
-            let joules = (target - cell.temperature) as f64 * capacity;
-            let cost = (joules.abs() * GIN_PER_JOULE as f64) as Scalar;
+            let capacity = cell.capacity(world.materials());
+            let joules = (target - cell.temperature) * capacity;
+            let cost = (joules.abs() * GIN_PER_JOULE) as Scalar;
             if self.gnomes[idx].can_afford(cost) {
                 self.spend(world, idx, cost);
                 world.conjure_energy(pos, joules);
@@ -520,7 +551,7 @@ impl Colony {
 
     fn spend(&mut self, world: &mut World, idx: usize, gin: Scalar) {
         self.gnomes[idx].gin -= gin;
-        world.charge_gin(gin as f64);
+        world.charge_gin(gin);
     }
 
     /// A cell a gnome can end up in: not solid, and not something it would

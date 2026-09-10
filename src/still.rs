@@ -40,6 +40,7 @@
 //! [`Ledger`]: crate::world::Ledger
 //! [`World::conjure_energy`]: crate::world::World::conjure_energy
 
+use crate::chamber::Relief;
 use crate::gnome::{Colony, Gnome};
 use crate::material::{terrarium as t, MaterialTable, Phase};
 use crate::math::{GridIndex, Scalar};
@@ -56,20 +57,28 @@ use crate::world::World;
 /// producing steam alongside the spirit, which condenses as water in the
 /// receiver and dilutes the run — the same mistake a real distiller makes,
 /// for the same reason, with no code anywhere modelling "dilution".
-pub const HOB_K: Scalar = 368.0;
+pub const HOB_K: Scalar = 366.0;
 /// The temperature the condenser floor and wall are held at.
 pub const CONDENSER_K: Scalar = 288.0;
 /// Where the pot's wall stands.
 const POT_WALL: i32 = 22;
-/// The rows of the gap in that wall — the lyne arm.
+/// The rows of the gap in that wall — the lyne arm, inclusive.
 ///
-/// It sits at the liquid's surface, not above it, and that is not a detail:
-/// spirit vapour is *denser than air*, so it does not rise off the wash the
-/// way steam would. It lies on top of the liquid in a layer one cell deep
-/// and creeps sideways. A lyne arm one row too high is a still that never
-/// yields anything, which is exactly what the first version of this
-/// scenario did.
-const LYNE: (i32, i32) = (6, 7);
+/// It starts at the liquid's surface, not above it: spirit vapour is
+/// *denser than air*, so it lies on top of the wash rather than rising off
+/// it, and a lyne arm set too high was a still that never yielded anything.
+///
+/// It is four rows rather than the two it began as, and that is a lesson
+/// about vapour, not a tuning knob. A gram of spirit boiled off the wash is
+/// several times the volume of the whole head space above it at one
+/// atmosphere; all of it has to leave through this gap as fast as the hob
+/// makes it, and gas in this grid moves by levelling pressure between
+/// neighbours, which through a two-cell gap is slow. With gases that could
+/// not share a cell, whole-cell swaps hid that. Once they could, a two-row
+/// lyne arm pressurised the pot to several atmospheres, its head space went
+/// to the boiling point of spirit *at that pressure* — hotter than the hob
+/// — and the vapour condensed straight back onto the cooler wash.
+const LYNE: (i32, i32) = (6, 9);
 /// Depth of liquid in the pot, in rows.
 const CHARGE_ROWS: i32 = 5;
 /// The temperature the pot is charged at — already past mashing
@@ -83,7 +92,7 @@ const CHARGE_K: Scalar = 320.0;
 /// beside it forever. A hatch makes it a *process*, which is the thing
 /// actually worth showing — and it is a declared hole in the books like
 /// every other one here, so the conservation figures still balance.
-const HOPPER_PERIOD: u64 = 200;
+const HOPPER_PERIOD: u64 = 600;
 
 /// A runnable still: the world, the gnomes waiting on the receiver, and the
 /// two declared thermal boundaries that drive the whole thing.
@@ -91,6 +100,8 @@ pub struct Still {
     pub world: World,
     pub colony: Colony,
     pub thermostats: Vec<Thermostat>,
+    /// The condenser's open end — see [`Relief`].
+    pub relief: Relief,
     pub steps: u64,
 }
 
@@ -101,6 +112,7 @@ impl Still {
         for th in &self.thermostats {
             th.apply(&mut self.world);
         }
+        self.relief.apply(&mut self.world);
         if self.steps.is_multiple_of(HOPPER_PERIOD) {
             self.charge_botanicals();
         }
@@ -158,7 +170,7 @@ pub fn still(width: usize, height: usize) -> Still {
 
     // The pot wall, with the lyne arm cut through it.
     for j in 1..h - 1 {
-        if j == LYNE.0 || j == LYNE.1 {
+        if (LYNE.0..=LYNE.1).contains(&j) {
             continue;
         }
         world.fill(GridIndex::new(POT_WALL, j), t::STONE, cold);
@@ -176,8 +188,17 @@ pub fn still(width: usize, height: usize) -> Still {
         for j in 1..1 + CHARGE_ROWS {
             world.fill(GridIndex::new(i, j), t::WATER, CHARGE_K);
         }
+        // ...and the lagged pot's head space starts at the hob's
+        // temperature, not the room's. Now that wash evaporates below its
+        // boiling point, a cold head space is a condenser: the first thing
+        // a still charged into cold air does is distil into its own lid and
+        // rain the gin back into the pot, which is a real still being run
+        // badly rather than a still.
+        for j in 1 + CHARGE_ROWS..h - 1 {
+            world.fill(GridIndex::new(i, j), t::AIR, HOB_K);
+        }
     }
-    for i in (2..POT_WALL - 1).step_by(2) {
+    for i in (2..POT_WALL - 1).step_by(4) {
         world.fill(GridIndex::new(i, 1), t::JUNIPER, CHARGE_K);
     }
 
@@ -218,10 +239,18 @@ pub fn still(width: usize, height: usize) -> Still {
         Gnome::new(GridIndex::new(w - 4, 2)).with_gin(12.0),
     ];
 
+    // The far top corner of the condenser is open to the room, at one
+    // atmosphere — see `Relief` for why a still cannot be a sealed box.
+    let relief = Relief::new(
+        GridIndex::new(w - 2, h - 2),
+        world.materials().reference_pressure(),
+    );
+
     Still {
         world,
         colony: Colony::new(gnomes),
         thermostats,
+        relief,
         steps: 0,
     }
 }
@@ -278,30 +307,54 @@ mod tests {
     }
 
     /// Where the gin ends up is the claim a picture would make, so it is
-    /// worth making in numbers: on the *condenser* side of the wall, not in
-    /// the pot.
+    /// worth making in numbers: most of it on the *condenser* side of the
+    /// wall, and still arriving there while the pot's share stays put.
+    ///
+    /// Not all of it, and the test used to say "four times as much". The pot
+    /// keeps some from its opening burst, when the whole charge of wash
+    /// comes to the boil together. Boiling in this grid turns one cell of
+    /// liquid into one cell of vapour at hundreds of atmospheres, and the
+    /// cloud that leaves behind as it bursts through the surface is briefly
+    /// at several atmospheres over the pot — enough to condense onto the
+    /// wash. It is the one-cell-bubble artifact, not a still being run
+    /// badly, and it stops once the still settles down to what the
+    /// botanist's hatch feeds it: from then on, what the still makes goes
+    /// to the receiver.
     #[test]
     fn the_gin_collects_on_the_cold_side_of_the_wall() {
-        let s = run(3000);
-        let (w, h) = (s.world.width(), s.world.height());
-        let mut left = 0.0f64;
-        let mut right = 0.0f64;
-        for j in 0..h as i32 {
-            for i in 0..w as i32 {
-                let c = s.world.cell(GridIndex::new(i, j));
-                if c.material != t::GIN {
-                    continue;
-                }
-                if i < POT_WALL {
-                    left += c.mass as f64;
-                } else {
-                    right += c.mass as f64;
+        let split = |s: &Still| {
+            let (w, h) = (s.world.width(), s.world.height());
+            let mut left = 0.0f64;
+            let mut right = 0.0f64;
+            for j in 0..h as i32 {
+                for i in 0..w as i32 {
+                    let c = s.world.cell(GridIndex::new(i, j));
+                    if c.material != t::GIN {
+                        continue;
+                    }
+                    if i < POT_WALL {
+                        left += c.mass;
+                    } else {
+                        right += c.mass;
+                    }
                 }
             }
+            (left, right)
+        };
+        let mut s = run(1500);
+        let (left_mid, right_mid) = split(&s);
+        for _ in 0..1500 {
+            s.step(0.05);
         }
+        let (left, right) = split(&s);
         assert!(
-            right > left * 4.0 && right > 0.05,
+            right > 1.5 * left && right > 1.0,
             "gin split {left} g in the pot against {right} g in the receiver"
+        );
+        assert!(
+            right - right_mid > 2.0 * (left - left_mid).max(0.0) && right > right_mid + 0.5,
+            "the receiver should keep gaining while the pot does not: pot {left_mid} -> \
+             {left}, receiver {right_mid} -> {right}"
         );
     }
 

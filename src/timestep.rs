@@ -269,7 +269,7 @@ mod tests {
         // Chosen to stay under the default cap's max_accumulate (0.5) so a
         // single call can honestly report the same total as many small
         // calls — see the doc comment above.
-        let total_time = 0.47_f32;
+        let total_time: Scalar = 0.47;
 
         let mut one_big_call = FixedTimestep::new(dt);
         let steps_one_call = one_big_call.advance(total_time);
@@ -300,7 +300,7 @@ mod tests {
     #[test]
     fn chunking_invariance_stops_holding_once_a_single_call_exceeds_the_cap() {
         let dt = 0.1;
-        let total_time = 1.7_f32; // exceeds max_steps_per_call * dt == 0.5
+        let total_time: Scalar = 1.7; // exceeds max_steps_per_call * dt == 0.5
 
         let mut one_big_call = FixedTimestep::new(dt);
         let steps_one_call = one_big_call.advance(total_time);

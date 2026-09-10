@@ -43,14 +43,17 @@ use crate::math::{GridIndex, Scalar};
 use crate::world::{Cell, World, NO_PENDING};
 use std::collections::HashMap;
 
-/// One fixed simulation step: movement, then conduction, then phase change,
-/// then chemistry.
+/// One fixed simulation step: movement, then gas flow and mixing, then
+/// conduction, then phase change, then evaporation and condensation, then
+/// chemistry.
 ///
 /// Order matters only for feel, not for conservation — each stage conserves
 /// on its own. Movement runs first so freshly fallen material conducts
-/// against its new neighbours in the same step, and chemistry runs last so
-/// a cell that has just finished condensing is a candidate reagent on the
-/// next step rather than being rewritten mid-transition.
+/// against its new neighbours in the same step; vapour runs after phase
+/// change so a liquid that has just started boiling is left to boil rather
+/// than also evaporating; and chemistry runs last so a cell that has just
+/// finished condensing is a candidate reagent on the next step rather than
+/// being rewritten mid-transition.
 pub fn step(world: &mut World, dt: Scalar) {
     apply_gravity(world);
     equalise_liquid_levels(world);
@@ -58,6 +61,7 @@ pub fn step(world: &mut World, dt: Scalar) {
     crate::gas::step(world, dt);
     conduct_heat(world, dt);
     apply_phase_changes(world);
+    crate::vapour::step(world, dt);
     crate::chemistry::react(world);
     world.step_count = world.step_count.wrapping_add(1);
 }
@@ -72,6 +76,7 @@ pub fn step(world: &mut World, dt: Scalar) {
 pub fn apply_gravity(world: &mut World) {
     let (w, h) = (world.width() as i32, world.height() as i32);
     let mut moved = vec![false; (w * h) as usize];
+    let mut weights: Vec<Weight> = (0..(w * h) as usize).map(|p| weigh(world, p)).collect();
     // Alternate the horizontal bias each step; a fixed preference makes
     // pools visibly creep in one direction over a long run.
     let rightward = world.step_count.is_multiple_of(2);
@@ -125,8 +130,8 @@ pub fn apply_gravity(world: &mut World) {
                             GridIndex::new(i + side, j - 1),
                             GridIndex::new(i - side, j - 1),
                         ];
-                        pick_target(world, p, &down, &moved)
-                            .or_else(|| pick_target(world, p, &diagonals, &moved))
+                        pick_target(world, p, &down, &moved, &weights)
+                            .or_else(|| pick_target(world, p, &diagonals, &moved, &weights))
                     }
                     Pass::Spread if spreads => {
                         // Keep flowing the way this cell was already
@@ -143,6 +148,7 @@ pub fn apply_gravity(world: &mut World) {
                                 GridIndex::new(i - preferred, j),
                             ],
                             &moved,
+                            &weights,
                         )
                     }
                     Pass::Spread => None,
@@ -150,13 +156,31 @@ pub fn apply_gravity(world: &mut World) {
 
                 match (target, pass) {
                     (Some(q), Pass::Sink) => {
+                        // A swap between two cells of one material is a
+                        // thermal overturn — cold water sinking through
+                        // warm — and it leaves both free to spread this
+                        // step. Marking them spent, as a fall through a
+                        // lighter material must be, let a pool heated from
+                        // below churn vertically so steadily that none of
+                        // its surface ever got to level: the terrarium's
+                        // pool stood as a slope against its far wall, with
+                        // every test green.
+                        // (Liquids only: two gas cells with one label can
+                        // hold very different mixtures, and letting those
+                        // sort twice a step layered the chamber's CO2.)
+                        let overturn = !world.is_gas_at(p)
+                            && world.material_cells()[p] == world.material_cells()[q];
                         world.swap_cells(p, q);
-                        moved[p] = true;
-                        moved[q] = true;
+                        weights.swap(p, q);
+                        if !overturn {
+                            moved[p] = true;
+                            moved[q] = true;
+                        }
                         world.set_flow_dir(q, 0);
                     }
                     (Some(q), Pass::Spread) => {
                         world.swap_cells(p, q);
+                        weights.swap(p, q);
                         moved[p] = true;
                         moved[q] = true;
                         // Remember which way it went, so next step it
@@ -185,46 +209,86 @@ enum Pass {
     Spread,
 }
 
+/// What gravity weighs one cell as — computed once per step, and swapped
+/// along with the cell it belongs to, rather than recomputed for every
+/// neighbour every cell tests.
+///
+/// Which weight to compare is a real modelling decision, not plumbing:
+///
+/// - A **gas cell** weighs what it would weigh at the reference pressure —
+///   `gas::reference_density` — which is what decides whether a parcel of
+///   gas floats or sinks in the air around it: warmer or steam-richer comes
+///   out lighter, CO₂-richer heavier, and a cell that has just boiled and
+///   holds a thousand atmospheres of steam comes out as light as steam is,
+///   rather than as heavy as the gram of water it came from. (That last case
+///   is why this used to fall back on nominal densities between different
+///   materials: a cell could hold only one gas, so there was nowhere for the
+///   steam to expand to, and comparing it by mass sank it.)
+/// - A **liquid or solid** has two weights: `own`, what it actually holds,
+///   for comparing against another cell of the same material; and
+///   `nominal`, what a full cell of it weighs, for comparing against
+///   anything else. Both are taken at the cell's temperature
+///   (`Material::buoyant_density`), so hot water rises through cold.
+#[derive(Debug, Clone, Copy)]
+struct Weight {
+    own: Scalar,
+    nominal: Scalar,
+}
+
+fn weigh(world: &World, p: usize) -> Weight {
+    if world.is_gas_at(p) {
+        let rho = crate::gas::reference_density(world, p);
+        return Weight {
+            own: rho,
+            nominal: rho,
+        };
+    }
+    let cell = world.cell_at(p);
+    let m = world.material_of(p);
+    Weight {
+        own: m.buoyant_density(cell.mass, cell.temperature),
+        nominal: m.buoyant_density(m.density, cell.temperature),
+    }
+}
+
 /// The first neighbour in `candidates` that this cell can sink into: in
 /// bounds, not already moved this step, mobile enough to be displaced, and
 /// genuinely lighter.
-fn pick_target(world: &World, p: usize, candidates: &[GridIndex], moved: &[bool]) -> Option<usize> {
-    let here = world.cell_at(p);
+fn pick_target(
+    world: &World,
+    p: usize,
+    candidates: &[GridIndex],
+    moved: &[bool],
+    weights: &[Weight],
+) -> Option<usize> {
     for &c in candidates {
         if !world.in_bounds(c) {
             continue;
         }
         let q = world.linear_index(c);
-        if moved[q] {
+        // A cell that has already moved this step is spent — except that
+        // a liquid or grain may always push gas out of its way, whatever the
+        // gas has been doing. Air over a warm pool is forever turning over,
+        // and every such swap spends both cells; when that also stopped the
+        // water beside it from spreading, the terrarium's pool stood as a
+        // slope eight cells high against the far wall.
+        if moved[q] && !(world.is_gas_at(q) && !world.is_gas_at(p)) {
             continue;
         }
         if world.material_of(q).mobility == Mobility::Static {
             continue;
         }
-        let there = world.cell_at(q);
-        // Which weight to compare — and this is a real modelling decision,
-        // not plumbing.
-        //
-        // Between two cells of the *same* material, the honest comparison is
-        // their actual masses: a cell packed with twice the gas of the one
-        // below it should sink into it, and that is how a pressurised pocket
-        // finds its way down.
-        //
-        // Between *different* materials it has to be the materials' nominal
-        // densities instead, and the reason is a limit of the grid, stated
-        // rather than hidden. A cell of water that boils keeps its gram of
-        // mass, because mass is conserved — but a gram of steam is 1600
-        // cells' worth of gas crammed into one cell. Compare that by mass
-        // and the steam is heavier than the water it came from and sinks,
-        // which is nonsense. Real gas would expand into its neighbours; this
-        // grid cannot let it, because a cell holds exactly one material. The
-        // nominal density is the mass that species *would* have at the
-        // pressure everything else is at, so it is the right stand-in for
-        // "which of these two floats", and it is still pure data.
-        let (a, b) = if here.material == there.material {
-            (here.mass, there.mass)
+        // Which weight to compare — see `Weight`. Two cells of the same
+        // liquid or solid compare what they actually hold, so a partly-empty
+        // cell of water is lighter than a full one; anything else compares
+        // what a full cell of each would weigh at its own temperature.
+        let same = !world.is_gas_at(p)
+            && !world.is_gas_at(q)
+            && world.material_cells()[p] == world.material_cells()[q];
+        let (a, b) = if same {
+            (weights[p].own, weights[q].own)
         } else {
-            (world.material_of(p).density, world.material_of(q).density)
+            (weights[p].nominal, weights[q].nominal)
         };
         // A strict margin, not `<`: without it two materials of equal
         // density swap back and forth forever.
@@ -457,6 +521,14 @@ pub fn coalesce_liquids(world: &mut World) {
     }
 }
 
+/// Whether the cell at flat position `p` has a gas cell among its four
+/// neighbours — i.e. has a surface something could evaporate from.
+fn touches_gas(world: &World, p: usize) -> bool {
+    let w = world.width() as i32;
+    let (i, j) = ((p as i32) % w, (p as i32) / w);
+    adjacent_gas(world, i, j).is_some()
+}
+
 /// A neighbouring cell holding a gas — the atmosphere that would rush into
 /// this cell if it emptied.
 fn adjacent_gas(world: &World, i: i32, j: i32) -> Option<usize> {
@@ -557,8 +629,8 @@ fn exchange_heat(world: &mut World, p: usize, q: usize, dt: Scalar) {
 
     let cell_a = world.cell_at(p);
     let cell_b = world.cell_at(q);
-    let cap_a = cell_a.mass * ma.heat_capacity;
-    let cap_b = cell_b.mass * mb.heat_capacity;
+    let cap_a = cell_a.capacity(world.materials()) as Scalar;
+    let cap_b = cell_b.capacity(world.materials()) as Scalar;
     if cap_a <= 0.0 || cap_b <= 0.0 {
         return;
     }
@@ -573,12 +645,9 @@ fn exchange_heat(world: &mut World, p: usize, q: usize, dt: Scalar) {
         q_joules = max_transfer;
     }
 
-    let mut a = cell_a;
-    let mut b = cell_b;
-    a.temperature = ta + q_joules / cap_a;
-    b.temperature = tb - q_joules / cap_b;
-    world.set_cell_at(p, a);
-    world.set_cell_at(q, b);
+    // Only the two temperatures change, so only they are written.
+    world.set_temperature_at(p, ta + q_joules / cap_a);
+    world.set_temperature_at(q, tb - q_joules / cap_b);
 }
 
 /// Phase changes: melting, freezing, boiling, condensing, and rock melt,
@@ -589,7 +658,57 @@ pub fn apply_phase_changes(world: &mut World) {
     let latents: Vec<Scalar> = transitions.iter().map(|t| world.latent_of(t)).collect();
 
     for p in 0..world.width() * world.height() {
+        // Gas cells hold mixtures, and a vapour in a mixture condenses by
+        // how close it is to saturation, not by crossing a threshold as a
+        // whole cell — that is `src/vapour.rs`. The cooling transitions out
+        // of a gas are still in the table, because that is where the vapour
+        // rules read their boiling points and latent heats from.
+        if world.is_gas_at(p) {
+            continue;
+        }
         let mut cell = world.cell_at(p);
+
+        // A liquid touching gas does not boil as a whole cell: it
+        // evaporates, in `src/vapour.rs`, and that is the only place the
+        // pressure it is boiling *against* is known.
+        //
+        // The threshold below is a boiling point quoted at one atmosphere.
+        // A surface that boiled by it inside a pressurised vessel made
+        // vapour at 351.5 K that then condensed at the vessel's real
+        // saturation temperature — 383 K at three atmospheres — which is
+        // heat flowing uphill with no work done: the energy books balanced
+        // to fourteen digits while the second law was broken, and the first
+        // still built on vapour pressure ran as a self-sustaining pressure
+        // cooker. Evaporation cannot do that, because it stops at
+        // saturation. What is left for this threshold is a liquid with no
+        // gas to evaporate into, which is where bubbles actually nucleate
+        // (and where "one atmosphere" is a stated assumption).
+        let exposed = touches_gas(world, p);
+        let evaporation = |tr: &Transition| {
+            World::is_heating(tr)
+                && world.materials().get(tr.from).phase == crate::material::Phase::Liquid
+                && world.materials().is_gas(tr.to)
+        };
+        if exposed && cell.pending != NO_PENDING && evaporation(&transitions[cell.pending as usize])
+        {
+            // Surfaced mid-boil: give the accumulated latent heat back as
+            // temperature and let it evaporate instead. Added to the cell's
+            // *current* temperature, not to the threshold: conduction has
+            // moved it since the last phase step, and pinning it back to
+            // the threshold first was a leak of a third of a joule per
+            // surfacing cell — two and a half per cent of a violent test
+            // world's energy over six hundred steps, caught by the
+            // residual, invisible in any picture.
+            let tr = transitions[cell.pending as usize];
+            let c_from = world.materials().get(tr.from).heat_capacity;
+            if c_from > 0.0 {
+                cell.temperature += cell.progress / c_from;
+            }
+            cell.progress = 0.0;
+            cell.pending = NO_PENDING;
+            world.set_cell_at(p, cell);
+            continue;
+        }
 
         // Pick up where this cell left off, or find a transition it has
         // newly crossed the threshold of.
@@ -597,7 +716,7 @@ pub fn apply_phase_changes(world: &mut World) {
             cell.pending = NO_PENDING;
             cell.progress = 0.0;
             for (idx, tr) in transitions.iter().enumerate() {
-                if tr.from != cell.material {
+                if tr.from != cell.material || (exposed && evaporation(tr)) {
                     continue;
                 }
                 let crossed = if World::is_heating(tr) {
@@ -653,6 +772,16 @@ pub fn apply_phase_changes(world: &mut World) {
             cell.temperature = tr.threshold_k + if c_to > 0.0 { surplus / c_to } else { 0.0 };
             cell.progress = 0.0;
             cell.pending = NO_PENDING;
+            // A liquid that boils becomes a gas cell holding nothing but its
+            // own vapour — at a thousand atmospheres, which `gas::flow`
+            // relieves over the next few steps.
+            if let (true, Some(s)) = (
+                world.materials().is_gas(tr.to),
+                world.materials().slot(tr.to),
+            ) {
+                cell.mix = crate::world::NO_MIX;
+                cell.mix[s] = cell.mass;
+            }
         } else if abandoned {
             // Heat went back the other way before the change completed —
             // give the accumulated latent energy back as temperature.
@@ -856,7 +985,7 @@ mod tests {
         w.fill(GridIndex::new(0, 0), t::ICE, 273.0);
         w.rebaseline();
         let idx = GridIndex::new(0, 0);
-        let mass = w.cell(idx).mass as f64;
+        let mass = w.cell(idx).mass;
 
         // Feed in slightly less than the latent heat: still ice.
         w.conjure_energy(idx, mass * 333.0 + mass * 2.093 * 0.2);
@@ -880,7 +1009,7 @@ mod tests {
         w.fill(GridIndex::new(0, 0), t::ICE, 270.0);
         w.rebaseline();
         let idx = GridIndex::new(0, 0);
-        let mass = w.cell(idx).mass as f64;
+        let mass = w.cell(idx).mass;
         let start_energy = w.total_energy();
 
         w.conjure_energy(idx, mass * 400.0);
@@ -1004,6 +1133,7 @@ mod tests {
             progress: 0.0,
             pending: NO_PENDING,
             flow_dir: 0,
+            mix: crate::world::NO_MIX,
         };
         for i in 0..10 {
             for j in 0..4 {

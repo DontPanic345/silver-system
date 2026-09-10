@@ -1,13 +1,22 @@
-//! The flagship scenario: a sealed jar with a lava vent under it, a cold
-//! roof over it, water in between, and gnomes living in the gap.
+//! The flagship scenario: a sealed jar with a warm spring under a pool, a
+//! cold lid over it, and gnomes living on a meadow beside the water.
 //!
 //! This exists because the north stars are not satisfied by a physics
 //! engine that passes tests. *"Only when the big universe is sufficiently
 //! full will the small world be believable"* — so the demonstration is a
-//! world with a water cycle running under its own steam: the vent boils
-//! water, the steam rises, the cold roof condenses it, and it rains back
-//! down. No script drives any of that; it falls out of conduction and two
-//! phase transitions.
+//! world with a water cycle running on its own: the spring warms the pool,
+//! the pool evaporates into the air over it, the humid air meets the cold
+//! lid, dew forms there and falls back as drops. No script drives any of
+//! that; it falls out of conduction, buoyancy, and one vapour-pressure
+//! curve (`src/vapour.rs`).
+//!
+//! Until night 4 it ran on boiling instead — a 950 K vent beside the pool,
+//! the jar near 400 K, the gnomes paying Gin every step to survive — because
+//! until night 4 water could only become vapour by boiling. A real
+//! terrarium's water cycle is dew on the glass, and now so is this one's.
+//! It is also slow, the way a real one is: a few grams of rain per few
+//! minutes of simulated time, because a jar of air at room temperature
+//! holds only a few hundredths of a gram of water.
 //!
 //! ## Why the jar is not, in the end, sealed — and why that is the honest
 //! answer
@@ -75,11 +84,11 @@ impl Thermostat {
             return;
         }
         let cell = world.cell(self.cell);
-        let capacity = cell.mass as f64 * world.materials().get(cell.material).heat_capacity as f64;
+        let capacity = cell.capacity(world.materials());
         if capacity <= 0.0 {
             return;
         }
-        let joules = (self.target_k - cell.temperature) as f64 * capacity * self.rate as f64;
+        let joules = (self.target_k - cell.temperature) * capacity * self.rate;
         world.conjure_energy(self.cell, joules);
     }
 }
@@ -107,9 +116,9 @@ impl Terrarium {
 
 /// Wall thickness of the jar.
 const SHELL: i32 = 2;
-/// Temperature the vent is held at, in kelvin — well above water's boiling
-/// point and well below rock's melting point.
-const VENT_K: Scalar = 950.0;
+/// Temperature the spring under the pool is held at, in kelvin — warm, not
+/// boiling: see `gnome_terrarium`.
+const VENT_K: Scalar = 365.0;
 /// Temperature the roof is held at.
 const ROOF_K: Scalar = 283.0;
 
@@ -130,99 +139,98 @@ pub fn gnome_terrarium(width: usize, height: usize) -> Terrarium {
         }
     }
 
-    // A hot rock vent along part of the floor: the jar's heat source.
+    // The pool, and the warm spring under it: the jar's heat source.
     //
-    // Deliberately hot rock rather than lava. A lava vent looks better and
-    // was the first attempt, but it has to sit above rock's melting point
-    // to stay liquid, which means it slowly melts the floor it is sitting
-    // in and the jar eats itself. Stone held at 1150 K boils anything above
-    // it just as thoroughly and stays where it is put.
-    let vent_from = w / 6;
-    let vent_to = w / 6 + w / 5;
-    for i in vent_from..vent_to {
+    // This used to be a patch of rock held at 950 K *beside* the pool, and
+    // the jar was built around boiling: the vent boiled the pool, the steam
+    // rose, the lid rained it back. It worked, and it ran the whole jar at
+    // around 400 K — sixty kelvin past what a gnome can survive without
+    // paying Gin to chill itself, which the colony did, every step, for
+    // ever. It had to be that hot because until night 4 water could only
+    // become vapour by boiling.
+    //
+    // Now water evaporates at any temperature (`src/vapour.rs`), so the
+    // jar can run the cycle a real terrarium runs: a pool warmed from
+    // below, evaporating into the air over it; the humid air reaching the
+    // cold lid; dew forming there and falling as drops. The spring is warm
+    // rather than hot — warm enough that the pool turns over (hot water is
+    // lighter than cold, `Material::buoyant_density`) and gives up vapour
+    // briskly, cool enough that nothing boils and the meadow the gnomes
+    // live on stays near room temperature.
+    // Left to right: the juniper, the meadow the gnomes live on, and the
+    // pool running to the far wall. The bushes are on the gnomes' side of
+    // the water on purpose — gnomes will not wade, and in every earlier
+    // layout of this jar the colony's only Gin supply stood on the far bank
+    // of a pool nobody could cross.
+    let pool_from = w / 3;
+    let pool_to = w - SHELL;
+    for i in pool_from..pool_to {
         for j in SHELL..SHELL + 2 {
             world.fill(GridIndex::new(i, j), t::STONE, VENT_K);
         }
-    }
-
-    // Rock floor over the rest, so the gnomes have somewhere to stand.
-    for i in SHELL..w - SHELL {
-        if !(vent_from..vent_to).contains(&i) {
-            world.fill(GridIndex::new(i, SHELL), t::STONE, 291.0);
-            world.fill(GridIndex::new(i, SHELL + 1), t::SAND, 291.0);
-        }
-    }
-
-    // A pool of water sitting on the sand beside the vent, stopping short
-    // of the far wall to leave room for the juniper plinth below.
-    let pool_from = vent_to + 1;
-    let pool_to = w - SHELL - 7;
-    for i in pool_from..pool_to {
-        // Four courses deep rather than three: the plinth below took five
-        // columns off the pool's length, and the pool is also the jar's
-        // thermal ballast — with less of it the vent boils the jar dry
-        // sooner and the gnomes start cooking. Depth buys that back.
+        // Four courses deep: the pool is also the jar's thermal ballast.
         for j in SHELL + 2..SHELL + 6 {
             world.fill(GridIndex::new(i, j), t::WATER, 300.0);
         }
+    }
+    // The meadow: sand over rock, walled off from the pool by a stone bank
+    // a course higher than the water. A gnome will not wade, but it will
+    // happily stroll out across warm wet rock wherever the water has drawn
+    // back, and then need chilling; and a bank lower than the pool is a
+    // weir, which floods the meadow.
+    for i in SHELL..pool_from {
+        world.fill(GridIndex::new(i, SHELL), t::STONE, 291.0);
+        world.fill(GridIndex::new(i, SHELL + 1), t::SAND, 291.0);
+    }
+    for j in SHELL + 2..SHELL + 7 {
+        world.fill(GridIndex::new(pool_from - 1, j), t::STONE, 291.0);
     }
 
     // The lid is held cold, but not freezing. An ice roof was the obvious
     // choice and it was wrong: steam hitting ice at 240 K condenses and
     // then immediately freezes, so the roof just grows thicker and thicker
     // and the water never comes back down. Ice is static; rain is not. A
-    // lid a little above freezing condenses steam into liquid water, which
+    // lid a little above freezing condenses vapour into liquid water, which
     // falls — which is the half of the cycle worth having.
 
-    // Juniper on a raised plinth in the far corner: the colony's Gin
-    // supply, and deliberately *dry*.
-    //
-    // The bushes used to stand in the pool itself, which was fine while
-    // juniper had no chemistry. It is not fine now: warm water touching
-    // juniper ferments both into wash (see `src/chemistry.rs`), so a bush
-    // standing in a pool that the vent is busy heating is not a Gin supply,
-    // it is a mash tun that the colony did not ask for — measured over
-    // 4000 steps, every bush and most of the pool went that way. Two stone
-    // courses lift them clear of anything that can slosh, which is the
-    // scenario stating a requirement the chemistry now imposes rather than
-    // the chemistry being softened to suit the scenario.
-    let plinth_from = pool_to + 1;
-    for i in plinth_from..w - SHELL {
-        world.fill(GridIndex::new(i, SHELL + 2), t::STONE, 291.0);
-        world.fill(GridIndex::new(i, SHELL + 3), t::SAND, 291.0);
+    // Juniper at the meadow's far end: the colony's Gin supply, standing on
+    // the meadow itself, where a gnome can walk up beside a bush and pick
+    // it. Under a stone shelf, because it has to stay *dry*: warm water
+    // touching juniper ferments both into wash (see `src/chemistry.rs`), so
+    // a bush that catches warm rain is a mash tun the colony did not ask
+    // for. (It used to stand on a raised plinth past the far end of the
+    // pool — out of reach twice over, since gnomes will not wade and a
+    // gnome cannot pick a bush a row above the floor it stands on.)
+    let plinth_to = SHELL + 4;
+    for i in SHELL..plinth_to {
+        world.fill(GridIndex::new(i, SHELL + 2), t::JUNIPER, 291.0);
     }
-    for k in 0..4 {
-        let i = plinth_from + k;
-        if i < w - SHELL {
-            world.fill(GridIndex::new(i, SHELL + 4), t::JUNIPER, 291.0);
-        }
-    }
-    // ...and a stone shelf over them. Lifting the bushes out of the pool
-    // was not enough once the gas work let steam actually fill the jar and
-    // rain back down: warm rain landing on a bush ferments it just as well
-    // as a pool does, and over 8000 steps every bush went that way and the
-    // colony's Gin supply with it. Rain does not fall through rock.
-    for i in plinth_from - 1..w - SHELL {
-        world.fill(GridIndex::new(i, SHELL + 5), t::STONE, 291.0);
+    for i in SHELL..=plinth_to + 1 {
+        world.fill(GridIndex::new(i, SHELL + 4), t::STONE, 291.0);
     }
 
     world.rebaseline();
 
-    // Gnomes on the sand, plus one ethereal pipe lifting water from the
-    // pool up to a ledge — the sanctioned magic shortcut, on display.
+    // Gnomes on the meadow, plus one ethereal pipe — the sanctioned magic
+    // shortcut, on display — running as a fountain: it lifts water from the
+    // near end of the pool and lets it fall back in at the far end from
+    // halfway up the jar. It used to drop its water onto a ledge over the
+    // meadow, which was harmless beside a 950 K vent that boiled it away,
+    // and floods the gnomes' home beside a warm spring that does not.
     let gnomes: Vec<Gnome> = (0..4)
-        .map(|k| Gnome::new(GridIndex::new(SHELL + 2 + k * 3, SHELL + 3)))
+        .map(|k| Gnome::new(GridIndex::new(plinth_to + 2 + k * 2, SHELL + 2)))
         .collect();
     let pipe = EtherealPipe::new(
-        GridIndex::new(pool_from + 1, SHELL + 2),
-        GridIndex::new(SHELL + 3, h / 2),
-    );
+        GridIndex::new(pool_from + 2, SHELL + 2),
+        GridIndex::new(pool_to - 3, h / 2),
+    )
+    .every(60);
     let colony = Colony::new(gnomes).with_pipe(pipe);
 
     // The boundary: the vent is held hot, the roof cold. Everything these
     // add or remove is booked — see the module doc comment.
     let mut thermostats = Vec::new();
-    for i in vent_from..vent_to {
+    for i in pool_from..pool_to {
         thermostats.push(Thermostat::new(GridIndex::new(i, SHELL), VENT_K));
     }
     // The cold side of the jar is its whole outer skin, not just the lid.
@@ -281,29 +289,65 @@ mod tests {
         }
     }
 
+    /// The cycle, in numbers: the pool evaporates, the air gives it back
+    /// as dew and rain, and none of it is boiling — water becomes vapour
+    /// here because warm water does, not because anything reached 373 K.
     #[test]
     fn the_water_cycle_runs_on_its_own() {
         let mut terra = default_terrarium();
-        let mut ever_boiled = false;
-        let mut steam_peak = 0usize;
+        let water0 = terra.world.mass_of(t::WATER) + terra.world.mass_of(t::STEAM);
+        let mut boiled = 0usize;
         for _ in 0..4000 {
             terra.step(0.05);
-            let steam = terra.world.count_of(t::STEAM);
-            steam_peak = steam_peak.max(steam);
-            if steam > 0 {
-                ever_boiled = true;
-            }
+            boiled = boiled.max(terra.world.count_of(t::STEAM));
         }
+        let tally = terra.world.tally();
         assert!(
-            ever_boiled,
-            "the vent should have boiled some of the pool into steam"
+            tally.evaporated_g > 1.0,
+            "the pool barely evaporated: {tally:?}"
         );
-        // And the water is still water in some phase — nothing evaporated
-        // out of existence.
-        let water_ish = terra.world.count_of(t::WATER)
-            + terra.world.count_of(t::STEAM)
-            + terra.world.count_of(t::ICE);
-        assert!(water_ish > 20, "only {water_ish} cells of H2O left");
+        assert!(
+            tally.condensed_g > 1.0,
+            "the air never gave it back: {tally:?}"
+        );
+        assert!(tally.rained_g > 1.0, "no dew ever fell: {tally:?}");
+        assert!(
+            (tally.evaporated_g - tally.rained_g).abs() < 0.5 * tally.evaporated_g,
+            "what evaporates should come back down, not pile up in the air: {tally:?}"
+        );
+        assert_eq!(boiled, 0, "nothing should be boiling in a terrarium");
+        // And the water is still water — in the pool, in the air, or on its
+        // way down.
+        let water = terra.world.mass_of(t::WATER) + terra.world.mass_of(t::STEAM);
+        assert!(
+            (water - water0).abs() < 1e-6 * water0,
+            "water went {water0} -> {water} g"
+        );
+    }
+
+    /// A terrarium the gnomes can live in: the jar sits inside a gnome's
+    /// comfortable band, so nobody spends Gin just to survive the weather.
+    /// The jar used to run near 400 K, and the colony bled Gin chilling
+    /// itself every step it existed.
+    #[test]
+    fn the_jar_is_somewhere_a_gnome_can_live() {
+        let mut terra = default_terrarium();
+        for _ in 0..4000 {
+            terra.step(0.05);
+        }
+        let mean = terra.world.mean_temperature();
+        assert!(
+            mean < crate::gnome::COMFORT_MAX,
+            "the jar settled at {mean} K, past a gnome's comfort"
+        );
+        for g in &terra.colony.gnomes {
+            let here = terra.world.cell(g.pos).temperature;
+            assert!(
+                here < crate::gnome::LETHAL_MAX,
+                "a gnome is standing somewhere lethal: {here} K at {:?}",
+                g.pos
+            );
+        }
     }
 
     #[test]

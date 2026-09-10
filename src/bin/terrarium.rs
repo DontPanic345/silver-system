@@ -7,6 +7,9 @@
 //! ```sh
 //! cargo run --release --bin terrarium -- --steps 4000 --every 500 --map
 //! ```
+//!
+//! `--temps` adds a temperature map beside it (see
+//! `report::temperature_map` for the key).
 
 use viewer::{report, terrarium};
 
@@ -22,11 +25,12 @@ fn main() {
     let steps = flag("--steps", 3000);
     let every = flag("--every", 500).max(1);
     let show_map = args.iter().any(|a| a == "--map");
+    let show_temps = args.iter().any(|a| a == "--temps");
 
     let mut terra = terrarium::default_terrarium();
     println!("{}", report::snapshot_json(&terra.world, &terra.colony, 0));
     for step in 1..=steps {
-        terra.step(0.05);
+        terra.step(viewer::SIM_DT);
         if step % every == 0 {
             println!(
                 "{}",
@@ -34,6 +38,9 @@ fn main() {
             );
             if show_map {
                 eprint!("{}", report::ascii_map(&terra.world));
+            }
+            if show_temps {
+                eprint!("{}", report::temperature_map(&terra.world));
             }
         }
     }

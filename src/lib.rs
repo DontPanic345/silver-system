@@ -79,6 +79,9 @@ pub mod world;
 /// Compressible gas: pressure, diffusion and bulk flow.
 pub mod gas;
 
+/// Vapour pressure: evaporation below boiling, condensation into mist, rain.
+pub mod vapour;
+
 /// Chemistry: data-driven reactions between touching cells.
 pub mod chemistry;
 
@@ -124,6 +127,18 @@ thread_local! {
     static TIMESTEP: RefCell<FixedTimestep> =
         RefCell::new(FixedTimestep::new(DT_SECONDS));
 }
+
+/// The fixed timestep, in seconds, every live world is stepped at — by the
+/// headless runners (`src/bin/`), by the browser pages, and by the tests
+/// that reason about both.
+///
+/// It exists because the two had quietly diverged: the runners stepped at
+/// 0.05 s and the pages at [`DT_SECONDS`] (0.15 s, the rectangle demo's
+/// tick), so "the page shows exactly what a headless run would report" was
+/// true of the report's *format* and not of the world producing it. Every
+/// rate in the simulation is a per-second figure multiplied by `dt` and
+/// clamped, so a coarser step changes the result, not just its speed.
+pub const SIM_DT: Scalar = 0.05;
 
 /// [`TICK_INTERVAL_MS`] expressed in seconds — the fixed step size `dt` fed
 /// to [`TIMESTEP`]'s [`FixedTimestep`]. `Scalar` (`f32`) division of small
@@ -252,7 +267,7 @@ fn advance_tick(frame_duration_secs: Scalar) -> u32 {
 /// lives in [`advance_tick`], which is why it is implemented for real here
 /// while [`advance_tick`] is left as a stub.
 #[wasm_bindgen]
-pub fn tick_and_draw(canvas_id: &str, frame_duration_secs: f32) -> u32 {
+pub fn tick_and_draw(canvas_id: &str, frame_duration_secs: Scalar) -> u32 {
     let new_tick = advance_tick(frame_duration_secs);
     paint_rect(canvas_id, color_for_tick(new_tick));
     new_tick
@@ -336,7 +351,11 @@ thread_local! {
 /// own timer loop can call this on every fire the same way
 /// `tick_and_draw`/`www/index.html` already do for the rectangle.
 #[wasm_bindgen]
-pub fn step_and_paint_physics_demo(canvas_id: &str, cell_px: u32, frame_duration_secs: f32) -> u32 {
+pub fn step_and_paint_physics_demo(
+    canvas_id: &str,
+    cell_px: u32,
+    frame_duration_secs: Scalar,
+) -> u32 {
     PHYSICS_DEMO.with(|state| {
         let mut state = state.borrow_mut();
         let (grid, timestep, materials, tick) = state.get_or_insert_with(|| {
@@ -538,7 +557,7 @@ pub fn terrarium_tick_and_draw(canvas_id: &str, cell_px: u32, steps: u32) -> u32
             None => return 0,
         };
         for _ in 0..steps {
-            terra.step(DT_SECONDS);
+            terra.step(SIM_DT);
         }
         let buf = render::render_world_to_rgb8(&terra.world, &terra.colony, cell_px);
         let width_px = terra.world.width() as u32 * cell_px;
@@ -594,7 +613,7 @@ pub fn chamber_tick_and_draw(canvas_id: &str, cell_px: u32, steps: u32) -> u32 {
             None => return 0,
         };
         for _ in 0..steps {
-            chamber.step(DT_SECONDS);
+            chamber.step(SIM_DT);
         }
         // An empty colony: the chamber has no gnomes in it, and the world
         // renderer draws whatever colony it is handed over the top.
@@ -653,7 +672,7 @@ pub fn still_tick_and_draw(canvas_id: &str, cell_px: u32, steps: u32) -> u32 {
             None => return 0,
         };
         for _ in 0..steps {
-            s.step(DT_SECONDS);
+            s.step(SIM_DT);
         }
         let buf = render::render_world_to_rgb8(&s.world, &s.colony, cell_px);
         let width_px = s.world.width() as u32 * cell_px;

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Gas, under pressure</title>
+  <title>Gas, mixing</title>
   <style>
     :root { color-scheme: dark; }
     body {
@@ -36,16 +36,17 @@
   </style>
 </head>
 <body>
-  <h1>Gas, under pressure</h1>
+  <h1>Gas, mixing</h1>
   <p class="lede">
     A room with a ten-atmosphere bottle of air sealed behind one small hole,
-    and a slab of CO<sub>2</sub> released near the ceiling. Watch two things:
-    the bottle bleeds down until its air is at the room's pressure, and the
-    CO<sub>2</sub> falls, spreads, and settles into a flat layer on the
-    floor. No rule anywhere names CO<sub>2</sub> or says heavy gases sink —
-    it sinks because a gram of it takes less room than a gram of air, by the
-    same density rule that drops sand through water. Brighter gas is
-    denser gas.
+    and a slab of CO<sub>2</sub> (drawn amber) released near the ceiling.
+    Watch the bottle bleed down until the whole room is at one pressure, and
+    the CO<sub>2</sub> fall — it is heavier than air, by the same density
+    rule that drops sand through water — and then <em>not</em> lie on the
+    floor as a layer. Gases share cells here, so it mixes up into the air
+    above it and the room ends up with more CO<sub>2</sub> low down than
+    high, and some everywhere. <q>CO2 is heavier but it doesn't all fall to
+    the bottom of a room.</q> Brighter gas is denser gas.
   </p>
 
   <div class="stage">
@@ -53,18 +54,26 @@
     <div class="panel">
       <h2>Pressure</h2>
       <table>
-        <tr><th>Air, lowest</th><td class="num" id="pmin">—</td></tr>
-        <tr><th>Air, highest</th><td class="num" id="pmax">—</td></tr>
+        <tr><th>Lowest in the room</th><td class="num" id="pmin">—</td></tr>
+        <tr><th>Highest in the room</th><td class="num" id="pmax">—</td></tr>
         <tr><th>Spread</th><td class="num" id="pspread">—</td></tr>
         <tr><th>Step</th><td class="num" id="step">—</td></tr>
       </table>
       <p class="lede" id="verdict" style="margin:.5rem 0 0"></p>
 
-      <h2>The CO<sub>2</sub> layer</h2>
+      <h2>The CO<sub>2</sub>, row by row</h2>
+      <canvas id="profile" width="220" height="120" style="border:none;background:none"></canvas>
       <table>
-        <tr><th>Cells</th><td class="num" id="co2cells">—</td></tr>
+        <tr><th>CO<sub>2</sub> at the floor</th><td class="num" id="co2floor">—</td></tr>
+        <tr><th>CO<sub>2</sub> at the ceiling</th><td class="num" id="co2ceiling">—</td></tr>
         <tr><th>Mean height (rows)</th><td class="num" id="co2h">—</td></tr>
+        <tr><th>Grams in the room</th><td class="num" id="co2g">—</td></tr>
       </table>
+      <p class="lede">
+        Each bar is one row's share of CO<sub>2</sub>, floor at the bottom.
+        A layer would be a single long bar at the floor and nothing above;
+        a well-mixed room would be bars of one length all the way up.
+      </p>
 
       <h2>Conservation</h2>
       <table>
@@ -92,7 +101,10 @@
     import init, * as wasm from './pkg/viewer.js';
 
     const CELL_PX = 12;
-    const STEPS_PER_FRAME = 3;
+    // Simulated steps per animation frame: as many as fit in a slice of the
+    // frame, up to a ceiling that keeps the room's pace readable.
+    const MAX_STEPS = 9, BUDGET_MS = 10;
+    let steps = 3;
     let paused = false;
 
     const fmt = (x, digits = 4) =>
@@ -106,17 +118,29 @@
         el.textContent = text;
         if (cls) el.className = 'num ' + cls;
       };
-      const spread = report.air_pressure_max - report.air_pressure_min;
-      set('pmin', fmt(report.air_pressure_min));
-      set('pmax', fmt(report.air_pressure_max));
-      set('pspread', fmt(spread), spread < 0.02 ? 'ok' : 'warn');
+      const spread = report.pressure_max - report.pressure_min;
+      const settled = spread < 0.05 * report.pressure_max;
+      set('pmin', fmt(report.pressure_min));
+      set('pmax', fmt(report.pressure_max));
+      set('pspread', fmt(spread), settled ? 'ok' : 'warn');
       set('step', String(report.step));
-      document.getElementById('verdict').textContent = spread < 0.02
-        ? 'The air is at one pressure throughout: the bottle has finished venting.'
+      document.getElementById('verdict').textContent = settled
+        ? 'The whole room — air and CO2 alike — is at one pressure: the bottle has finished venting.'
         : 'Still venting — the bottle is at a higher pressure than the room.';
 
-      set('co2cells', String(report.co2_cells));
+      const prof = report.co2_profile.filter((f) => f >= 0);
+      set('co2floor', (100 * prof[0]).toFixed(1) + ' %');
+      set('co2ceiling', (100 * prof[prof.length - 1]).toFixed(1) + ' %');
       set('co2h', report.co2_mean_height.toFixed(2));
+      set('co2g', report.co2_mass_g.toFixed(3));
+      const pc = document.getElementById('profile');
+      const px = pc.getContext('2d');
+      px.clearRect(0, 0, pc.width, pc.height);
+      const bar = pc.height / prof.length;
+      prof.forEach((f, k) => {
+        px.fillStyle = '#eb9637';
+        px.fillRect(0, pc.height - (k + 1) * bar, Math.max(1, f * pc.width), Math.max(1, bar - 1));
+      });
 
       const massOk = Math.abs(report.residual_mass_relative) < 1e-5;
       const energyOk = Math.abs(report.residual_energy_relative) < 1e-5;
@@ -127,7 +151,7 @@
       const colours = {
         air: '#101c20', steam: '#aab4c8', water: '#285ac8', ice: '#aad2f0',
         sand: '#c8af69', stone: '#696973', lava: '#eb6e28', juniper: '#468258',
-        co2: '#5c4a6c',
+        co2: '#eb9637',
       };
       document.getElementById('materials').innerHTML = report.materials
         .filter((m) => m.cells > 0)
@@ -152,7 +176,10 @@
 
       function frame() {
         if (!paused) {
-          wasm.chamber_tick_and_draw('canvas', CELL_PX, STEPS_PER_FRAME);
+          const t0 = performance.now();
+          wasm.chamber_tick_and_draw('canvas', CELL_PX, steps);
+          const took = Math.max(0.1, performance.now() - t0);
+          steps = Math.max(1, Math.min(MAX_STEPS, Math.round(steps * BUDGET_MS / took)));
           const report = JSON.parse(wasm.chamber_report_json());
           paintStats(report);
           window.__lastReport = report;

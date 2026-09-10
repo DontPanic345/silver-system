@@ -142,9 +142,7 @@ pub fn render_world_to_rgb8(
         for i in 0..world.width() {
             let index = GridIndex::new(i as i32, j as i32);
             let cell = world.cell(index);
-            let material = world.materials().get(cell.material);
-            let base = shade_by_pressure(material, cell.mass);
-            let colour = tint_by_temperature(base, cell.temperature);
+            let colour = tint_by_temperature(cell_colour(world, &cell), cell.temperature);
             for dy in 0..cell_px {
                 for dx in 0..cell_px {
                     put(
@@ -184,38 +182,107 @@ pub fn render_world_to_rgb8(
     buf
 }
 
-/// Brightens a gas cell in proportion to how much gas is packed into it.
+/// The untinted colour of one world cell — everything [`render_world_to_rgb8`]
+/// knows about a cell except its temperature.
 ///
-/// Gases are the only cells whose mass is genuinely variable (see
-/// `src/gas.rs`), and without this the most interesting thing in a gas
-/// scene — where the pressure is — is invisible: thin air and a
-/// ten-atmosphere bottle paint the identical dark blue. The scale is
-/// relative to the material's own density, i.e. to one atmosphere, so it is
-/// data-driven and says nothing about which gas it is. Non-gases are
-/// returned untouched, since for them mass and density are the same number
-/// by construction and the shading would always be a no-op anyway.
-fn shade_by_pressure(
-    material: &crate::material::Material,
-    mass: crate::math::Scalar,
-) -> (u8, u8, u8) {
-    if material.phase != crate::material::Phase::Gas || material.density <= 0.0 {
+/// All of it is read off material data; nothing here knows which material
+/// is which.
+///
+/// - **A gas cell** is the blend of its species' colours weighted by
+///   partial pressure — so a room that is a fifth CO₂ is a fifth of the way
+///   to CO₂'s colour everywhere, rather than a patchwork of pure cells —
+///   brightened by how many atmospheres it holds (so a pressurised bottle
+///   is visible), and washed toward a pale version of any liquid hanging in
+///   it as mist (so a cloud is visible, and humid air that has not
+///   condensed is not).
+/// - **A liquid cell** that is only partly full is drawn fainter, toward
+///   the dark of empty space, so a raindrop holding a hundredth of a cell of
+///   water does not paint as a cell of water. (Night 3's blue dune was this
+///   exact mistake, made in the physics; drawing it honestly is the same
+///   lesson in the renderer.)
+pub fn cell_colour(world: &crate::world::World, cell: &crate::world::Cell) -> (u8, u8, u8) {
+    let table = world.materials();
+    let material = table.get(cell.material);
+    let lerp = |a: (u8, u8, u8), b: (u8, u8, u8), f: f64| {
+        let f = f.clamp(0.0, 1.0);
+        let c = |x: u8, y: u8| {
+            (x as f64 + (y as f64 - x as f64) * f)
+                .round()
+                .clamp(0.0, 255.0) as u8
+        };
+        (c(a.0, b.0), c(a.1, b.1), c(a.2, b.2))
+    };
+    let empty = table.get(table.vacuum_label()).colour;
+    if !cell.is_gas(table) {
+        if material.phase == crate::material::Phase::Liquid && material.density > 0.0 {
+            let fill = (cell.mass / material.density).clamp(0.0, 1.0);
+            if fill < 0.999 {
+                return lerp(empty, material.colour, 0.35 + 0.65 * fill.sqrt());
+            }
+        }
         return material.colour;
     }
-    let atmospheres = (mass / material.density).clamp(0.0, 6.0);
-    let lift = ((atmospheres - 1.0) * 22.0).clamp(-14.0, 110.0);
-    let add = |c: u8| (c as f32 + lift).clamp(0.0, 255.0) as u8;
-    (
-        add(material.colour.0),
-        add(material.colour.1),
-        add(material.colour.2),
-    )
+
+    // Species colours, weighted by partial pressure.
+    let (mut rgb, mut weight) = ([0.0f64; 3], 0.0f64);
+    let (mut mist, mut mist_colour) = (0.0f64, (0.0f64, 0.0f64, 0.0f64));
+    for (&id, &m) in table.slots().iter().zip(cell.mix.iter()) {
+        if m <= 0.0 {
+            continue;
+        }
+        let species = table.get(id);
+        if table.is_gas(id) {
+            let partial = m * species.gas_constant * cell.temperature;
+            rgb[0] += partial * species.colour.0 as f64;
+            rgb[1] += partial * species.colour.1 as f64;
+            rgb[2] += partial * species.colour.2 as f64;
+            weight += partial;
+        } else {
+            mist += m;
+            mist_colour.0 += m * species.colour.0 as f64;
+            mist_colour.1 += m * species.colour.1 as f64;
+            mist_colour.2 += m * species.colour.2 as f64;
+        }
+    }
+    let mut colour = if weight > 0.0 {
+        (
+            (rgb[0] / weight).round() as u8,
+            (rgb[1] / weight).round() as u8,
+            (rgb[2] / weight).round() as u8,
+        )
+    } else {
+        empty
+    };
+
+    // Pressure, relative to the table's one atmosphere.
+    let reference = table.reference_pressure();
+    if reference > 0.0 {
+        let atmospheres = (cell.pressure(table) / reference).clamp(0.0, 6.0);
+        let lift = ((atmospheres - 1.0) * 22.0).clamp(-14.0, 110.0);
+        let add = |c: u8| (c as f64 + lift).clamp(0.0, 255.0) as u8;
+        colour = (add(colour.0), add(colour.1), add(colour.2));
+    }
+
+    // Mist: droplets scatter light, so a cloud is paler than the liquid
+    // it is made of. Visible from a tenth of a droplet's worth.
+    if mist > 0.0 {
+        let liquid = (
+            (mist_colour.0 / mist) as u8,
+            (mist_colour.1 / mist) as u8,
+            (mist_colour.2 / mist) as u8,
+        );
+        let pale = lerp(liquid, (235, 238, 242), 0.6);
+        let opacity = (mist / crate::vapour::DROPLET_G).sqrt().clamp(0.0, 1.0) * 0.85;
+        colour = lerp(colour, pale, opacity);
+    }
+    colour
 }
 
 /// Shifts a material colour warm or cool according to `temperature_k`.
 /// Neutral at 293 K, fully warm by 800 K, fully cool by 200 K.
 fn tint_by_temperature(base: (u8, u8, u8), temperature_k: crate::math::Scalar) -> (u8, u8, u8) {
     let t = temperature_k;
-    let mix = |a: u8, b: u8, f: f32| (a as f32 + (b as f32 - a as f32) * f).clamp(0.0, 255.0) as u8;
+    let mix = |a: u8, b: u8, f: f64| (a as f64 + (b as f64 - a as f64) * f).clamp(0.0, 255.0) as u8;
     if t > 293.0 {
         let f = ((t - 293.0) / 507.0).clamp(0.0, 1.0) * 0.75;
         (mix(base.0, 255, f), mix(base.1, 90, f), mix(base.2, 30, f))

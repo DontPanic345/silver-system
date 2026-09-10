@@ -40,13 +40,16 @@
 <body>
   <h1>The still</h1>
   <p class="lede">
-    Juniper standing in water, in a pot held at 368&nbsp;K, and a cold
-    receiver on the other side of a wall with one gap in it. Gin comes out
-    of the far end. Nothing here is a brewing mechanic: the pot is warm,
-    so the botanicals ferment; the wash boils at 351.5&nbsp;K and the water
-    beside it boils at 373.15&nbsp;K, so holding the pot between those two
-    figures boils off one and not the other. That 22&nbsp;kelvin gap is the
-    whole of distilling.
+    Juniper standing in water, in a pot held at 366&nbsp;K, and a cold
+    receiver on the other side of a wall with a gap in it. Gin comes out of
+    the far end. Nothing here is a brewing mechanic: the pot is warm, so the
+    botanicals ferment; wash boils at 351.5&nbsp;K and water at
+    373.15&nbsp;K, and both follow a vapour-pressure curve read off those
+    same two numbers, so at 366&nbsp;K the air over the pot fills with
+    several times as much spirit as steam. That gap is the whole of
+    distilling — and because water does evaporate below its boiling point,
+    some water comes over too and the receiver collects a little of it
+    under the gin, as a real pot still's does.
   </p>
 
   <div class="stage">
@@ -62,12 +65,13 @@
       <ol class="stages">
         <li><b>Mash</b> — juniper touching water above 310 K becomes wash.
             One row of the reaction table; nothing names juniper.</li>
-        <li><b>Boil</b> — wash past 351.5 K becomes spirit vapour, by the
-            same phase change that boils a kettle.</li>
+        <li><b>Boil</b> — wash gives off spirit vapour, fast where it
+            touches air and wholesale where it boils beneath the surface.</li>
         <li><b>Cross</b> — spirit vapour is <em>denser than air</em>
             (46&nbsp;g/mol against 29), so it lies on top of the wash and
             creeps sideways through the gap rather than rising.</li>
-        <li><b>Condense</b> — on the cold floor it becomes gin, and pools.</li>
+        <li><b>Condense</b> — against the cold floor and wall it forms
+            dew, which falls as drops of gin and pools.</li>
         <li><b>Drink</b> — the two gnomes started thirsty.</li>
       </ol>
 
@@ -105,7 +109,10 @@
     import init, * as wasm from './pkg/viewer.js';
 
     const CELL_PX = 11;
-    const STEPS_PER_FRAME = 6;
+    // Simulated steps per animation frame: as many as fit in a slice of the
+    // frame, up to a ceiling that keeps the still's pace readable.
+    const MAX_STEPS = 18, BUDGET_MS = 11;
+    let steps = 6;
     let paused = false;
 
     const fmt = (x, digits = 4) =>
@@ -184,7 +191,10 @@
 
       function frame() {
         if (!paused) {
-          wasm.still_tick_and_draw('canvas', CELL_PX, STEPS_PER_FRAME);
+          const t0 = performance.now();
+          wasm.still_tick_and_draw('canvas', CELL_PX, steps);
+          const took = Math.max(0.1, performance.now() - t0);
+          steps = Math.max(1, Math.min(MAX_STEPS, Math.round(steps * BUDGET_MS / took)));
           const report = JSON.parse(wasm.still_report_json());
           paintStats(report);
           window.__lastReport = report;

@@ -39,20 +39,47 @@
 //! assertion a test can make — see `physics::tests` and
 //! [`World::conservation_residuals`].
 
-use crate::material::{Direction, Material, MaterialId, MaterialTable, Transition};
+use crate::material::{Direction, Material, MaterialId, MaterialTable, Transition, MIX_SLOTS};
 use crate::math::{GridIndex, Scalar};
 
 /// Sentinel for [`World::pending`]: this cell has no phase change in
 /// flight.
 pub const NO_PENDING: u8 = u8::MAX;
 
+/// A gas cell's composition: grams of each species, indexed by
+/// [`MaterialTable::slot`].
+pub type Mix = [Scalar; MIX_SLOTS];
+
+/// An empty composition — what every non-gas cell carries.
+pub const NO_MIX: Mix = [0.0; MIX_SLOTS];
+
 /// A whole cell's state, as a value — what movement swaps and what
 /// [`World::cell`] hands back.
+///
+/// ## Two kinds of cell
+///
+/// A cell of liquid or solid holds one material, and `mass` is how much of
+/// it. A **gas cell** holds a *mixture*: `mix` carries the grams of every
+/// species in it — air, steam, CO₂, spirit vapour, and any liquid
+/// condensed out of them and still hanging in the air as mist — and for a
+/// gas cell:
+///
+/// - `mass` is the total of `mix`, kept in step by [`Cell::refresh`];
+/// - `material` is only a *label*: the gas species with the most mass in
+///   the cell. Rendering, reports, a gnome's "can I breathe this", and a
+///   reaction's "is there air here" read it. Nothing that moves mass or
+///   energy does — they all read `mix`.
+///
+/// This is what lets two gases share a cell, and it is the whole of what
+/// was missing from night 2's gas: a cell of CO₂ next to a cell of air
+/// could only ever swap with it, never mix into it, so a heavy gas could do
+/// nothing but pile up on the floor.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Cell {
     pub material: MaterialId,
     /// Mass held by this cell, in grams (see
-    /// [`MaterialTable::terrarium`]'s note on units).
+    /// [`MaterialTable::terrarium`]'s note on units). For a gas cell, the
+    /// sum of `mix`.
     pub mass: Scalar,
     /// Temperature in kelvin.
     pub temperature: Scalar,
@@ -74,28 +101,149 @@ pub struct Cell {
     /// straight back the other, so water never traverses a pipe. With it,
     /// water that entered a cell moving right tries right again first.
     pub flow_dir: i8,
+    /// Grams of each species in a gas cell — see the type's doc comment.
+    /// All zero for anything else.
+    pub mix: Mix,
 }
 
 impl Cell {
     /// A cell of `material` at `temperature`, massing whatever a full cell
-    /// of that material masses, with no phase change in flight.
+    /// of that material masses, with no phase change in flight. A gas is
+    /// painted as a pure mixture of one species at one atmosphere.
     pub fn full(materials: &MaterialTable, material: MaterialId, temperature: Scalar) -> Self {
-        Cell {
+        let mass = materials.get(material).density;
+        let mut cell = Cell {
             material,
-            mass: materials.get(material).density,
+            mass,
             temperature,
             progress: 0.0,
             pending: NO_PENDING,
             flow_dir: 0,
+            mix: NO_MIX,
+        };
+        if let (true, Some(s)) = (materials.is_gas(material), materials.slot(material)) {
+            cell.mix[s] = mass;
+        }
+        cell
+    }
+
+    /// A gas cell holding `parts` (species and grams) at `temperature`.
+    pub fn gas(
+        materials: &MaterialTable,
+        parts: &[(MaterialId, Scalar)],
+        temperature: Scalar,
+    ) -> Self {
+        let mut cell = Cell {
+            material: materials.vacuum_label(),
+            mass: 0.0,
+            temperature,
+            progress: 0.0,
+            pending: NO_PENDING,
+            flow_dir: 0,
+            mix: NO_MIX,
+        };
+        for &(id, grams) in parts {
+            let s = materials
+                .slot(id)
+                .unwrap_or_else(|| panic!("material {} cannot be part of a gas mixture", id.0));
+            cell.mix[s] += grams;
+        }
+        cell.refresh(materials);
+        cell
+    }
+
+    /// Whether this is a gas cell, whose contents live in [`Cell::mix`].
+    pub fn is_gas(&self, materials: &MaterialTable) -> bool {
+        materials.is_gas(self.material)
+    }
+
+    /// Re-derives a gas cell's total mass and its label from its mixture.
+    /// Every operation that edits `mix` finishes with this, so the two
+    /// never disagree. A cell with no gas in it at all keeps its label.
+    pub fn refresh(&mut self, materials: &MaterialTable) {
+        if !self.is_gas(materials) {
+            return;
+        }
+        self.mass = self.mix.iter().sum();
+        let is_gas = &materials.slot_props().is_gas;
+        let mut best: Option<(usize, Scalar)> = None;
+        for (s, (&grams, &gas)) in self.mix.iter().zip(is_gas.iter()).enumerate() {
+            if !gas || grams <= 0.0 {
+                continue;
+            }
+            if best.is_none_or(|(_, m)| grams > m) {
+                best = Some((s, grams));
+            }
+        }
+        if let Some((s, _)) = best {
+            self.material = materials.slots()[s];
+        }
+    }
+
+    /// Heat capacity of the whole cell, J/K: `Σ m·c` over its contents.
+    pub fn capacity(&self, materials: &MaterialTable) -> f64 {
+        if self.is_gas(materials) {
+            dot(&self.mix, &materials.slot_props().heat_capacity)
+        } else {
+            self.mass * materials.get(self.material).heat_capacity
+        }
+    }
+
+    /// Energy the cell holds over and above its sensible heat, J: `Σ m·L`
+    /// over its contents, plus any latent progress already committed to a
+    /// phase change.
+    pub fn stored(&self, materials: &MaterialTable) -> f64 {
+        if self.is_gas(materials) {
+            dot(&self.mix, &materials.slot_props().latent_energy)
+        } else {
+            self.mass * (materials.get(self.material).latent_energy + self.progress)
         }
     }
 
     /// This cell's total energy in joules, the quantity
-    /// [`World::total_energy`] sums.
+    /// [`World::total_energy`] sums: `capacity·T + stored`.
     pub fn energy(&self, materials: &MaterialTable) -> f64 {
-        let m = materials.get(self.material);
-        self.mass as f64 * (m.specific_energy(self.temperature) + self.progress) as f64
+        self.capacity(materials) * self.temperature + self.stored(materials)
     }
+
+    /// Sets the temperature that makes this cell's energy exactly `joules`,
+    /// given what it now contains. The one move every mixing, evaporating
+    /// and reacting operation ends with, and the reason each of them
+    /// conserves energy by construction: whatever the contents became, the
+    /// temperature is *solved* from the energy rather than assigned.
+    pub fn solve_temperature(&mut self, materials: &MaterialTable, joules: f64) {
+        let capacity = self.capacity(materials);
+        if capacity > 0.0 {
+            self.temperature = ((joules - self.stored(materials)) / capacity) as Scalar;
+        }
+    }
+
+    /// Gas pressure, `P = T · Σ m·R` over the mixture. Liquid mist in the
+    /// mix has no gas constant and so adds mass without adding pressure,
+    /// which is what a droplet does. Zero for any non-gas cell.
+    pub fn pressure(&self, materials: &MaterialTable) -> Scalar {
+        if !self.is_gas(materials) {
+            return 0.0;
+        }
+        dot(&self.mix, &materials.slot_props().gas_constant) * self.temperature
+    }
+
+    /// Grams of `species` in this cell: its share of a gas cell's mixture,
+    /// or the whole cell if it is a cell of that material.
+    pub fn grams_of(&self, materials: &MaterialTable, species: MaterialId) -> Scalar {
+        if self.is_gas(materials) {
+            materials.slot(species).map_or(0.0, |s| self.mix[s])
+        } else if self.material == species {
+            self.mass
+        } else {
+            0.0
+        }
+    }
+}
+
+/// `Σ a·b` over a mixture and a per-slot property.
+fn dot(mix: &Mix, per_slot: &[Scalar; MIX_SLOTS]) -> Scalar {
+    mix.iter().zip(per_slot.iter()).map(|(&m, &x)| m * x).sum()
 }
 
 /// Running total of everything gnome magic has added to (or removed from)
@@ -137,8 +285,16 @@ pub struct World {
     progress: Vec<Scalar>,
     pending: Vec<u8>,
     flow_dir: Vec<i8>,
+    mix: Vec<Mix>,
     materials: MaterialTable,
     ledger: Ledger,
+    /// What the water cycle has done — see [`crate::vapour::Tally`].
+    pub(crate) tally: crate::vapour::Tally,
+    /// Gas mass flux across each cell's right-hand face, g/s, positive
+    /// toward `+i` — the gas's momentum. See `gas::flow`.
+    pub(crate) flux_x: Vec<Scalar>,
+    /// The same across each cell's upper face, positive toward `+j`.
+    pub(crate) flux_y: Vec<Scalar>,
     initial_mass: f64,
     initial_energy: f64,
     /// Steps taken, used to alternate the left/right bias in flow so
@@ -158,18 +314,22 @@ impl World {
         temperature: Scalar,
     ) -> Self {
         let n = width * height;
-        let mass = materials.get(fill).density;
+        let template = Cell::full(&materials, fill, temperature);
         let mut world = World {
             width,
             height,
             material: vec![fill; n],
-            mass: vec![mass; n],
+            mass: vec![template.mass; n],
             temperature: vec![temperature; n],
             progress: vec![0.0; n],
             pending: vec![NO_PENDING; n],
             flow_dir: vec![0; n],
+            mix: vec![template.mix; n],
             materials,
             ledger: Ledger::default(),
+            tally: crate::vapour::Tally::default(),
+            flux_x: vec![0.0; n],
+            flux_y: vec![0.0; n],
             initial_mass: 0.0,
             initial_energy: 0.0,
             step_count: 0,
@@ -188,6 +348,13 @@ impl World {
         self.initial_mass = self.total_mass();
         self.initial_energy = self.total_energy();
         self.ledger = Ledger::default();
+        self.tally = crate::vapour::Tally::default();
+    }
+
+    /// What the water cycle has done since the baseline — grams evaporated,
+    /// condensed and rained. See [`crate::vapour::Tally`].
+    pub fn tally(&self) -> crate::vapour::Tally {
+        self.tally
     }
 
     pub fn width(&self) -> usize {
@@ -233,21 +400,66 @@ impl World {
             progress: self.progress[p],
             pending: self.pending[p],
             flow_dir: self.flow_dir[p],
+            mix: self.mix[p],
         }
     }
 
+    /// Writes a whole cell. A gas cell's total mass and label are
+    /// re-derived from its mixture on the way in, so a caller that edits
+    /// `mix` cannot leave `mass` disagreeing with it.
     pub fn set_cell(&mut self, index: GridIndex, cell: Cell) {
         let p = self.linear_index(index);
         self.set_cell_at(p, cell);
     }
 
-    pub(crate) fn set_cell_at(&mut self, p: usize, cell: Cell) {
+    pub(crate) fn set_cell_at(&mut self, p: usize, mut cell: Cell) {
+        if cell.is_gas(&self.materials) {
+            // A gas cell's contents are its mixture; `mass` is derived from
+            // it. A caller that relabels a cell as a gas but forgets to say
+            // what is in it would silently delete its mass here, so that is
+            // loud instead.
+            assert!(
+                cell.mass <= 0.0 || cell.mix.iter().any(|&m| m > 0.0),
+                "gas cell written with {} g of mass but an empty mixture — set `mix`, \
+                 not `mass`, on a gas cell",
+                cell.mass
+            );
+            cell.refresh(&self.materials);
+            // Gas cells never carry a phase change in flight: their
+            // condensing and evaporating is done by `src/vapour.rs` on the
+            // mixture, not by the per-cell latent accumulator.
+            cell.pending = NO_PENDING;
+            cell.progress = 0.0;
+        } else {
+            cell.mix = NO_MIX;
+        }
         self.material[p] = cell.material;
         self.mass[p] = cell.mass;
         self.temperature[p] = cell.temperature;
         self.progress[p] = cell.progress;
         self.pending[p] = cell.pending;
         self.flow_dir[p] = cell.flow_dir;
+        self.mix[p] = cell.mix;
+    }
+
+    /// Whether the cell at flat position `p` is a gas cell.
+    pub(crate) fn is_gas_at(&self, p: usize) -> bool {
+        self.materials.is_gas(self.material[p])
+    }
+
+    /// The gas pressure at flat position `p` — [`Cell::pressure`] without
+    /// copying the cell out first, since flow asks it of every pair.
+    pub(crate) fn pressure_at(&self, p: usize) -> Scalar {
+        if !self.is_gas_at(p) {
+            return 0.0;
+        }
+        dot(&self.mix[p], &self.materials.slot_props().gas_constant) * self.temperature[p]
+    }
+
+    /// Sets one cell's temperature and nothing else — for conduction, which
+    /// changes nothing else, and runs on every adjacent pair every step.
+    pub(crate) fn set_temperature_at(&mut self, p: usize, temperature: Scalar) {
+        self.temperature[p] = temperature;
     }
 
     /// Paints a full cell of `material` at `temperature` into `index` —
@@ -287,6 +499,7 @@ impl World {
         self.progress.swap(a, b);
         self.pending.swap(a, b);
         self.flow_dir.swap(a, b);
+        self.mix.swap(a, b);
     }
 
     /// Records which way the cell at flat position `p` is flowing — see
@@ -300,7 +513,7 @@ impl World {
     }
 
     pub fn total_mass(&self) -> f64 {
-        self.mass.iter().map(|&m| m as f64).sum()
+        self.mass.iter().copied().sum()
     }
 
     pub fn total_energy(&self) -> f64 {
@@ -309,15 +522,31 @@ impl World {
             .sum()
     }
 
-    /// How much mass of `material` the world currently holds.
+    /// How much mass of `material` the world currently holds, wherever it
+    /// is: whole cells of it, and its share of every gas cell's mixture
+    /// (as vapour, or as mist if it is a liquid something condenses into).
     pub fn mass_of(&self, material: MaterialId) -> f64 {
         (0..self.material.len())
-            .filter(|&p| self.material[p] == material)
-            .map(|p| self.mass[p] as f64)
+            .map(|p| self.grams_of_at(p, material))
             .sum()
     }
 
-    /// How many cells currently hold `material`.
+    /// Grams of `material` in the cell at flat position `p` — see
+    /// [`Cell::grams_of`].
+    pub fn grams_of_at(&self, p: usize, material: MaterialId) -> Scalar {
+        if self.is_gas_at(p) {
+            self.materials
+                .slot(material)
+                .map_or(0.0, |s| self.mix[p][s])
+        } else if self.material[p] == material {
+            self.mass[p]
+        } else {
+            0.0
+        }
+    }
+
+    /// How many cells currently hold `material` — for a gas, how many gas
+    /// cells it is the largest part of.
     pub fn count_of(&self, material: MaterialId) -> usize {
         self.material.iter().filter(|&&m| m == material).count()
     }
@@ -329,7 +558,7 @@ impl World {
             return 0.0;
         }
         (0..self.material.len())
-            .map(|p| self.mass[p] as f64 * self.temperature[p] as f64)
+            .map(|p| self.mass[p] * self.temperature[p])
             .sum::<f64>()
             / m
     }
@@ -368,7 +597,7 @@ impl World {
     /// charged to the ledger either).
     pub fn conjure_energy(&mut self, index: GridIndex, joules: f64) -> Scalar {
         let p = self.linear_index(index);
-        let capacity = self.mass[p] as f64 * self.material_of(p).heat_capacity as f64;
+        let capacity = self.cell_at(p).capacity(&self.materials);
         if capacity <= 0.0 {
             return 0.0;
         }
@@ -380,11 +609,24 @@ impl World {
 
     /// Conjures `grams` of `material` into the cell at `index`, at
     /// `temperature`, and records both the mass and the energy that mass
-    /// brought with it. Negative `grams` banishes mass instead (removing
-    /// the cell's own material, whatever it is, and leaving air behind if
-    /// the cell empties).
+    /// brought with it. Negative `grams` banishes mass instead.
     ///
-    /// Returns the mass actually moved.
+    /// What "into" means depends on the two things meeting:
+    ///
+    /// - **A gas into a gas cell** is *added* to the mixture — a vent
+    ///   breathing CO₂ into a room raises the CO₂ in it rather than
+    ///   replacing the room. The cell's temperature is re-solved from its
+    ///   new energy, so gas conjured cold into warm air cools it.
+    /// - **Anything else** *replaces* what was there, and the displaced mass
+    ///   and energy leave through the same ledger entry that let the new
+    ///   mass in.
+    /// - **Banishing** takes `material` out of a gas cell's mixture (a
+    ///   scrubber), or takes mass out of a cell of that material (a gnome
+    ///   eating a berry). A cell emptied completely becomes an empty gas
+    ///   cell — no mass, so no energy, so nothing to book — and the
+    ///   atmosphere flows in to fill it on the next step.
+    ///
+    /// Returns the mass actually moved: positive in, negative out.
     pub fn conjure_mass(
         &mut self,
         index: GridIndex,
@@ -393,65 +635,102 @@ impl World {
         temperature: Scalar,
     ) -> Scalar {
         let p = self.linear_index(index);
+        let existing = self.cell_at(p);
+        let slot = self.materials.slot(material);
+        let in_gas_cell = existing.is_gas(&self.materials);
+
         if grams > 0.0 {
-            let existing = self.cell_at(p);
+            let added_energy = grams * self.materials.get(material).specific_energy(temperature);
+            if let (true, true, Some(s)) = (in_gas_cell, self.materials.is_gas(material), slot) {
+                let energy = existing.energy(&self.materials) + added_energy;
+                let mut cell = existing;
+                cell.mix[s] += grams;
+                cell.refresh(&self.materials);
+                cell.solve_temperature(&self.materials, energy);
+                self.ledger.mass_conjured += grams;
+                self.ledger.energy_conjured += added_energy;
+                self.set_cell_at(p, cell);
+                return grams;
+            }
             let existing_energy = existing.energy(&self.materials);
-            let added_energy =
-                grams as f64 * self.materials.get(material).specific_energy(temperature) as f64;
-            // Conjuring into an occupied cell replaces what was there; the
-            // displaced mass and energy leave the world through the same
-            // ledger that let the new mass in, so the books still balance.
-            self.ledger.mass_conjured += grams as f64 - existing.mass as f64;
+            self.ledger.mass_conjured += grams - existing.mass;
             self.ledger.energy_conjured += added_energy - existing_energy;
-            self.set_cell_at(
-                p,
-                Cell {
-                    material,
-                    mass: grams,
-                    temperature,
-                    progress: 0.0,
-                    pending: NO_PENDING,
-                    flow_dir: 0,
-                },
-            );
-            grams
-        } else {
-            let existing = self.cell_at(p);
-            let removed = (-grams).min(existing.mass);
+            let mut cell = Cell {
+                material,
+                mass: grams,
+                temperature,
+                progress: 0.0,
+                pending: NO_PENDING,
+                flow_dir: 0,
+                mix: NO_MIX,
+            };
+            if let (true, Some(s)) = (self.materials.is_gas(material), slot) {
+                cell.mix[s] = grams;
+            }
+            self.set_cell_at(p, cell);
+            return grams;
+        }
+
+        // Banishing. Out of a mixture, only the named species leaves (a gas,
+        // or mist of a liquid); the rest of the cell is untouched and so is
+        // its temperature, because what is left behind still holds exactly
+        // its own energy.
+        if let (true, Some(s)) = (in_gas_cell, slot) {
+            let removed = (-grams).min(existing.mix[s]);
             if removed <= 0.0 {
                 return 0.0;
             }
-            let fraction = removed as f64 / existing.mass as f64;
-            self.ledger.mass_conjured -= removed as f64;
-            self.ledger.energy_conjured -= existing.energy(&self.materials) * fraction;
-            let left = existing.mass - removed;
-            if left <= 0.0 {
-                let air = crate::material::terrarium::AIR;
-                let air_mass = self.materials.get(air).density;
-                // The vacated cell fills with air out of nowhere, so that
-                // too is conjured and booked.
-                self.ledger.mass_conjured += air_mass as f64;
-                self.ledger.energy_conjured += air_mass as f64
-                    * self
-                        .materials
-                        .get(air)
-                        .specific_energy(existing.temperature) as f64;
-                self.set_cell_at(
-                    p,
-                    Cell {
-                        material: air,
-                        mass: air_mass,
-                        temperature: existing.temperature,
-                        progress: 0.0,
-                        pending: NO_PENDING,
-                        flow_dir: 0,
-                    },
-                );
-            } else {
-                self.mass[p] = left;
-            }
-            -removed
+            self.ledger.mass_conjured -= removed;
+            self.ledger.energy_conjured -= removed
+                * self
+                    .materials
+                    .get(material)
+                    .specific_energy(existing.temperature);
+            let mut cell = existing;
+            cell.mix[s] -= removed;
+            self.set_cell_at(p, cell);
+            return -removed;
         }
+
+        let removed = (-grams).min(existing.mass);
+        if removed <= 0.0 {
+            return 0.0;
+        }
+        let fraction = removed / existing.mass;
+        self.ledger.mass_conjured -= removed;
+        self.ledger.energy_conjured -= existing.energy(&self.materials) * fraction;
+        let left = existing.mass - removed;
+        if left <= 0.0 {
+            // Emptied: nothing left to hold energy, so the cell becomes an
+            // empty gas cell and needs no booking of its own. It used to be
+            // refilled with a full cell of air conjured out of nowhere (and
+            // booked); now that gas cells can hold any amount, the room's
+            // own air flows in instead, which is what would really happen.
+            self.set_cell_at(
+                p,
+                Cell {
+                    material: self.materials.vacuum_label(),
+                    mass: 0.0,
+                    temperature: existing.temperature,
+                    progress: 0.0,
+                    pending: NO_PENDING,
+                    flow_dir: 0,
+                    mix: NO_MIX,
+                },
+            );
+        } else if existing.is_gas(&self.materials) {
+            // Banishing a gas that is not in this cell's mixture — the
+            // fraction above was taken off the whole cell, so every species
+            // gives up the same share.
+            let mut cell = existing;
+            for m in cell.mix.iter_mut() {
+                *m *= (1.0 - fraction) as Scalar;
+            }
+            self.set_cell_at(p, cell);
+        } else {
+            self.mass[p] = left;
+        }
+        -removed
     }
 
     /// Records Gin spent, for the ledger's resource side. The gnome layer

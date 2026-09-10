@@ -35,7 +35,23 @@
 /// quantity over a very long run proves `f32` drifts past an acceptable
 /// tolerance), that is a new decision to make there, in the open, against a
 /// measured failure — not a silent reversal of this one.
-pub type Scalar = f32;
+///
+/// **Reversed, 2026-09-10 (night 4), against a measured failure.** Gas cells
+/// became mixtures and liquids began to evaporate below boiling
+/// (`src/vapour.rs`), which means routinely moving a microgram of water out
+/// of a cell holding a gram of it. An `f32` gram has a unit in the last
+/// place of 1.2e-7 g, so each such transfer was resolved to about one part
+/// in ten, and the error went straight into the conservation residuals: a
+/// pond evaporating for 3000 steps drifted its world's mass by 1e-6
+/// relative, and a small warm-pond-under-a-cold-lid water cycle drifted
+/// energy by 6e-5 over 6000 — six times the tolerance the tests already
+/// allowed for rounding. Night 3's journal had seen the leading edge of this
+/// in the terrarium (an energy residual creeping toward 1e-5) and called it
+/// rounding worth watching; it was. The alternative — keeping `f32` and
+/// arranging every transfer so its rounding lands on the smaller cell — fixes
+/// mass but not the temperature solves, and makes every rule harder to read.
+/// The GPU argument above is real but hypothetical; the drift was measured.
+pub type Scalar = f64;
 
 /// A 2D vector of [`Scalar`]s, used for world-space positions, velocities,
 /// forces, and displacements.

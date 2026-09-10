@@ -131,40 +131,49 @@ fn crossed(reaction: &Reaction, temperature: Scalar) -> bool {
 /// Testing the bush alone would ferment it; testing the pair does not.
 pub fn equilibrium_temperature(world: &World, p: usize, q: usize) -> Scalar {
     let (a, b) = (world.cell_at(p), world.cell_at(q));
-    let cap_a = a.mass * world.material_of(p).heat_capacity;
-    let cap_b = b.mass * world.material_of(q).heat_capacity;
+    let cap_a = a.capacity(world.materials());
+    let cap_b = b.capacity(world.materials());
     if cap_a + cap_b <= 0.0 {
         return 0.0;
     }
-    (cap_a * a.temperature + cap_b * b.temperature) / (cap_a + cap_b)
+    ((cap_a * a.temperature + cap_b * b.temperature) / (cap_a + cap_b)) as Scalar
 }
 
 /// Rewrites a reacting pair: new materials, the same masses, and one shared
 /// temperature solved so the pair's total energy is exactly what it was.
+///
+/// An arm acting on a gas cell rewrites one *species* of its mixture rather
+/// than the whole cell: burning juniper beside a cell of air turns that
+/// cell's air into CO₂ and leaves any steam or spirit in it alone. (The
+/// table refuses, at construction, an arm that would turn a gas into a
+/// non-gas — there is no honest answer to where the rest of the cell goes.)
 fn fire(world: &mut World, p: usize, q: usize, reaction: &Reaction) {
     let (mut a, mut b) = (world.cell_at(p), world.cell_at(q));
-    let energy = a.energy(world.materials()) + b.energy(world.materials());
+    let table = world.materials();
+    let energy = a.energy(table) + b.energy(table);
 
-    let to_a = *world.materials().get(reaction.subject.to);
-    let to_b = *world.materials().get(reaction.partner.to);
-    let capacity =
-        a.mass as f64 * to_a.heat_capacity as f64 + b.mass as f64 * to_b.heat_capacity as f64;
+    for (cell, arm) in [(&mut a, reaction.subject), (&mut b, reaction.partner)] {
+        if cell.is_gas(table) {
+            if let (Some(from), Some(to)) = (table.slot(arm.from), table.slot(arm.to)) {
+                cell.mix[to] += cell.mix[from];
+                cell.mix[from] = 0.0;
+            }
+            cell.refresh(table);
+        } else {
+            cell.material = arm.to;
+            cell.progress = 0.0;
+            cell.pending = NO_PENDING;
+        }
+    }
+
+    // energy == Σ m·(c·T + L) over both cells' new contents, solved for T.
+    let capacity = a.capacity(table) + b.capacity(table);
     if capacity <= 0.0 {
         return;
     }
-    // energy == m_a·(c_a·T + L_a) + m_b·(c_b·T + L_b), solved for T.
-    let stored =
-        a.mass as f64 * to_a.latent_energy as f64 + b.mass as f64 * to_b.latent_energy as f64;
-    let temperature = ((energy - stored) / capacity) as Scalar;
-
-    a.material = reaction.subject.to;
-    b.material = reaction.partner.to;
+    let temperature = ((energy - a.stored(table) - b.stored(table)) / capacity) as Scalar;
     a.temperature = temperature;
     b.temperature = temperature;
-    a.progress = 0.0;
-    b.progress = 0.0;
-    a.pending = NO_PENDING;
-    b.pending = NO_PENDING;
     world.set_cell_at(p, a);
     world.set_cell_at(q, b);
 }
