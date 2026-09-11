@@ -86,6 +86,13 @@ impl Vec2 {
 
     /// Vector addition: combines two displacements (or a point and a
     /// displacement) into one.
+    ///
+    /// Named rather than an `impl Add`, and left that way deliberately: this
+    /// type predates any caller that wants operator syntax, and every one of
+    /// them spells it out. (The `allow` is only needed because this module
+    /// became public on night 6, for `GridIndex`'s sake; clippy does not
+    /// look at private items.)
+    #[allow(clippy::should_implement_trait)]
     pub fn add(self, other: Vec2) -> Vec2 {
         Vec2 {
             x: self.x + other.x,
@@ -93,7 +100,9 @@ impl Vec2 {
         }
     }
 
-    /// Vector subtraction: the displacement from `other` to `self`.
+    /// Vector subtraction: the displacement from `other` to `self`. See
+    /// [`Vec2::add`] for why this is not an `impl Sub`.
+    #[allow(clippy::should_implement_trait)]
     pub fn sub(self, other: Vec2) -> Vec2 {
         Vec2 {
             x: self.x - other.x,

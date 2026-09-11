@@ -27,8 +27,16 @@ use crate::world::World;
 ///  "life":{"grown_g":F,"respired_g":F},
 ///  "air":{"oxygen_g":F,"co2_g":F,"min_breathable_atm":F,"daylight":F},
 ///  "materials":[{"name":S,"cells":N,"mass_g":F},...],
-///  "colony":{"gnomes":N,"embodied":N,"ethereal":N,"total_gin":F}}
+///  "colony":{"gnomes":N,"embodied":N,"ethereal":N,"total_gin":F,
+///            "carried_g":F},
+///  "orders":{"open":N,"completed":N,"cancelled":N}}
 /// ```
+///
+/// `carried_g` and the `orders` block are the player's half of the glass
+/// pane (see `src/order.rs`): what the colony has been asked to do, how much
+/// of it is done, and how many grams are in its hands rather than in the
+/// world. That last one is the number that makes a half-finished wall
+/// legible — it is exactly the ledger entry the digging opened.
 pub fn snapshot_json(world: &World, colony: &Colony, step: u64) -> String {
     let r = world.conservation_residuals();
     let ledger = world.ledger();
@@ -47,7 +55,9 @@ pub fn snapshot_json(world: &World, colony: &Colony, step: u64) -> String {
          \"air\":{{\"oxygen_g\":{:.6},\"co2_g\":{:.6},\"min_breathable_atm\":{:.5},\
          \"daylight\":{:.4}}},\
          \"materials\":[{}],\
-         \"colony\":{{\"gnomes\":{},\"embodied\":{},\"ethereal\":{},\"total_gin\":{:.3}}}}}",
+         \"colony\":{{\"gnomes\":{},\"embodied\":{},\"ethereal\":{},\"total_gin\":{:.3},\
+         \"carried_g\":{:.6}}},\
+         \"orders\":{{\"open\":{},\"completed\":{},\"cancelled\":{}}}}}",
         world.mean_temperature(),
         world.total_mass(),
         world.total_energy(),
@@ -72,6 +82,63 @@ pub fn snapshot_json(world: &World, colony: &Colony, step: u64) -> String {
         colony.embodied_count(),
         colony.ethereal_count(),
         colony.total_gin(),
+        colony.carried_g(),
+        colony.orders.len(),
+        colony.orders.completed(),
+        colony.orders.cancelled(),
+    )
+}
+
+/// One cell, as JSON — the inspector behind the glass pane.
+///
+/// The browser view calls this on hover, so a human can point at anything in
+/// the jar and be told what it actually is: what it is made of, how hot, how
+/// heavy, what pressure it is under, what gases are mixed into it, how much
+/// light reaches it, and whether the player has written anything on it. Every
+/// number here is read straight off the simulation, not out of a second
+/// summary kept beside it.
+///
+/// ```text
+/// {"i":N,"j":N,"material":S,"temperature_k":F,"mass_g":F,"pressure_atm":F,
+///  "light":F,"order":S|null,"mix":[{"name":S,"grams":F},...]}
+/// ```
+pub fn cell_json(world: &World, colony: &Colony, at: crate::math::GridIndex) -> String {
+    if !world.in_bounds(at) {
+        return "{}".to_string();
+    }
+    let cell = world.cell(at);
+    let p = world.linear_index(at);
+    let mix: Vec<String> = terrarium::ALL
+        .iter()
+        .filter_map(|&id| {
+            let grams = cell.grams_of(world.materials(), id);
+            (grams > 1e-9).then(|| {
+                format!(
+                    "{{\"name\":\"{}\",\"grams\":{:.6}}}",
+                    terrarium::name(id),
+                    grams
+                )
+            })
+        })
+        .collect();
+    let order = match colony.orders.at(at).map(|o| o.job) {
+        Some(crate::order::Job::Dig) => "\"dig\"".to_string(),
+        Some(crate::order::Job::Build) => "\"build\"".to_string(),
+        Some(crate::order::Job::Temper { target_k }) => format!("\"temper:{target_k:.0}\""),
+        None => "null".to_string(),
+    };
+    format!(
+        "{{\"i\":{},\"j\":{},\"material\":\"{}\",\"temperature_k\":{:.2},\"mass_g\":{:.5},\
+         \"pressure_atm\":{:.4},\"light\":{:.3},\"order\":{},\"mix\":[{}]}}",
+        at.i,
+        at.j,
+        terrarium::name(cell.material),
+        cell.temperature,
+        cell.mass,
+        cell.pressure(world.materials()) / world.materials().reference_pressure(),
+        world.light_at(p),
+        order,
+        mix.join(",")
     )
 }
 

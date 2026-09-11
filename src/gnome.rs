@@ -37,6 +37,7 @@
 
 use crate::material::{terrarium as t, Mobility, Phase};
 use crate::math::{GridIndex, Scalar};
+use crate::order::{Job, Load, Orders, Outcome};
 use crate::world::World;
 
 /// The most Gin a gnome can hold.
@@ -194,6 +195,12 @@ pub enum Act {
     Breathed,
     /// Put a cutting from its own stores into the world — farming.
     Planted,
+    /// Took a cell of solid out of the world, on the player's orders.
+    Dug,
+    /// Put a carried cell back down, on the player's orders.
+    Built,
+    /// Spent Gin warming or chilling a cell, on the player's orders.
+    Tempered,
     WentEthereal,
     Rescued,
     Waiting,
@@ -225,6 +232,16 @@ pub struct Gnome {
     ///
     /// [`Ledger`]: crate::world::Ledger
     pub belly: Scalar,
+    /// What this gnome is carrying, if anything — see [`Load`].
+    ///
+    /// The hands are the belly's sibling: mass that has left the world and
+    /// is booked out of the ledger until it is put down again. The
+    /// difference is that a belly empties itself and hands do not, so a
+    /// colony that digs and never builds shows up as a permanent, visible
+    /// entry in the ledger rather than as matter quietly deleted.
+    pub hands: Option<Load>,
+    /// The order this gnome has claimed, by id — see [`Orders`].
+    pub job: Option<u64>,
 }
 
 impl Gnome {
@@ -243,6 +260,8 @@ impl Gnome {
             // cutting in it cannot start gardening for three simulated
             // minutes.
             belly: BELLY_FULL,
+            hands: None,
+            job: None,
         }
     }
 
@@ -309,6 +328,11 @@ impl EtherealPipe {
 pub struct Colony {
     pub gnomes: Vec<Gnome>,
     pub pipes: Vec<EtherealPipe>,
+    /// What the player has asked for — see [`crate::order`]. A colony with
+    /// an empty queue is the colony every night before this one had: it
+    /// forages, gardens and survives on its own. Everything in here is
+    /// somebody outside the world having asked.
+    pub orders: Orders,
     /// Deterministic tie-breaker source. A real RNG would make runs
     /// unreproducible for no gain here; this crate's habit is numbers a
     /// test can assert on.
@@ -331,6 +355,7 @@ impl Colony {
         Colony {
             gnomes,
             pipes: Vec::new(),
+            orders: Orders::new(),
             seed: 0x9E3779B97F4A7C15,
             tick: 0,
             last_plant: None,
@@ -369,6 +394,37 @@ impl Colony {
 
     pub fn ethereal_count(&self) -> usize {
         self.gnomes.len() - self.embodied_count()
+    }
+
+    /// Writes an order on a cell — the whole of the player's reach into
+    /// this world. Returns its id.
+    pub fn order(&mut self, at: GridIndex, job: Job) -> u64 {
+        self.orders.issue(at, job)
+    }
+
+    /// Rubs out the order on a cell, and frees whoever was walking to it.
+    pub fn cancel_order(&mut self, at: GridIndex) -> bool {
+        let id = self.orders.at(at).map(|o| o.id);
+        let gone = self.orders.cancel_at(at);
+        if let Some(id) = id {
+            for g in self.gnomes.iter_mut() {
+                if g.job == Some(id) {
+                    g.job = None;
+                }
+            }
+        }
+        gone
+    }
+
+    /// Grams the colony is holding in its hands — mass that has left the
+    /// world and is waiting to be put back. The ledger holds exactly this
+    /// much against it, which is what makes a half-finished wall honest
+    /// rather than a leak.
+    pub fn carried_g(&self) -> f64 {
+        self.gnomes
+            .iter()
+            .filter_map(|g| g.hands.map(|l| l.grams))
+            .sum()
     }
 
     /// One step of gnome behaviour, run after the physics step.
@@ -554,6 +610,15 @@ impl Colony {
             return;
         }
 
+        // --- The player's orders, ahead of the colony's own gardening ---
+        //
+        // Behind survival and behind lunch, though. A colony that digs
+        // while it suffocates is a colony tuned toward failure, which is
+        // the thing `NORTH_STARS.md` #4 opens by objecting to.
+        if self.work(world, idx, pos) {
+            return;
+        }
+
         // --- Garden, when there is food to spare and a bush to train ---
         if self.plant(world, idx, pos) {
             return;
@@ -624,6 +689,103 @@ impl Colony {
         world.conjure_mass(pos, t::STEAM, burn * h2o_per_g, BODY_K);
         self.gnomes[idx].belly -= burn;
         self.respired_g += burn;
+    }
+
+    /// Takes on, walks toward, and carries out the player's orders.
+    ///
+    /// Returns whether this gnome's step was spent working — walking toward
+    /// a job is *not* working in that sense, because the walk itself is the
+    /// ordinary movement code with a destination; this returns false and
+    /// lets [`Colony::walk_direction`] steer.
+    ///
+    /// [`Colony::walk_direction`]: Colony::walk_direction
+    fn work(&mut self, world: &mut World, idx: usize, pos: GridIndex) -> bool {
+        // Claim something, if this gnome is free and there is anything it
+        // could usefully do with the hands it has.
+        if self.gnomes[idx].job.is_none() {
+            let load = self.gnomes[idx].hands;
+            self.gnomes[idx].job = self.orders.claim_for(idx, pos, load.as_ref());
+        }
+        let Some(id) = self.gnomes[idx].job else {
+            return false;
+        };
+        let Some(order) = self.orders.get(id) else {
+            // Somebody rubbed it out while we were walking over.
+            self.gnomes[idx].job = None;
+            return false;
+        };
+        // Hands that no longer suit the job — it was dug out from under us,
+        // or we picked something up on the way. Hand it back.
+        if !order.job.suits(self.gnomes[idx].hands.as_ref()) {
+            self.orders.release(id);
+            self.gnomes[idx].job = None;
+            return false;
+        }
+        if !crate::order::within_reach(pos, order.at) {
+            if self.orders.tick_claim(id) {
+                self.orders.release(id);
+                self.gnomes[idx].job = None;
+            }
+            return false;
+        }
+        // Never build on top of somebody. A gnome inside a cell of sand
+        // cannot breathe, and would pay Gin to gasp its way out of a wall
+        // the player's own colony put there — a colony tuned toward failure
+        // by way of its own diligence. It waits for the cell to clear.
+        if order.job == Job::Build
+            && self
+                .gnomes
+                .iter()
+                .any(|g| g.is_embodied() && g.pos == order.at)
+        {
+            if self.orders.tick_claim(id) {
+                self.orders.release(id);
+                self.gnomes[idx].job = None;
+            }
+            return false;
+        }
+        let mut hands = self.gnomes[idx].hands;
+        let attempt = crate::order::perform(world, &order, &mut hands, self.gnomes[idx].gin);
+        self.gnomes[idx].hands = hands;
+        if attempt.gin > 0.0 {
+            self.spend(world, idx, attempt.gin);
+        }
+        match attempt.outcome {
+            Outcome::Dug => {
+                self.orders.complete(id);
+                self.gnomes[idx].job = None;
+                self.gnomes[idx].last_act = Act::Dug;
+                true
+            }
+            Outcome::Built => {
+                self.orders.complete(id);
+                self.gnomes[idx].job = None;
+                self.gnomes[idx].last_act = Act::Built;
+                true
+            }
+            Outcome::Tempered => {
+                self.orders.complete(id);
+                self.gnomes[idx].job = None;
+                self.gnomes[idx].last_act = Act::Tempered;
+                true
+            }
+            Outcome::Tempering => {
+                self.gnomes[idx].last_act = Act::Tempered;
+                true
+            }
+            Outcome::Impossible => {
+                self.orders.cancel(id);
+                self.gnomes[idx].job = None;
+                false
+            }
+            Outcome::NotYet => {
+                if self.orders.tick_claim(id) {
+                    self.orders.release(id);
+                    self.gnomes[idx].job = None;
+                }
+                false
+            }
+        }
     }
 
     /// Whether enough updates have passed since the last cutting went in.
@@ -789,6 +951,20 @@ impl Colony {
                 return dir;
             }
         }
+        // Toward the job it has taken on. Below rescue, above everything
+        // the colony does on its own initiative — but a *hungry* gnome
+        // still goes to the larder first, because the alternative is a
+        // colony that works itself into the ethereal layer on request.
+        let hungry = g.gin < GIN_HUNGRY || g.belly < BELLY_HUNGRY;
+        if !hungry {
+            if let Some(target) = g.job.and_then(|id| self.orders.get(id)).map(|o| o.at) {
+                if target.i != g.pos.i {
+                    let dir = (target.i - g.pos.i).signum() as i8;
+                    self.gnomes[idx].facing = dir;
+                    return dir;
+                }
+            }
+        }
         // Toward the garden when there is a meal to find *or* a cutting to
         // put in: a gnome with food to spare is a gardener.
         if g.gin < GIN_HUNGRY
@@ -828,7 +1004,12 @@ impl Colony {
     }
 
     fn go_ethereal(&mut self, idx: usize) {
+        // Whatever it was carrying goes with it — the load stays booked out
+        // of the ledger, and comes back into the world when the gnome is
+        // rescued and puts it down. Its job, though, is somebody else's now.
+        self.orders.release_all_of(idx);
         let g = &mut self.gnomes[idx];
+        g.job = None;
         g.anchor = g.pos;
         g.body = Body::Ethereal { rescue_progress: 0 };
         g.last_act = Act::WentEthereal;

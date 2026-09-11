@@ -585,4 +585,169 @@ mod tests {
             "a colony tuned away from failure should not be wiped out"
         );
     }
+
+    /// The glass pane, end to end, in the jar a human actually looks at: the
+    /// player writes *dig* on a cell of the meadow, a gnome walks over and
+    /// takes it away, the player writes *build* on a cell of air, and the
+    /// same grams come back down there.
+    ///
+    /// The numbers asserted here are the whole argument for doing it this
+    /// way. While the sand is in a gnome's hands the world is exactly that
+    /// much lighter and the ledger holds exactly that much against it; when
+    /// it is put down, both come back. There is no resource counter anywhere
+    /// in between — the mass *is* the resource.
+    #[test]
+    fn a_player_can_dig_a_hole_and_build_the_spoil_somewhere_else() {
+        use crate::order::Job;
+        let mut terra = default_terrarium();
+        // Let the jar settle and the gnomes find their feet first.
+        for _ in 0..200 {
+            terra.step(0.05);
+        }
+        // Sand is the tracer: nothing else in this jar moves any, so every
+        // gram that leaves the world's sand is a gram in somebody's hands.
+        // (The jar's *total* mass is not a constant even without a player —
+        // the gnomes are eating, which is its own ledger entry.)
+        let sand_before = terra.world.mass_of(t::SAND);
+
+        // A cell of the meadow the gnomes are standing on.
+        let hole = GridIndex::new(10, SHELL + 1);
+        assert_eq!(terra.world.material_at(hole), t::SAND);
+        terra.colony.order(hole, Job::Dig);
+
+        let mut dug_at = None;
+        for step in 0..2000 {
+            terra.step(0.05);
+            if terra.colony.orders.completed() == 1 {
+                dug_at = Some(step);
+                break;
+            }
+        }
+        let dug_at = dug_at.expect("nobody dug the hole");
+        assert_ne!(
+            terra.world.material_at(hole),
+            t::SAND,
+            "the hole should be a hole"
+        );
+        let carried = terra.colony.carried_g();
+        assert!(carried > 0.0, "somebody should be holding the spoil");
+        assert!(
+            (sand_before - terra.world.mass_of(t::SAND) - carried).abs() < 1e-6,
+            "the world should be lighter by exactly what is in hand: {} vs {carried}",
+            sand_before - terra.world.mass_of(t::SAND)
+        );
+        let mid = terra.world.conservation_residuals();
+        assert!(
+            mid.mass_relative.abs() < 1e-6,
+            "the ledger should hold exactly that much against it: {mid:?}"
+        );
+
+        // Now put it back down as a block on the walkway. Sand is granular,
+        // so a cell of it built in mid-air would fall — a wall has to be
+        // built on something, which is the physics doing the game design.
+        let wall = GridIndex::new(12, SHELL + 2);
+        assert!(terra.world.cell(wall).is_gas(terra.world.materials()));
+        terra.colony.order(wall, Job::Build);
+        let mut built = false;
+        for _ in 0..2000 {
+            terra.step(0.05);
+            if terra.colony.orders.completed() == 2 {
+                built = true;
+                break;
+            }
+        }
+        assert!(built, "nobody built the wall (dug at step {dug_at})");
+        assert_eq!(terra.world.material_at(wall), t::SAND);
+        // And it is still there a while later — built on the ground, not
+        // hanging in the air.
+        for _ in 0..200 {
+            terra.step(0.05);
+        }
+        assert_eq!(
+            terra.world.material_at(wall),
+            t::SAND,
+            "the wall should stay where it was put"
+        );
+        assert!(
+            terra.colony.carried_g() < 1e-9,
+            "hands should be empty again"
+        );
+        assert!(
+            (terra.world.mass_of(t::SAND) - sand_before).abs() < 1e-6,
+            "every gram dug should be back in the world"
+        );
+        let r = terra.world.conservation_residuals();
+        assert!(
+            r.mass_relative.abs() < 1e-6 && r.energy_relative.abs() < 1e-4,
+            "residuals drifted: {r:?}"
+        );
+    }
+
+    /// Tempering is the magic one, and it is priced like magic: the player
+    /// asks for a cell to be warmed, a gnome pays for it out of its flask,
+    /// and the joules land in the ledger.
+    #[test]
+    fn a_warming_order_is_paid_for_in_gin_and_booked() {
+        use crate::order::Job;
+        let mut terra = default_terrarium();
+        for _ in 0..200 {
+            terra.step(0.05);
+        }
+        let at = GridIndex::new(10, SHELL + 2);
+        let before_k = terra.world.cell(at).temperature;
+        let gin_before = terra.colony.total_gin();
+        let booked_before = terra.world.ledger().energy_conjured;
+        assert!(
+            before_k < crate::gnome::COMFORT_MAX - 5.0,
+            "the meadow should start cool enough to be worth warming"
+        );
+
+        terra.colony.order(
+            at,
+            Job::Temper {
+                target_k: crate::gnome::COMFORT_MAX,
+            },
+        );
+        for _ in 0..600 {
+            terra.step(0.05);
+            if terra.colony.orders.completed() == 1 {
+                break;
+            }
+        }
+        assert_eq!(terra.colony.orders.completed(), 1, "the spell never landed");
+        assert!(
+            terra.colony.total_gin() < gin_before,
+            "magic on demand should cost the colony Gin"
+        );
+        assert!(
+            terra.world.ledger().energy_conjured > booked_before,
+            "and every joule of it should be on the books"
+        );
+        let r = terra.world.conservation_residuals();
+        assert!(r.energy_relative.abs() < 1e-4, "residuals drifted: {r:?}");
+    }
+
+    /// An order on a cell nobody can get to is given up on rather than
+    /// leaving a gnome walking into a wall for the rest of the run.
+    #[test]
+    fn an_order_nobody_can_reach_is_eventually_abandoned() {
+        use crate::order::Job;
+        let mut terra = default_terrarium();
+        // The middle of the jar's own outer shell, on the far side of a
+        // sealed wall and well over a gnome's head.
+        let unreachable = GridIndex::new(1, terra.world.height() as i32 / 2);
+        terra.colony.order(unreachable, Job::Dig);
+        let budget = crate::order::PATIENCE as usize * crate::order::ATTEMPTS as usize + 200;
+        let mut gave_up = false;
+        for _ in 0..budget {
+            terra.step(0.05);
+            if terra.colony.orders.is_empty() {
+                gave_up = true;
+                break;
+            }
+        }
+        assert!(gave_up, "the queue jammed on an unreachable order");
+        assert_eq!(terra.colony.orders.completed(), 0);
+        assert!(terra.colony.orders.cancelled() >= 1);
+    }
 }

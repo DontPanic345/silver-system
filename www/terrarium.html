@@ -33,6 +33,14 @@
     button { font: inherit; background: #1c212b; color: #d6d9e0; border: 1px solid #333a48;
              border-radius: 4px; padding: .3rem .8rem; cursor: pointer; }
     button:hover { background: #262d3a; }
+    button[aria-pressed="true"] { background: #2f3a4d; border-color: #5b6b86; color: #fff; }
+    .tools { display: flex; gap: .35rem; flex-wrap: wrap; margin: 0 0 .5rem; }
+    .tools button { padding: .25rem .6rem; }
+    .dot { display: inline-block; width: .55rem; height: .55rem; border-radius: 50%;
+           margin-right: .4rem; vertical-align: -1px; }
+    #inspector { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                 font-size: .8rem; color: #9aa4b6; min-height: 3.4em; margin: .4rem 0 0; }
+    canvas.painting { cursor: crosshair; }
     code { color: #9ec5ff; }
   </style>
 </head>
@@ -56,7 +64,18 @@
   </p>
 
   <div class="stage">
-    <canvas id="canvas"></canvas>
+    <div>
+      <div class="tools" id="tools">
+        <button data-tool="inspect" aria-pressed="true">Inspect</button>
+        <button data-tool="dig" aria-pressed="false">Dig</button>
+        <button data-tool="build" aria-pressed="false">Build</button>
+        <button data-tool="warm" aria-pressed="false">Warm</button>
+        <button data-tool="chill" aria-pressed="false">Chill</button>
+        <button data-tool="erase" aria-pressed="false">Rub out</button>
+      </div>
+      <canvas id="canvas"></canvas>
+      <p id="inspector">Point at the jar to see what a cell is made of.</p>
+    </div>
     <div class="panel">
       <h2>Conservation</h2>
       <table>
@@ -99,7 +118,34 @@
         <tr><th>Embodied</th><td class="num" id="embodied">—</td></tr>
         <tr><th>Ethereal</th><td class="num" id="ethereal">—</td></tr>
         <tr><th>Gin in flasks</th><td class="num" id="gin">—</td></tr>
+        <tr><th>Carried in hand</th><td class="num" id="carried">—</td></tr>
       </table>
+
+      <h2>Your orders</h2>
+      <table>
+        <tr><th>Outstanding</th><td class="num" id="oopen">—</td></tr>
+        <tr><th>Done</th><td class="num" id="odone">—</td></tr>
+        <tr><th>Given up on</th><td class="num" id="ogone">—</td></tr>
+      </table>
+      <p class="lede">
+        <span class="dot" style="background:#f0aa3c"></span>dig &nbsp;
+        <span class="dot" style="background:#78c8ff"></span>build &nbsp;
+        <span class="dot" style="background:#eb649b"></span>warm or chill
+      </p>
+      <p class="lede">
+        You do not touch this world. You write on a cell and a gnome walks
+        over and does it — after it has breathed and eaten, because a colony
+        that digs while it suffocates is the thing this project exists to
+        object to. <strong>Dig</strong> takes a cell of solid out of the
+        world and puts it in a gnome's hands; <strong>build</strong> puts
+        whatever it is carrying back down. There is no resource counter and
+        no material palette: <em>you cannot build what you have not dug</em>,
+        and the wall you get is the same grams at the same temperature as the
+        hole you made. Watch "Carried in hand" against "Mass conjured" — they
+        are the same number, because what is in a gnome's hands has left the
+        world and the ledger is holding it. <strong>Warm</strong> and
+        <strong>chill</strong> are the magic, and they cost Gin.
+      </p>
 
       <h2>Controls</h2>
       <p><button id="reset">Restart the jar</button>
@@ -109,7 +155,8 @@
         when colder, and dimmed by how much daylight reaches them — so the
         whole jar darkens at night, and the ground under a bush or a shelf
         stays darker than the ground beside it. Pale dots are gnomes; a
-        violet dot is a gnome in the ethereal layer, waiting for a rescue.
+        violet dot is a gnome in the ethereal layer, waiting for a rescue; a
+        gnome with a coloured pip on its head is carrying that material.
       </p>
     </div>
   </div>
@@ -179,6 +226,35 @@
       set('embodied', String(report.colony.embodied));
       set('ethereal', String(report.colony.ethereal));
       set('gin', report.colony.total_gin.toFixed(1));
+      set('carried', report.colony.carried_g.toFixed(3) + ' g');
+
+      set('oopen', String(report.orders.open));
+      set('odone', String(report.orders.completed));
+      set('ogone', String(report.orders.cancelled));
+    }
+
+    // Canvas pixel -> cell. Row 0 of the image is the *top* of the world,
+    // so j counts back up from the bottom — the same flip the renderer does.
+    function cellAt(canvas, event, gridH) {
+      // Against the *content* box, not the border box: the canvas has a 1px
+      // border, so `getBoundingClientRect()` is two pixels wider than the
+      // pixels it draws and starts one pixel to their left.
+      const r = canvas.getBoundingClientRect();
+      const scale = canvas.width / canvas.clientWidth;
+      const x = (event.clientX - r.left - canvas.clientLeft) * scale;
+      const y = (event.clientY - r.top - canvas.clientTop) * scale;
+      return [Math.floor(x / CELL_PX), gridH - 1 - Math.floor(y / CELL_PX)];
+    }
+
+    function describe(cell) {
+      if (!cell || cell.material === undefined) return '';
+      const mix = cell.mix.filter((m) => m.name !== cell.material)
+        .map((m) => `${m.name} ${m.grams.toFixed(3)}g`).join(', ');
+      return `(${cell.i}, ${cell.j}) ${cell.material} — ${cell.temperature_k.toFixed(1)} K, `
+        + `${cell.mass_g.toFixed(3)} g, ${cell.pressure_atm.toFixed(2)} atm, `
+        + `light ${cell.light.toFixed(2)}`
+        + (mix ? `\nholding ${mix}` : '')
+        + (cell.order ? `\nordered: ${cell.order}` : '');
     }
 
     init().then(() => {
@@ -194,6 +270,44 @@
         paused = !paused;
         e.target.textContent = paused ? 'Resume' : 'Pause';
       };
+
+      // --- The glass pane: pick a tool, then write on a cell ---
+      let tool = 'inspect';
+      const tools = document.getElementById('tools');
+      tools.addEventListener('click', (e) => {
+        const button = e.target.closest('button[data-tool]');
+        if (!button) return;
+        tool = button.dataset.tool;
+        for (const b of tools.querySelectorAll('button'))
+          b.setAttribute('aria-pressed', String(b === button));
+        canvas.classList.toggle('painting', tool !== 'inspect');
+      });
+
+      const inspector = document.getElementById('inspector');
+      const show = (i, j) => {
+        const cell = JSON.parse(wasm.terrarium_cell_json(i, j));
+        inspector.textContent = describe(cell)
+          || 'Point at the jar to see what a cell is made of.';
+        window.__lastCell = cell;
+      };
+      canvas.addEventListener('mousemove', (e) => show(...cellAt(canvas, e, h)));
+      canvas.addEventListener('mouseleave', () => {
+        inspector.textContent = 'Point at the jar to see what a cell is made of.';
+      });
+      canvas.addEventListener('click', (e) => {
+        const [i, j] = cellAt(canvas, e, h);
+        if (tool === 'erase') wasm.terrarium_cancel_at(i, j);
+        else if (tool !== 'inspect') wasm.terrarium_order_at(i, j, tool);
+        show(i, j);
+      });
+      // So a headless test can drive the same path a mouse does without
+      // having to know how the canvas is laid out.
+      window.__order = (i, j, what) => wasm.terrarium_order_at(i, j, what);
+      // Repaint without advancing: what the canvas shows right now, which is
+      // what a paused jar owes a person who has just marked a cell on it.
+      window.__repaint = () => wasm.terrarium_tick_and_draw('canvas', CELL_PX, 0);
+      window.__cell = (i, j) => JSON.parse(wasm.terrarium_cell_json(i, j));
+      window.__cellPx = CELL_PX;
 
       function frame() {
         if (!paused) {

@@ -38,7 +38,12 @@ use std::cell::{Cell, RefCell};
 // Shared math primitives (Scalar, Vec2, GridIndex). Not used by this file's
 // own canvas logic (the rectangle) — see src/math.rs for what it is and why.
 // The grid module below is GridIndex's/Vec2's first real caller.
-mod math;
+//
+// `pub` since night 6: `GridIndex` is in the signature of every public call
+// the player's order queue exposes (`Colony::order`, `report::cell_json`),
+// so an external caller — `src/bin/terrarium.rs`, an integration test —
+// could not name the type it has to pass.
+pub mod math;
 
 // Fixed-timestep accumulator harness (Scalar dt in, step count out), wired
 // into tick_and_draw via advance_tick below — see src/timestep.rs for what
@@ -93,6 +98,10 @@ pub mod life;
 
 /// The gnomes: the game layer, Gin economy, and ethereal mechanics.
 pub mod gnome;
+
+/// The player's half of the glass pane: orders written on cells, and the
+/// gnomes that walk over and carry them out.
+pub mod order;
 
 /// The gas-pressure demonstration chamber.
 pub mod chamber;
@@ -728,6 +737,76 @@ pub fn terrarium_dimensions() -> Vec<u32> {
         terrarium::DEFAULT_SIZE.0 as u32,
         terrarium::DEFAULT_SIZE.1 as u32,
     ]
+}
+
+// --- The glass pane: the player's reach into the terrarium ---
+//
+// Three calls, and between them they are the whole interaction surface:
+// write an order on a cell, rub one out, and ask what a cell is. Everything
+// else the page does is drawing. See `src/order.rs` for why the player never
+// touches the world directly.
+
+/// Writes an order on cell `(i, j)`. `tool` is `"dig"`, `"build"`, `"warm"`
+/// or `"chill"`; anything else is ignored. Returns whether it took.
+///
+/// Warming and chilling are named rather than given a temperature, because
+/// what a player wants from a button is "hotter" — the targets are the ends
+/// of the band a gnome is comfortable in, which is the band the colony
+/// already lives by.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn terrarium_order_at(i: i32, j: i32, tool: &str) -> bool {
+    let job = match tool {
+        "dig" => order::Job::Dig,
+        "build" => order::Job::Build,
+        "warm" => order::Job::Temper {
+            target_k: gnome::COMFORT_MAX,
+        },
+        "chill" => order::Job::Temper {
+            target_k: gnome::COMFORT_MIN,
+        },
+        _ => return false,
+    };
+    TERRARIUM.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        match slot.as_mut() {
+            Some(t) => {
+                let at = math::GridIndex::new(i, j);
+                if !t.world.in_bounds(at) {
+                    return false;
+                }
+                t.colony.order(at, job);
+                true
+            }
+            None => false,
+        }
+    })
+}
+
+/// Rubs out whatever order is on cell `(i, j)`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn terrarium_cancel_at(i: i32, j: i32) -> bool {
+    TERRARIUM.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        match slot.as_mut() {
+            Some(t) => t.colony.cancel_order(math::GridIndex::new(i, j)),
+            None => false,
+        }
+    })
+}
+
+/// What cell `(i, j)` actually is — see [`report::cell_json`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn terrarium_cell_json(i: i32, j: i32) -> String {
+    TERRARIUM.with(|cell| {
+        let slot = cell.borrow();
+        match slot.as_ref() {
+            Some(t) => report::cell_json(&t.world, &t.colony, math::GridIndex::new(i, j)),
+            None => "{}".to_string(),
+        }
+    })
 }
 
 #[cfg(test)]
