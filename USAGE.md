@@ -100,3 +100,12 @@ Current session
 Current week (all models)
 ██████████████████                                 36% used
 ```
+**Snapshot 2026-09-11T21:50+12:00 - after night 6**
+```
+Session                                            99% used  (resets Sat 12 Sep 00:40)
+Current week (all models)                          70% used  (resets Sat 12 Sep 21:00)
+```
+Opened at session 70% / weekly 68% — this run was one of several back-to-back
+on the same day, so the session window, not the work, is what ended it. Read
+with `~/.claude/skills/usage-check/usage.py`; nights 4 and 5 left no snapshot
+here, so the weekly figure spans more than this night.
