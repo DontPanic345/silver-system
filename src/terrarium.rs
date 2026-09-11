@@ -329,6 +329,26 @@ pub fn gnome_terrarium(width: usize, height: usize) -> Terrarium {
         thermostats.push(Thermostat::new(GridIndex::new(0, j), ROOF_K));
         thermostats.push(Thermostat::new(GridIndex::new(w - 1, j), ROOF_K));
     }
+    // ...and so is the base it stands on, everywhere except under the
+    // spring. This was the one face of the shell that touched nothing, and
+    // leaving it out had a consequence nobody saw until a run went past ten
+    // thousand steps: stone conducts, the floor is one slab of it, and the
+    // spring was heating the *whole* of it. The jar came to equilibrium with
+    // its meadow at 340 K — over a gnome's lethal limit — so from about step
+    // 10 000 onward the colony could not walk its own walkway. Four gnomes
+    // spent the next seventy thousand steps confined to the twenty coolest
+    // cells in the jar, in the shade at the garden end, eating the bushes
+    // they could reach down to the graze floor and then starving beside
+    // them. Every previous night read that as a pathing fault, because that
+    // is what it looks like from inside the colony.
+    //
+    // A jar stands on a table, and a table is part of the room. The spring
+    // still comes up under the pool, so the jar keeps its hot corner — what
+    // it loses is the underfloor heating.
+    for i in SHELL..pool_from {
+        thermostats.push(Thermostat::new(GridIndex::new(i, 0), ROOF_K));
+        thermostats.push(Thermostat::new(GridIndex::new(i, 1), ROOF_K));
+    }
 
     Terrarium {
         world,
@@ -815,7 +835,13 @@ mod tests {
         for _ in 0..200 {
             terra.step(0.05);
         }
-        let at = GridIndex::new(10, SHELL + 2);
+        // The floor of the meadow, not the air over it. A cell of air has
+        // almost no heat capacity and is being replaced by its neighbours
+        // every step, so "hold this cell of air at 320 K" is a spell against
+        // the weather: the gnome casts it for ever and the cell settles
+        // wherever convection wants it. That is the right physics and it is
+        // worth knowing — tempering works on things that hold heat.
+        let at = GridIndex::new(10, SHELL + 1);
         let before_k = terra.world.cell(at).temperature;
         let gin_before = terra.colony.total_gin();
         let booked_before = terra.world.ledger().energy_conjured;

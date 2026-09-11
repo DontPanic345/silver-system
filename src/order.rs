@@ -17,10 +17,22 @@
 //! - [`Job::Dig`] takes a cell of solid out of the world and puts it in a
 //!   gnome's hands as a [`Load`].
 //! - [`Job::Build`] puts that load back down somewhere else.
+//! - [`Job::Supply`] is those two as one instruction — *keep this cell
+//!   stocked with that stuff* — with the colony finding the nearest source
+//!   itself. It is the verb a colony needs to run a machine rather than
+//!   only to dig a hole: a pot wants water and botanicals in it, a firebox
+//!   wants fuel, and neither is a thing a player should have to hand-steer
+//!   two orders at a time, for ever.
 //! - [`Job::Temper`] warms or chills a cell. This one is **magic**, and it
 //!   is priced in Gin at exactly the rate a gnome pays to save its own life
 //!   (`gnome::GIN_PER_JOULE`), so a player who wants the pool warmed spends
 //!   the colony's mana to get it.
+//!
+//! Any of them can be written as a **standing** order ([`Orders::repeat`]),
+//! which is the same instruction with a cadence: when it is done it goes
+//! back on the queue rather than off it. A still that has to be re-charged
+//! every few hundred steps is then one mark on the glass instead of a
+//! player tapping a cell all night.
 //!
 //! Digging and building are *not* magic and cost no Gin: they are a gnome
 //! picking something up and putting it down. They still run through
@@ -71,17 +83,29 @@ pub enum Job {
     Dig,
     /// Put down here whatever the gnome doing it is carrying.
     Build,
+    /// Fetch a cell of `material` from wherever the colony can reach one,
+    /// and put it here.
+    ///
+    /// Two paces in one order, and the first of them has no fixed address:
+    /// the gnome that takes it on looks for the nearest cell of the stuff it
+    /// can actually walk to, lifts that, and carries it here. So a supply
+    /// order is written on the *destination* — which is the thing a player
+    /// knows and cares about — and where it comes from is the colony's
+    /// problem. See [`crate::gnome::Colony::worksite`].
+    Supply { material: MaterialId },
     /// Bring this cell to `target_k`, paid for in Gin. The magic one.
     Temper { target_k: Scalar },
 }
 
 impl Job {
     /// Whether a gnome carrying `load` can take this job on. Digging needs
-    /// free hands, building needs full ones; magic needs neither.
+    /// free hands, building needs full ones; magic needs neither; supplying
+    /// needs either empty hands or the right thing already in them.
     pub fn suits(&self, load: Option<&Load>) -> bool {
         match self {
             Job::Dig => load.is_none(),
             Job::Build => load.is_some(),
+            Job::Supply { material } => load.is_none_or(|l| l.material == *material),
             Job::Temper { .. } => true,
         }
     }
@@ -92,6 +116,7 @@ impl Job {
         match self {
             Job::Dig => (240, 170, 60),
             Job::Build => (120, 200, 255),
+            Job::Supply { .. } => (150, 235, 140),
             Job::Temper { .. } => (235, 100, 155),
         }
     }
@@ -109,6 +134,16 @@ pub struct Order {
     pub waited: u32,
     /// How many gnomes have given up on it — see [`ATTEMPTS`].
     pub attempts: u8,
+    /// Steps to wait before this order is offered again once it is done, or
+    /// `None` for the ordinary kind that is finished when it is finished.
+    ///
+    /// A standing order is not a second mechanism: it is the same order,
+    /// re-armed. Everything else here — claiming, patience, reachability,
+    /// rubbing it out — works on it unchanged.
+    pub repeat: Option<u32>,
+    /// The tick this order may next be claimed on. Only ever in the future
+    /// for a standing order that has just been done.
+    ready_at: u64,
     /// Whether anybody could get to it when the colony last looked.
     ///
     /// Since night 8 a gnome will not claim a job it has no route to, which
@@ -143,6 +178,11 @@ pub struct Load {
 pub enum Outcome {
     Dug,
     Built,
+    /// Picked up the makings of a supply order. The order is *not* done —
+    /// the gnome is now carrying it to where it was asked for.
+    Took,
+    /// A supply order delivered.
+    Stocked,
     /// Moved toward the target temperature but not there yet.
     Tempering,
     /// Reached the target: the order is done.
@@ -156,7 +196,10 @@ pub enum Outcome {
 impl Outcome {
     /// Whether this outcome finishes the order.
     pub fn completes(&self) -> bool {
-        matches!(self, Outcome::Dug | Outcome::Built | Outcome::Tempered)
+        matches!(
+            self,
+            Outcome::Dug | Outcome::Built | Outcome::Stocked | Outcome::Tempered
+        )
     }
 }
 
@@ -188,15 +231,85 @@ pub fn diggable(world: &World, at: GridIndex) -> bool {
     m.mobility == Mobility::Static || m.phase == Phase::Solid || m.phase == Phase::Granular
 }
 
-/// Does one step of work on `order`, from a gnome holding `load` and able
-/// to afford `gin`.
+/// Whether a cell is something a gnome could carry away in its arms: it has
+/// mass and it is not a gas.
+///
+/// Wider than [`diggable`] by exactly one phase — liquids. A shovel does not
+/// pick up water and a bucket does, and the difference matters the moment a
+/// colony has to *charge a pot* rather than only move a wall. It is still a
+/// table lookup, so it is true of any liquid anyone ever adds.
+pub fn liftable(world: &World, at: GridIndex) -> bool {
+    if !world.in_bounds(at) {
+        return false;
+    }
+    let cell = world.cell(at);
+    cell.mass > 0.0 && !cell.is_gas(world.materials())
+}
+
+/// Takes the whole of the cell at `at` into `load`.
+///
+/// A whole cell, never a part of one, and for both of the reasons a gnome
+/// would give: a partly-dug rock is not a thing, and a load that varies with
+/// how full the cell happened to be makes every downstream figure — what a
+/// wall weighs, what a pot was charged with — impossible to predict.
+fn lift(world: &mut World, at: GridIndex, load: &mut Option<Load>) -> Attempt {
+    let cell = world.cell(at);
+    let (material, temperature) = (cell.material, cell.temperature);
+    let taken = -world.conjure_mass(at, material, -cell.mass, temperature);
+    if taken <= 0.0 {
+        return Attempt::free(Outcome::Impossible);
+    }
+    *load = Some(Load {
+        material,
+        grams: taken,
+        temperature,
+    });
+    Attempt::free(Outcome::Dug)
+}
+
+/// Puts `load` down in the cell at `at`, if there is room for it.
+fn place(world: &mut World, at: GridIndex, load: &mut Option<Load>) -> Attempt {
+    let Some(held) = *load else {
+        return Attempt::free(Outcome::NotYet);
+    };
+    let cell = world.cell(at);
+    // Only ever into gas. Building into a solid would overwrite it (and
+    // book the loss), and building into the pool would delete water; a cell
+    // of either may yet drain or be dug, so this is "not now", not "never" —
+    // [`PATIENCE`] decides when never.
+    if !cell.is_gas(world.materials()) {
+        return Attempt::free(Outcome::NotYet);
+    }
+    // Push the air out of the way rather than overwriting it, so the
+    // atmosphere the cell was holding survives being built on.
+    let p = world.linear_index(at);
+    if !crate::gas::displace(world, p) {
+        return Attempt::free(Outcome::NotYet);
+    }
+    world.conjure_mass(at, held.material, held.grams, held.temperature);
+    *load = None;
+    Attempt::free(Outcome::Built)
+}
+
+/// Does one step of work on `order` at `site`, from a gnome holding `load`
+/// and able to afford `gin`.
+///
+/// `site` is the cell the gnome is actually working on this step, which is
+/// `order.at` for every job except a [`Job::Supply`] whose carrier still has
+/// to go and fetch the goods — see [`crate::gnome::Colony::worksite`].
 ///
 /// Every change to the world here goes through the ledger, so a caller that
 /// forgets to charge the Gin has still not broken conservation — it has
 /// only given the magic away.
-pub fn perform(world: &mut World, order: &Order, load: &mut Option<Load>, gin: Scalar) -> Attempt {
+pub fn perform(
+    world: &mut World,
+    order: &Order,
+    site: GridIndex,
+    load: &mut Option<Load>,
+    gin: Scalar,
+) -> Attempt {
     let at = order.at;
-    if !world.in_bounds(at) {
+    if !world.in_bounds(at) || !world.in_bounds(site) {
         return Attempt::free(Outcome::Impossible);
     }
     match order.job {
@@ -207,40 +320,28 @@ pub fn perform(world: &mut World, order: &Order, load: &mut Option<Load>, gin: S
             if !diggable(world, at) {
                 return Attempt::free(Outcome::Impossible);
             }
-            let cell = world.cell(at);
-            let (material, temperature) = (cell.material, cell.temperature);
-            let taken = -world.conjure_mass(at, material, -cell.mass, temperature);
-            if taken <= 0.0 {
-                return Attempt::free(Outcome::Impossible);
-            }
-            *load = Some(Load {
-                material,
-                grams: taken,
-                temperature,
-            });
-            Attempt::free(Outcome::Dug)
+            lift(world, at, load)
         }
-        Job::Build => {
-            let Some(held) = *load else {
-                return Attempt::free(Outcome::NotYet);
-            };
-            let cell = world.cell(at);
-            // Only ever into gas. Building into a solid would overwrite it
-            // (and book the loss), and building into the pool would delete
-            // water; a cell of either may yet drain or be dug, so this is
-            // "not now", not "never" — [`PATIENCE`] decides when never.
-            if !cell.is_gas(world.materials()) {
-                return Attempt::free(Outcome::NotYet);
+        Job::Build => place(world, at, load),
+        Job::Supply { material } => {
+            if load.is_none() {
+                // Fetching. The site is a source the colony found; check it
+                // is still what it was when the route was laid, because a
+                // pool drains and a bush gets eaten.
+                if !liftable(world, site) || world.material_at(site) != material {
+                    return Attempt::free(Outcome::NotYet);
+                }
+                let attempt = lift(world, site, load);
+                return match attempt.outcome {
+                    Outcome::Dug => Attempt::free(Outcome::Took),
+                    other => Attempt::free(other),
+                };
             }
-            // Push the air out of the way rather than overwriting it, so
-            // the atmosphere the cell was holding survives being built on.
-            let p = world.linear_index(at);
-            if !crate::gas::displace(world, p) {
-                return Attempt::free(Outcome::NotYet);
+            // Carrying. Put it where it was asked for.
+            match place(world, at, load).outcome {
+                Outcome::Built => Attempt::free(Outcome::Stocked),
+                other => Attempt::free(other),
             }
-            world.conjure_mass(at, held.material, held.grams, held.temperature);
-            *load = None;
-            Attempt::free(Outcome::Built)
         }
         Job::Temper { target_k } => {
             let cell = world.cell(at);
@@ -303,10 +404,21 @@ impl Orders {
             claimed_by: None,
             waited: 0,
             attempts: 0,
+            repeat: None,
+            ready_at: 0,
             reachable: true,
             unreached: 0,
         });
         self.next_id
+    }
+
+    /// Makes the order with this id a standing one, re-offered `every`
+    /// steps after each time it is done. Silently does nothing if the order
+    /// has already been finished or rubbed out.
+    pub fn repeat(&mut self, id: u64, every: u32) {
+        if let Some(o) = self.queue.iter_mut().find(|o| o.id == id) {
+            o.repeat = Some(every);
+        }
     }
 
     /// Rubs out the order on a cell, if there is one.
@@ -415,12 +527,13 @@ impl Orders {
         &mut self,
         worker: usize,
         load: Option<&Load>,
+        now: u64,
         steps: impl Fn(GridIndex) -> Option<u32>,
     ) -> Option<u64> {
         let pick = self
             .queue
             .iter()
-            .filter(|o| o.claimed_by.is_none() && o.job.suits(load))
+            .filter(|o| o.claimed_by.is_none() && o.ready_at <= now && o.job.suits(load))
             .filter_map(|o| steps(o.at).map(|d| (d, o.id)))
             .min()
             .map(|(_, id)| id)?;
@@ -456,10 +569,22 @@ impl Orders {
         }
     }
 
-    pub(crate) fn complete(&mut self, id: u64) {
-        if self.queue.iter().any(|o| o.id == id) {
-            self.queue.retain(|o| o.id != id);
-            self.completed += 1;
+    /// Marks an order done. A standing one goes back on the queue with its
+    /// cadence to wait out; an ordinary one leaves.
+    pub(crate) fn complete(&mut self, id: u64, now: u64) {
+        let Some(o) = self.queue.iter_mut().find(|o| o.id == id) else {
+            return;
+        };
+        self.completed += 1;
+        match o.repeat {
+            Some(every) => {
+                o.claimed_by = None;
+                o.waited = 0;
+                o.attempts = 0;
+                o.unreached = 0;
+                o.ready_at = now + every as u64;
+            }
+            None => self.queue.retain(|o| o.id != id),
         }
     }
 
@@ -520,10 +645,12 @@ mod tests {
             claimed_by: None,
             waited: 0,
             attempts: 0,
+            repeat: None,
+            ready_at: 0,
             reachable: true,
             unreached: 0,
         };
-        let a = perform(&mut w, &dig, &mut load, 0.0);
+        let a = perform(&mut w, &dig, dig.at, &mut load, 0.0);
         assert_eq!(a.outcome, Outcome::Dug);
         assert_eq!(a.gin, 0.0, "digging is labour, not magic");
         let held = load.expect("the gnome should be holding the sand");
@@ -542,10 +669,12 @@ mod tests {
             claimed_by: None,
             waited: 0,
             attempts: 0,
+            repeat: None,
+            ready_at: 0,
             reachable: true,
             unreached: 0,
         };
-        let b = perform(&mut w, &build, &mut load, 0.0);
+        let b = perform(&mut w, &build, build.at, &mut load, 0.0);
         assert_eq!(b.outcome, Outcome::Built);
         assert!(load.is_none(), "hands are empty again");
         assert_eq!(w.material_at(GridIndex::new(9, 4)), t::SAND);
@@ -581,11 +710,13 @@ mod tests {
                 claimed_by: None,
                 waited: 0,
                 attempts: 0,
+                repeat: None,
+                ready_at: 0,
                 reachable: true,
                 unreached: 0,
             };
             assert_eq!(
-                perform(&mut w, &order, &mut load, 0.0).outcome,
+                perform(&mut w, &order, order.at, &mut load, 0.0).outcome,
                 Outcome::Impossible,
                 "{what} should not be diggable"
             );
@@ -607,12 +738,14 @@ mod tests {
             claimed_by: None,
             waited: 0,
             attempts: 0,
+            repeat: None,
+            ready_at: 0,
             reachable: true,
             unreached: 0,
         };
         let mut load = None;
         let before = w.cell(at).temperature;
-        let a = perform(&mut w, &order, &mut load, 100.0);
+        let a = perform(&mut w, &order, order.at, &mut load, 100.0);
         assert_eq!(a.outcome, Outcome::Tempering);
         assert!(a.gin > 0.0, "warming a cell should cost Gin");
         let after = w.cell(at).temperature;
@@ -638,12 +771,14 @@ mod tests {
             claimed_by: None,
             waited: 0,
             attempts: 0,
+            repeat: None,
+            ready_at: 0,
             reachable: true,
             unreached: 0,
         };
         let mut load = None;
         assert_eq!(
-            perform(&mut w, &order, &mut load, 0.0).outcome,
+            perform(&mut w, &order, order.at, &mut load, 0.0).outcome,
             Outcome::NotYet
         );
         assert!(w.ledger().energy_conjured.abs() < 1e-12);
@@ -669,7 +804,7 @@ mod tests {
         let at = GridIndex::new(3, 3);
         let id = orders.issue(at, Job::Dig);
         for _ in 0..ATTEMPTS {
-            assert!(orders.claim_for(0, None, |_| Some(4)).is_some());
+            assert!(orders.claim_for(0, None, 0, |_| Some(4)).is_some());
             orders.release(id);
         }
         assert!(orders.is_empty(), "three refusals should retire it");

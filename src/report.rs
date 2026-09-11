@@ -149,6 +149,9 @@ pub fn cell_json(world: &World, colony: &Colony, at: crate::math::GridIndex) -> 
     let order = match colony.orders.at(at).map(|o| o.job) {
         Some(crate::order::Job::Dig) => "\"dig\"".to_string(),
         Some(crate::order::Job::Build) => "\"build\"".to_string(),
+        Some(crate::order::Job::Supply { material }) => {
+            format!("\"supply:{}\"", terrarium::name(material))
+        }
         Some(crate::order::Job::Temper { target_k }) => format!("\"temper:{target_k:.0}\""),
         None => "null".to_string(),
     };

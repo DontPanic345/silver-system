@@ -247,7 +247,15 @@ impl Cell {
     /// temperature is *solved* from the energy rather than assigned.
     pub fn solve_temperature(&mut self, materials: &MaterialTable, joules: f64) {
         let capacity = self.capacity(materials);
-        if capacity > 0.0 {
+        // Not `> 0.0`: a cell can hold so little that its heat capacity
+        // underflows toward zero while staying positive, and dividing by
+        // that gives an infinite temperature rather than a wrong one. The
+        // smallest capacity anything in this world legitimately has is
+        // around a microgram's worth, 1e-6 J/K; 1e-30 is an underflow guard
+        // and nothing else. A cell holding that little keeps the
+        // temperature it had, which is the right limit: there is no heat in
+        // it to say otherwise.
+        if capacity > 1e-30 {
             self.temperature = ((joules - self.stored(materials)) / capacity) as Scalar;
         }
     }

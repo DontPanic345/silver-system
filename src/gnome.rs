@@ -37,7 +37,7 @@
 
 use crate::material::{terrarium as t, Mobility, Phase};
 use crate::math::{GridIndex, Scalar};
-use crate::order::{Job, Load, Orders, Outcome};
+use crate::order::{Job, Load, Order, Orders, Outcome};
 use crate::path::{self, Routes, Through};
 use crate::world::World;
 
@@ -264,6 +264,12 @@ pub enum Act {
     Dug,
     /// Put a carried cell back down, on the player's orders.
     Built,
+    /// Picked up the makings of a supply order, somewhere the colony found
+    /// them.
+    Took,
+    /// Delivered a supply order — the load is where the player asked for
+    /// it.
+    Stocked,
     /// Spent Gin warming or chilling a cell, on the player's orders.
     Tempered,
     WentEthereal,
@@ -926,8 +932,13 @@ impl Colony {
         // itself into the ethereal layer on request.
         if !hungry {
             if let Some(job) = g.job.and_then(|id| self.orders.get(id)) {
-                if let Some(at) = Self::workplace(routes, job.at) {
-                    return Some(at);
+                // Not `job.at`: a supply order's first errand is wherever
+                // the goods are. A gnome sent to stock a pot with water
+                // walks to the water, then to the pot.
+                if let Some(site) = self.worksite(world, routes, &job, idx) {
+                    if let Some(at) = Self::workplace(routes, site) {
+                        return Some(at);
+                    }
                 }
             }
         }
@@ -962,6 +973,77 @@ impl Colony {
             .iter()
             .enumerate()
             .any(|(other, g)| other != idx && g.is_embodied() && g.pos == at)
+    }
+
+    /// The cell this gnome should be working on for `order` right now.
+    ///
+    /// For every job but one that is simply the cell the order is written
+    /// on. A [`Job::Supply`] is two errands under one instruction, and the
+    /// first of them has no address until somebody looks: a gnome with
+    /// empty hands works on the nearest source of the stuff it can reach,
+    /// and only then on the cell the player marked. `None` means the colony
+    /// cannot see any of that material from here, which is a "not now", not
+    /// an "impossible" — a bush grows back and a pool refills.
+    fn worksite(
+        &self,
+        world: &World,
+        routes: &Routes,
+        order: &Order,
+        idx: usize,
+    ) -> Option<GridIndex> {
+        match order.job {
+            Job::Supply { material } if self.gnomes[idx].hands.is_none() => {
+                self.source_of(world, routes, material, order.at)
+            }
+            _ => Some(order.at),
+        }
+    }
+
+    /// The nearest cell of `material` this gnome could actually walk up to
+    /// and lift, ignoring `spoken_for` — the cell the order is written on.
+    ///
+    /// "Nearest" is by route, not by straight line, for the reason night 8
+    /// found the hard way: a bush across a wall is not nearer than one
+    /// behind you. The search runs over the cells a gnome can *stand* in,
+    /// because that is what a route ends at, and then looks at arm's length
+    /// from there.
+    fn source_of(
+        &self,
+        world: &World,
+        routes: &Routes,
+        material: crate::material::MaterialId,
+        spoken_for: GridIndex,
+    ) -> Option<GridIndex> {
+        let stand =
+            routes.nearest(|c| self.source_beside(world, c, material, spoken_for).is_some())?;
+        self.source_beside(world, stand, material, spoken_for)
+    }
+
+    /// A cell of `material` within working reach of `at` that a gnome may
+    /// take: it has mass, it is not a gas, and nobody has written an order
+    /// on it.
+    ///
+    /// That last clause is what keeps a colony from robbing its own
+    /// stockpile: the cell a supply order is filling is itself a supply
+    /// order's cell, so the next gnome along looks elsewhere for its water
+    /// instead of carrying the same gram back and forth for ever.
+    fn source_beside(
+        &self,
+        world: &World,
+        at: GridIndex,
+        material: crate::material::MaterialId,
+        spoken_for: GridIndex,
+    ) -> Option<GridIndex> {
+        let reach = crate::order::REACH;
+        (-reach..=reach)
+            .flat_map(|di| (-reach..=reach).map(move |dj| GridIndex::new(at.i + di, at.j + dj)))
+            .find(|&c| {
+                c != spoken_for
+                    && world.in_bounds(c)
+                    && world.material_at(c) == material
+                    && crate::order::liftable(world, c)
+                    && self.orders.at(c).is_none()
+            })
     }
 
     /// The nearest cell this gnome can reach and work on `at` from — a
@@ -1123,10 +1205,27 @@ impl Colony {
         let Some((o2_per_g, co2_per_g, h2o_per_g)) = respiration_ratios(world) else {
             return;
         };
-        let cell = world.cell(pos);
-        if !cell.is_gas(world.materials()) {
+        // Breathe into the cell you are standing in — or, if that one is
+        // full of leaves, the nearest one that is air.
+        //
+        // This used to be "your own cell, or not at all", and it stopped the
+        // colony's whole metabolism without stopping anything else. A gnome
+        // in a drift of litter is walking through it, not buried in it
+        // (night 7), so it eats, works and walks as usual — but it does not
+        // exhale, so its belly never empties, so it is never hungry, so it
+        // never picks a berry, so its flask never fills. Measured over
+        // 80 000 steps: four bellies frozen to the milligram from step
+        // 50 000 on, Gin 400 → 1, and a garden standing untouched beside
+        // them. Nothing looked wrong anywhere else.
+        let Some(lungs) = self
+            .reachable_cells(pos)
+            .into_iter()
+            .find(|&n| world.in_bounds(n) && world.cell(n).is_gas(world.materials()))
+        else {
             return;
-        }
+        };
+        let cell = world.cell(lungs);
+        let pos = lungs;
         let oxygen = cell.grams_of(world.materials(), t::OXYGEN);
         // Half the oxygen in the cell at most, so a gnome cannot strip its
         // own cell bare in one step and suffocate itself instantly.
@@ -1156,9 +1255,10 @@ impl Colony {
         // could usefully do with the hands it has — and that it can get to.
         if self.gnomes[idx].job.is_none() {
             let load = self.gnomes[idx].hands;
+            let now = self.tick;
             self.gnomes[idx].job = self
                 .orders
-                .claim_for(idx, load.as_ref(), |at| Self::walk_steps(routes, at));
+                .claim_for(idx, load.as_ref(), now, |at| Self::walk_steps(routes, at));
         }
         let Some(id) = self.gnomes[idx].job else {
             return false;
@@ -1175,7 +1275,16 @@ impl Colony {
             self.gnomes[idx].job = None;
             return false;
         }
-        if !crate::order::within_reach(pos, order.at) {
+        // Where the work actually is this step — the order's own cell,
+        // unless it is a supply order still looking for its goods.
+        let Some(site) = self.worksite(world, routes, &order, idx) else {
+            if self.orders.tick_claim(id) {
+                self.orders.release(id);
+                self.gnomes[idx].job = None;
+            }
+            return false;
+        };
+        if !crate::order::within_reach(pos, site) {
             if self.orders.tick_claim(id) {
                 self.orders.release(id);
                 self.gnomes[idx].job = None;
@@ -1186,7 +1295,9 @@ impl Colony {
         // cannot breathe, and would pay Gin to gasp its way out of a wall
         // the player's own colony put there — a colony tuned toward failure
         // by way of its own diligence. It waits for the cell to clear.
-        if order.job == Job::Build
+        let putting_down = order.job == Job::Build
+            || (matches!(order.job, Job::Supply { .. }) && self.gnomes[idx].hands.is_some());
+        if putting_down
             && self
                 .gnomes
                 .iter()
@@ -1199,26 +1310,41 @@ impl Colony {
             return false;
         }
         let mut hands = self.gnomes[idx].hands;
-        let attempt = crate::order::perform(world, &order, &mut hands, self.gnomes[idx].gin);
+        let now = self.tick;
+        let attempt = crate::order::perform(world, &order, site, &mut hands, self.gnomes[idx].gin);
         self.gnomes[idx].hands = hands;
         if attempt.gin > 0.0 {
             self.spend(world, idx, attempt.gin);
         }
         match attempt.outcome {
             Outcome::Dug => {
-                self.orders.complete(id);
+                self.orders.complete(id, now);
                 self.gnomes[idx].job = None;
                 self.gnomes[idx].last_act = Act::Dug;
                 true
             }
             Outcome::Built => {
-                self.orders.complete(id);
+                self.orders.complete(id, now);
                 self.gnomes[idx].job = None;
                 self.gnomes[idx].last_act = Act::Built;
                 true
             }
+            // Half of a supply order: the goods are in hand, the order is
+            // still open, and the same gnome keeps it — it is the one
+            // carrying the load.
+            Outcome::Took => {
+                self.orders.tick_claim(id);
+                self.gnomes[idx].last_act = Act::Took;
+                true
+            }
+            Outcome::Stocked => {
+                self.orders.complete(id, now);
+                self.gnomes[idx].job = None;
+                self.gnomes[idx].last_act = Act::Stocked;
+                true
+            }
             Outcome::Tempered => {
-                self.orders.complete(id);
+                self.orders.complete(id, now);
                 self.gnomes[idx].job = None;
                 self.gnomes[idx].last_act = Act::Tempered;
                 true
@@ -1684,6 +1810,118 @@ mod tests {
             colony.gnomes[0].pos
         );
         assert!(colony.carried_g() > 0.0, "it should be holding the spoil");
+    }
+
+    /// Scenario: the player marks an empty cell at one end of a cavern and
+    /// asks for water in it. Nobody says where the water is; the colony
+    /// finds the pool at the other end, and a gnome carries a bucket of it
+    /// across — the same grams, at the same temperature, and the books end
+    /// where they started.
+    #[test]
+    fn a_supply_order_fetches_its_own_makings_from_across_the_room() {
+        let mut w = cavern();
+        let pool = GridIndex::new(17, 1);
+        w.fill(pool, t::WATER, 293.0);
+        w.rebaseline();
+        let mass_before = w.total_mass();
+        let want = GridIndex::new(3, 1);
+
+        let mut colony = Colony::new(vec![Gnome::new(GridIndex::new(5, 1))]);
+        colony.order(want, Job::Supply { material: t::WATER });
+        let mut took = false;
+        let mut done = false;
+        for _ in 0..300 {
+            colony.update(&mut w);
+            took |= colony.gnomes[0].last_act == Act::Took;
+            if colony.orders.completed() == 1 {
+                done = true;
+                break;
+            }
+        }
+        assert!(took, "it never picked the water up");
+        assert!(done, "the water never arrived");
+        assert_eq!(
+            w.material_at(want),
+            t::WATER,
+            "the cell the player marked should be holding water"
+        );
+        assert!(w.mass_at(pool) <= 0.0, "and it came out of the pool");
+        // The only thing the ledger should have to say about a haul is what
+        // the carrier was digesting on the way.
+        assert!(
+            (w.total_mass() - mass_before - w.ledger().mass_conjured).abs() < 1e-9,
+            "hauling moves matter further than the ledger says"
+        );
+        let r = w.conservation_residuals();
+        assert!(r.mass_relative.abs() < 1e-12, "mass residual {r:?}");
+        assert!(r.energy_relative.abs() < 1e-12, "energy residual {r:?}");
+    }
+
+    /// Scenario: a standing order is the same order with a cadence. It is
+    /// done, it waits, and it is offered again — so a pot that has boiled
+    /// dry is re-charged without anybody writing a second instruction.
+    #[test]
+    fn a_standing_order_comes_back_round() {
+        let mut w = cavern();
+        for i in 14..=18 {
+            w.fill(GridIndex::new(i, 1), t::WATER, 293.0);
+        }
+        w.rebaseline();
+        let want = GridIndex::new(3, 1);
+
+        let mut colony = Colony::new(vec![Gnome::new(GridIndex::new(5, 1))]);
+        let id = colony.order(want, Job::Supply { material: t::WATER });
+        colony.orders.repeat(id, 20);
+        let mut delivered = 0;
+        for _ in 0..900 {
+            colony.update(&mut w);
+            // Take the delivery away again, the way a still would by
+            // boiling it off, so the order has something to do next time.
+            if w.material_at(want) == t::WATER && w.mass_at(want) > 0.0 {
+                delivered += 1;
+                let t = w.cell(want).temperature;
+                w.conjure_mass(want, t::WATER, -w.mass_at(want), t);
+            }
+        }
+        assert!(
+            delivered >= 3,
+            "a standing order should keep coming back: {delivered} deliveries"
+        );
+        assert_eq!(
+            colony.orders.len(),
+            1,
+            "and it should still be on the queue"
+        );
+    }
+
+    /// Scenario: a gnome will not rob the cell it is filling. Both ends of
+    /// a supply order carry an order, so the water for one comes from the
+    /// pool rather than from the other — otherwise two standing orders
+    /// facing each other pass the same gram back and forth for ever.
+    #[test]
+    fn a_supply_order_does_not_rob_another_order() {
+        let mut w = cavern();
+        let pool = GridIndex::new(17, 1);
+        w.fill(pool, t::WATER, 293.0);
+        let stocked = GridIndex::new(4, 1);
+        w.fill(stocked, t::WATER, 293.0);
+        w.rebaseline();
+        let want = GridIndex::new(8, 1);
+
+        let mut colony = Colony::new(vec![Gnome::new(GridIndex::new(6, 1))]);
+        colony.order(stocked, Job::Supply { material: t::WATER });
+        colony.order(want, Job::Supply { material: t::WATER });
+        for _ in 0..400 {
+            colony.update(&mut w);
+            if w.mass_at(want) > 0.0 {
+                break;
+            }
+        }
+        assert!(w.mass_at(want) > 0.0, "the second cell never got its water");
+        assert!(
+            w.mass_at(stocked) > 0.0,
+            "it was taken from the cell somebody else was filling"
+        );
     }
 
     /// Scenario: an order behind a wall nobody can climb is not claimed, is

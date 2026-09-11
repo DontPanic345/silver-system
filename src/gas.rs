@@ -155,6 +155,20 @@ const FLOW_DAMPING_PER_SECOND: Scalar = 2.0;
 /// being emptied through all four at once keeps a remainder.
 const MAX_CARRIED_FRACTION: Scalar = 0.5;
 
+/// Below this much gas in a cell, there is nothing left to move.
+///
+/// Not a tolerance, a floor against underflow, and it was found the hard way
+/// at step 32 153 of an 80 000-step run. Every transfer here moves a
+/// *fraction* of what is there, so a gas cell that gives and never receives —
+/// one sealed into a heap of leaf litter, in the case that found this — loses
+/// mass geometrically. Thirty thousand steps of that is not a small number,
+/// it is 1e-320: a denormal, whose heat capacity divides into its stored
+/// energy as infinity, whose temperature is therefore NaN, and which then
+/// poisons every gas cell the flow touches it against, 1457 of them in one
+/// step. A gram of gas is 1e-3; anything under 1e-15 is not gas, it is a
+/// rounding error with a label on it.
+const EMPTY_G: Scalar = 1e-15;
+
 /// Bulk flow: gas with momentum, driven by pressure.
 ///
 /// Every face between two gas cells carries a mass flux, stored on the
@@ -440,6 +454,9 @@ fn exchange_species(world: &mut World, p: usize, q: usize, rate: Scalar) {
 /// this conserves.
 pub(crate) fn move_fraction(world: &mut World, from: usize, to: usize, fraction: Scalar) -> Scalar {
     if fraction <= 0.0 {
+        return 0.0;
+    }
+    if world.cell_at(from).mass <= EMPTY_G {
         return 0.0;
     }
     let mut source = world.cell_at(from);
