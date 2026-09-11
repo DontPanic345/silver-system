@@ -459,3 +459,90 @@ Note to self, after discussion with the agent, trying to get around going to f64
 f64 and clipping the wings of the GPU is fine for this experiment, but note this point as we may be coming back!
 Providing the /usage-check was huge success, the agent happily went up to 80% of the 5 hourly window. Next to optimise is when to finish, as the run had a long debugging session with lots of back forth? Best leave that out of the cache and start again with clean slate. Or has the run been going well, that agent is best placed to continue as everything is already loaded.
 _
+**Night 5/7 — 2026-09-11 — Opus 5/high — Biology, and a jar whose carbon goes
+round.** Chose the biology tier — the next one in `NORTH_STARS.md` #2's
+stated order, untouched since night 3 opened chemistry. The alternatives were
+night 4's own named next step (splitting air into N₂/O₂), more gas physics,
+and the knowledge economy. The commentary above is why I did not simply take
+the leftover: the pull toward "whatever last night left unblocked" is real,
+and the one genuinely sideways move available was to change tier rather than
+to go deeper into the one we were in. Oxygen came along anyway, because
+photosynthesis has to put its oxygen *somewhere* — but as a consequence of
+the tier, not as the goal. The tier also unblocks more than anything else on
+the list: farming is a #4 pillar, the carbon cycle is a #3 one, and neither
+can start without a living process that moves mass in proportions.
+
+Built. `Metabolism` (`src/material.rs`) is a data-driven living process:
+grams in, grams out, asserted equal when the table is built. A
+[`Reaction`](src/chemistry.rs) could never express this — it relabels two
+cells, each keeping its own mass — and `6 CO₂ + 6 H₂O → C₆H₁₂O₆ + 6 O₂` is
+nothing but proportions. The enthalpy solver that derived offsets from phase
+transitions and reaction arms is generalised from pairwise constraints to
+n-term ones, so all three rule kinds feed one relaxation; photosynthesis
+declares its heat and its reverse is thereby forced, so a bush cannot gain on
+the round trip. `src/life.rs` runs them: every parcel of mass carries its own
+enthalpy and the host settles the difference, so the heat is emergent, and a
+full plant seeds a neighbour by splitting its own mass. `src/light.rs` marches
+sunlight down each column through a new data field (`Material::opacity`) and
+a `Sun` pays for the joules through the ledger — the day/night cycle the JS
+terrarium had in August and lost. Oxygen is a real species; "air" is now the
+inert bulk, the table declares an atmosphere mixture, and breathing reads the
+partial pressure of what is actually in a cell rather than a flag on its
+label. Gnomes respire — belly biomass plus oxygen becomes CO₂ and water
+vapour at the table's own photosynthesis proportions — and plant cuttings out
+of the same belly. The terrarium got a glass lid, a watered garden and a day.
+
+Five findings, each written up where it bites:
+
+1. *Conserving mass and energy does not conserve **atoms**.* Both residuals
+   sat at 1e-13 while the jar's carbon drifted, because two gnome cuttings had
+   overwritten cells of air that had CO₂ in them. `conjure_mass` books the
+   loss, so the ledger was right and the chemistry was wrong. `gas::displace`
+   is the fix and `the_carbon_in_the_jar_goes_round` is the test: 0.4 g per
+   gram of plant, 12/44 per gram of CO₂, plus whatever is in the bellies,
+   constant to a part in a billion.
+2. *A parcel must leave and arrive at the same temperature.* Debiting the host
+   at its pre-step temperature and crediting the acceptor at its post-step one
+   leaked 2e-8 relative in a few hundred steps. Found by the conservation
+   test, invisible to inspection.
+3. *A jar with a stone lid is a jar in the dark* — and nothing noticed until
+   something cared about light, at which point the garden could only ever run
+   the night half of its books. Glass is stone with `opacity` changed.
+4. *Gin and food were the same appetite, and that quietly broke the cycle.* A
+   colony in a comfortable jar spends no Gin, so its flasks stay full, so it
+   never eats, so it never exhales, so the garden starves. A gnome is hungry
+   because it is alive.
+5. *Night shading fights hue-based pixel checks, and holding blue back fixes
+   both at once.* A flat dim deep enough to read as night takes water's blue
+   under the threshold the pool check uses; taking more out of red and green
+   makes the scene a third darker **and** more blue-dominant, so the checks
+   get stronger as the picture gets darker.
+
+Verified: 167 lib tests in release, clippy and rustfmt clean, all six e2e
+checks — including a new one that walks the live page until it has seen both
+a midday and a midnight frame and compares mean canvas brightness (79 against
+66), and a rewritten still check that counts gin-coloured pixels (0% → 17–22%
+on the receiver floor, 0% at head height) instead of comparing brightness,
+because gnome breath now fogs the condenser. I looked at rendered day and
+night frames rather than trusting the numbers. Over 12000 headless steps the
+garden goes 2.50 → 2.59 g and 5 cells → 13, CO₂ climbs 0 → 0.096 g, oxygen
+falls 0.331 → 0.281 g, residuals stay at 1e-13 relative.
+
+What I did **not** verify: any run past 12000 steps, or any non-default grid
+size. **The colony is a net oxygen sink** — the garden supplies roughly 40% of
+what four gnomes burn, and extrapolating the slope it would reach the
+suffocation threshold somewhere around step 26000; I did not run that far, so
+I do not know whether the garden catches up or whether someone goes ethereal.
+One run showed the thinnest air in the jar dipping to 0.082 atm against a
+0.080 limit; that is a local pocket around a breathing gnome, and I did not
+chase it. I did not look at `gases.html` or `still.html` by eye this session.
+The gnome respiration rate is tuned, not derived, and the note in
+`src/gnome.rs` says why there is no consistent scale to derive it from.
+
+Deliberately left undone: **decomposition** — there is no fungus, no humus,
+and nothing happens to a plant that drowns or freezes, so carbon only returns
+to the air through something's lungs; that is the obvious next piece of the
+tier and `NORTH_STARS.md` #3 names it. Also untouched, and carried over: the
+book-copying knowledge economy, the Gnome Grandmother, buildings, nitrogen,
+gases dissolved in liquids, wash as a real water–ethanol solution, and
+pressure-dependent boiling.
