@@ -486,6 +486,47 @@ pub(crate) fn move_species(world: &mut World, from: usize, to: usize, slot: usiz
     world.set_cell_at(to, dest);
 }
 
+/// Empties the gas cell at `p` into the lowest-pressure gas cell beside it,
+/// returning whether there was anywhere for it to go.
+///
+/// The primitive for "something solid is about to occupy this cell". Without
+/// it, anything that puts matter into a cell of air *destroys* that air —
+/// which conservation survives, because [`World::conjure_mass`] books it,
+/// but which the jar's carbon balance does not: the cell being overwritten
+/// is full of carbon dioxide the bushes were going to breathe, and it goes
+/// with it. A gnome planting two cuttings was enough to break a carbon
+/// invariant that is otherwise exact to a part in a billion.
+///
+/// [`World::conjure_mass`]: crate::world::World::conjure_mass
+pub(crate) fn displace(world: &mut World, p: usize) -> bool {
+    if !world.is_gas_at(p) {
+        return false;
+    }
+    let w = world.width() as i32;
+    let (i, j) = ((p as i32) % w, (p as i32) / w);
+    let outlet = [(0, 1), (-1, 0), (1, 0), (0, -1)]
+        .into_iter()
+        .map(|(di, dj)| GridIndex::new(i + di, j + dj))
+        .filter(|&n| world.in_bounds(n))
+        .map(|n| world.linear_index(n))
+        .filter(|&q| world.is_gas_at(q))
+        .min_by(|&a, &b| {
+            pressure_at(world, a)
+                .partial_cmp(&pressure_at(world, b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    let Some(outlet) = outlet else {
+        return false;
+    };
+    for slot in 0..crate::material::MIX_SLOTS {
+        let grams = world.cell_at(p).mix[slot];
+        if grams > 0.0 {
+            move_species(world, p, outlet, slot, grams);
+        }
+    }
+    true
+}
+
 /// The gas rules, in the order `physics::step` runs them.
 pub fn step(world: &mut World, dt: Scalar) {
     flow(world, dt);

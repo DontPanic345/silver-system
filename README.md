@@ -19,12 +19,24 @@ aspirational statements this and every experiment has served, and
 
 ## The gnome terrarium — the current experiment
 
-A warm spring under a pool, a lid held cold, and four gnomes on a meadow
-beside the water. The pool evaporates because warm water does, the humid air
-meets the cold lid, and dew falls back as drops; the gnomes forage juniper
-and pay Gin for the magic fountain. All of it is emergent: there is no
-script, only conduction, buoyancy, one vapour-pressure curve per liquid, and
-a Gin budget.
+A warm spring under a pool, a glass lid held cold, a garden on a watered
+bed, and four gnomes on the meadow between them. The pool evaporates because
+warm water does, the humid air meets the cold lid, and dew falls back as
+drops; the gnomes forage juniper, plant cuttings, and pay Gin for the magic
+fountain.
+
+The jar also has a **day**. Sunlight comes in through the lid, warms what it
+lands on and goes out again at dusk, and that day is what the garden runs on:
+in the light the bushes take carbon dioxide out of the air and water out of
+their bed and put on weight, and in the dark they spend some of it back. The
+gnomes eat the bushes and breathe the carbon out again, so the jar's carbon
+goes round rather than accumulating — it is constant, across plants, air and
+gnome bellies, to a part in a billion. Oxygen is a real species too, so a
+sealed room can be breathed flat, and the garden is what stops it.
+
+All of it is emergent: there is no script, only conduction, buoyancy, one
+vapour-pressure curve per liquid, a table of declared mass proportions, and a
+Gin budget.
 
 ```sh
 # Headless: JSON snapshots (and ASCII maps on stderr) — no browser needed.
@@ -78,10 +90,20 @@ partly-empty liquid cell pours into its neighbours (`physics::
 coalesce_liquids`) and hands the space back to the atmosphere. All of it is
 built from transfers that already conserve.
 
-Two things are allowed to break that, and both go through the same ledger:
-gnome magic (paid for in Gin) and the terrarium's declared hot/cold boundary
-(a sealed jar reaches equilibrium and its water cycle stops — see
-`src/terrarium.rs`). So the standing invariant is not "nothing changes" but
+A living cell is the same story with unequal masses: a `Metabolism` declares
+how many grams of what a process takes in and gives back (`6 CO₂ + 6 H₂O →
+C₆H₁₂O₆ + 6 O₂` is 1.47 g and 0.6 g in, 1.07 g out, per gram of plant), the
+table asserts the two sides balance, and every parcel carries its own
+enthalpy with the host settling the difference. So the heat of photosynthesis
+is emergent, and the carbon in a sealed jar is a constant rather than an
+approximation.
+
+Three things are allowed to break that, and all of them go through the same
+ledger: gnome magic (paid for in Gin), the terrarium's declared hot/cold
+boundary and its sunlight (a sealed jar reaches equilibrium and its water
+cycle stops — see `src/terrarium.rs`), and a gnome's belly (what it eats
+leaves the world and what it breathes out comes back, so a gnome part-way
+through digesting a berry is a small non-zero ledger entry). So the standing invariant is not "nothing changes" but
 
 ```text
 total_mass_now == total_mass_at_start + ledger.mass_conjured
@@ -95,14 +117,16 @@ live. `residual_mass_g` in that output is the whole argument in one number.
 
 | File | What it holds |
 | --- | --- |
-| `src/material.rs` | Materials, phase transitions and reactions as data; enthalpy offsets derived, not declared |
+| `src/material.rs` | Materials, phase transitions, reactions and metabolisms as data; enthalpy offsets derived, not declared |
 | `src/world.rs` | Cells with mass, temperature and latent progress; the magic ledger |
 | `src/physics.rs` | Movement, buoyancy, hydrostatic levelling, liquid coalescence, conduction, phase change |
 | `src/gas.rs` | Gas mixtures: pressure (`P = T·Σ m·R`), bulk flow with momentum, interdiffusion |
 | `src/vapour.rs` | Vapour pressure: evaporation below boiling, condensation, dew, mist and rain |
 | `src/chemistry.rs` | Reactions between touching cells: mashing, combustion |
+| `src/light.rs` | How far the sky reaches into the world, and the day that drives it |
+| `src/life.rs` | Metabolisms: stoichiometric growth and respiration, and how a plant spreads |
 | `src/chamber.rs` | The gas demonstration room, its bottle, vent and scrubber; the relief valve |
-| `src/gnome.rs` | Gin economy, the ethereal layer, rescue, foraging, drinking, ethereal pipes |
+| `src/gnome.rs` | Gin economy, the ethereal layer, rescue, foraging, drinking, breathing, planting, ethereal pipes |
 | `src/terrarium.rs` | The flagship scenario and its declared boundary conditions |
 | `src/still.rs` | The brewing scenario: mash tun, lyne arm, condenser, receiver |
 | `src/report.rs` | JSON snapshots and an ASCII map, for headless verification |

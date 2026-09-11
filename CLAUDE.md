@@ -67,10 +67,15 @@ brewing rather than from eating berries (`src/chemistry.rs`, `src/still.rs`,
 `www/still.html`). Night 4 made gas cells hold mixtures and added vapour
 pressure, so gases mix instead of layering and water evaporates below
 boiling: the terrarium now runs on dew rather than a kettle
-(`src/vapour.rs`; `Scalar` is `f64` since then).
+(`src/vapour.rs`; `Scalar` is `f64` since then). Night 5 opened the biology
+tier: `Metabolism` rows move real, unequal masses in declared proportions
+(`src/life.rs`), oxygen is a species a gnome can run out of, sunlight comes
+in through a glass lid on a day/night cycle (`src/light.rs`), and the
+terrarium's carbon now goes round — plants to gnomes to air and back.
 
 Live code: `src/world.rs`, `src/physics.rs`, `src/gas.rs`,
-`src/vapour.rs`, `src/chemistry.rs`, `src/gnome.rs`, `src/terrarium.rs`, `src/chamber.rs`,
+`src/vapour.rs`, `src/chemistry.rs`, `src/light.rs`, `src/life.rs`,
+`src/gnome.rs`, `src/terrarium.rs`, `src/chamber.rs`,
 `src/still.rs`, `src/report.rs`, `www/terrarium.html`, `www/gases.html`,
 `www/still.html`. Run them headless with
 `cargo run --release --bin terrarium -- --map` (and `--bin still`,

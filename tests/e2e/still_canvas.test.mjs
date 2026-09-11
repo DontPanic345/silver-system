@@ -96,6 +96,31 @@ const regionColour = (page, x0, x1, y0, y1) =>
     return [r / n, g / n, bl / n];
   }, [x0, x1, y0, y1]);
 
+// The fraction of a region's pixels that look like standing gin: pale and
+// distinctly blue. Gin is drawn (196, 224, 236); the fog the gnomes breathe
+// into the condenser is near-neutral pale (235, 238, 242) and the air and
+// stone behind it are neither pale nor blue. Counting pixels that match
+// rather than averaging brightness is what keeps this a check on *gin* and
+// not on "something bright happened over here" — the same correction night 2
+// had to make to the CO2 check, for the same reason.
+const ginFraction = (page, x0, x1, y0, y1) =>
+  page.evaluate(([a, b, c, d]) => {
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const px = Math.floor(canvas.width * a);
+    const pw = Math.max(1, Math.floor(canvas.width * b) - px);
+    const py = Math.floor(canvas.height * c);
+    const ph = Math.max(1, Math.floor(canvas.height * d) - py);
+    const { data } = ctx.getImageData(px, py, pw, ph);
+    let hits = 0;
+    const n = data.length / 4;
+    for (let i = 0; i < data.length; i += 4) {
+      const [r, g, bl] = [data[i], data[i + 1], data[i + 2]];
+      if (bl > 150 && bl > r + 25 && g > r + 12) hits += 1;
+    }
+    return hits / n;
+  }, [x0, x1, y0, y1]);
+
 const massOf = (report, name) => {
   const m = report.materials.find((x) => x.name === name);
   return m ? m.mass_g : 0;
@@ -148,15 +173,33 @@ async function main() {
     // of 52), and the two rows the gin pools in — deliberately not the
     // stone course below them, which is bright enough to drown the signal.
     const receiverBefore = await regionColour(page, 0.46, 0.98, 0.9, 0.967);
+    const ginFloorBefore = await ginFraction(page, 0.46, 0.98, 0.9, 0.967);
 
     // Real wall-clock time, not a fast-forward: this is the same rate a
     // person watching the tab would see.
     await page.waitForTimeout(9000);
+    // ...and then, if this machine was busy, a little longer. The pixel
+    // checks below are about how full the receiver is, which is a function
+    // of steps taken, not of seconds elapsed; sampling at whatever step
+    // count nine seconds happened to buy made them pass at 2600 steps and
+    // fail at 2400 on the same build. The wall-clock wait above is what
+    // keeps this a real-time check; this only refuses to judge too early.
+    const MIN_STEPS = 2800;
+    await page
+      .waitForFunction((n) => window.__lastReport && window.__lastReport.step >= n, MIN_STEPS, {
+        timeout: 30000,
+      })
+      .catch(() => {});
 
     const second = await page.evaluate(() => window.__lastReport);
+    if (!(second.step >= MIN_STEPS)) {
+      fail(`FAIL still_canvas: only ${second.step} steps in the time allowed — too slow to judge.`);
+    }
     const receiverAfter = await regionColour(page, 0.46, 0.98, 0.9, 0.967);
     // Head height in the same half of the room: air, and it should stay air.
     const receiverAir = await regionColour(page, 0.46, 0.98, 0.47, 0.63);
+    const ginFloorAfter = await ginFraction(page, 0.46, 0.98, 0.9, 0.967);
+    const ginAirAfter = await ginFraction(page, 0.46, 0.98, 0.47, 0.63);
 
     if (!(second.step > first.step)) {
       fail(`FAIL still_canvas: simulation did not advance (${first.step} -> ${second.step}).`);
@@ -220,11 +263,30 @@ async function main() {
     // receiver's floor is paler than the air above it in the same half of
     // the room, i.e. the gin settled into a pool on the floor rather than
     // hanging about as vapour.
-    if (!(brightness(receiverAfter) > brightness(receiverAir) + 10)) {
+    // The other half of "it went to the right place": at the end the
+    // receiver's *floor* is covered in pixels that look like gin, and head
+    // height in the same half of the room is not — i.e. the gin settled into
+    // a pool rather than hanging about as vapour.
+    //
+    // This used to compare mean brightness, and night 5 broke it honestly:
+    // the gnomes waiting at the receiver now breathe, and what they breathe
+    // into the coldest corner of a sealed condenser is water vapour, which
+    // fogs it. Fog is drawn pale, so the air above the pool got brighter and
+    // the margin shrank until the check failed on a slow machine and passed
+    // on a fast one. Counting gin-coloured pixels instead is not a looser
+    // check, it is the check this was always trying to be.
+    if (!(ginFloorAfter > 0.1)) {
       fail(
         `FAIL still_canvas: no pool of gin on the receiver's floor at the end ` +
-          `(floor ${JSON.stringify(receiverAfter)} vs head height ` +
-          `${JSON.stringify(receiverAir)}).`
+          `(${(ginFloorAfter * 100).toFixed(1)}% of its pixels look like gin, ` +
+          `against ${(ginFloorBefore * 100).toFixed(1)}% at the start).`
+      );
+    }
+    if (!(ginFloorAfter > ginAirAfter * 3 + 0.1)) {
+      fail(
+        `FAIL still_canvas: the gin is hanging in the air rather than pooling ` +
+          `(floor ${(ginFloorAfter * 100).toFixed(1)}% vs head height ` +
+          `${(ginAirAfter * 100).toFixed(1)}%).`
       );
     }
 
@@ -247,7 +309,10 @@ async function main() {
           `gin ${massOf(first, 'gin').toFixed(3)} -> ${gin.toFixed(3)} g, ` +
           `water still ${massOf(second, 'water').toFixed(1)} g with ${cellsOf(second, 'steam')} steam, ` +
           `flasks ${first.colony.total_gin.toFixed(1)} -> ${second.colony.total_gin.toFixed(1)}, ` +
-          `receiver-floor brightness ${brightness(receiverBefore).toFixed(1)} -> ` +
+          `receiver floor ${(ginFloorBefore * 100).toFixed(1)}% -> ` +
+          `${(ginFloorAfter * 100).toFixed(1)}% gin-coloured against ` +
+          `${(ginAirAfter * 100).toFixed(1)}% at head height, brightness ` +
+          `${brightness(receiverBefore).toFixed(1)} -> ` +
           `${brightness(receiverAfter).toFixed(1)} against ${brightness(receiverAir).toFixed(1)} ` +
           `at head height, ` +
           `mass residual ${second.residual_mass_relative}.`

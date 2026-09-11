@@ -75,6 +75,31 @@ pub const GIN_HUNGRY: Scalar = 45.0;
 pub const BELLY_HUNGRY: Scalar = 0.02;
 /// Grams of food a gnome will carry before it stops picking berries.
 pub const BELLY_FULL: Scalar = 0.06;
+/// Grams of a gnome's carried food that become a cutting when it plants one,
+/// and the belly it will not plant below.
+///
+/// `NORTH_STARS.md` #4 names farming as one of the pillars, and this is the
+/// smallest honest version of it: a gnome puts back into the world some of
+/// what it is carrying, as a living seedling. It is not magic in the sense
+/// that matters — the mass comes out of the gnome's belly, which the ledger
+/// has been holding negative since it was picked, so planting a cutting
+/// *returns* the books toward zero rather than moving them away from it.
+///
+/// A gnome plants only directly above a bush it is standing beside. That is
+/// a reach limit, not a rule about hedges: it means the garden can be
+/// trained one course taller than the gnomes' own heads and no further by
+/// hand, which is both a plausible thing to be able to do and the thing that
+/// stops a colony walling itself in behind its own allotment.
+pub const CUTTING_G: Scalar = 0.05;
+pub const BELLY_TO_PLANT: Scalar = 0.05;
+/// Colony updates between cuttings.
+///
+/// A cadence, not a cost, and it is load-bearing. Without it a gnome picks a
+/// berry off one bush and plants it on the next one the same second, for
+/// ever: the mass is conserved and the colony looks busy, and all that is
+/// really happening is a bush being moved one cell at a time. A garden is
+/// planted at the pace a garden grows.
+pub const PLANT_PERIOD: u64 = 600;
 
 /// The temperature band a gnome is comfortable in, in kelvin.
 pub const COMFORT_MIN: Scalar = 265.0;
@@ -167,6 +192,8 @@ pub enum Act {
     Chilled,
     /// Spent Gin conjuring breathable air around itself.
     Breathed,
+    /// Put a cutting from its own stores into the world — farming.
+    Planted,
     WentEthereal,
     Rescued,
     Waiting,
@@ -212,8 +239,10 @@ impl Gnome {
             facing: 1,
             // Fed, rather than starving on arrival: a gnome that has to find
             // its first meal before it can breathe is a gnome that suffocates
-            // on the way to breakfast.
-            belly: BERRY_MASS,
+            // on the way to breakfast, and one that arrives with less than a
+            // cutting in it cannot start gardening for three simulated
+            // minutes.
+            belly: BELLY_FULL,
         }
     }
 
@@ -286,6 +315,9 @@ pub struct Colony {
     seed: u64,
     /// Updates run so far, for pipes that only fire every so often.
     tick: u64,
+    /// The tick the colony last put a cutting in, or `None` if it never has
+    /// — see [`PLANT_PERIOD`].
+    last_plant: Option<u64>,
     /// Grams of food the colony has burned since it started — the other
     /// half of the jar's carbon books, beside [`crate::life::Tally`]. What
     /// a gnome breathes out is water and carbon dioxide in the same declared
@@ -301,6 +333,7 @@ impl Colony {
             pipes: Vec::new(),
             seed: 0x9E3779B97F4A7C15,
             tick: 0,
+            last_plant: None,
             respired_g: 0.0,
         }
     }
@@ -521,6 +554,11 @@ impl Colony {
             return;
         }
 
+        // --- Garden, when there is food to spare and a bush to train ---
+        if self.plant(world, idx, pos) {
+            return;
+        }
+
         // --- Otherwise: fall, or walk ---
         let below = GridIndex::new(pos.i, pos.j - 1);
         if world.in_bounds(below) && self.is_walkable(world, below) {
@@ -586,6 +624,85 @@ impl Colony {
         world.conjure_mass(pos, t::STEAM, burn * h2o_per_g, BODY_K);
         self.gnomes[idx].belly -= burn;
         self.respired_g += burn;
+    }
+
+    /// Whether enough updates have passed since the last cutting went in.
+    fn may_plant(&self) -> bool {
+        self.last_plant
+            .is_none_or(|last| self.tick >= last + PLANT_PERIOD)
+    }
+
+    /// Puts a cutting in, directly above a bush the gnome is standing beside
+    /// — see [`CUTTING_G`]. Returns whether anything was planted.
+    fn plant(&mut self, world: &mut World, idx: usize, pos: GridIndex) -> bool {
+        if self.gnomes[idx].belly < BELLY_TO_PLANT || !self.may_plant() {
+            return false;
+        }
+        // Any bush within a couple of paces — a gnome plants with a tool at
+        // arm's length, not by pressing its nose against the plant.
+        let mut bushes: Vec<GridIndex> = Vec::new();
+        for di in -2..=2 {
+            for dj in -1..=1 {
+                let at = GridIndex::new(pos.i + di, pos.j + dj);
+                if world.in_bounds(at) && world.material_at(at) == t::JUNIPER {
+                    bushes.push(at);
+                }
+            }
+        }
+        bushes.sort_by_key(|b| (b.i - pos.i).abs() + (b.j - pos.j).abs());
+        if bushes.is_empty() {
+            return false;
+        }
+        // Somewhere in the two courses above that bush, within arm's reach:
+        // strictly higher than the gnome's own feet, at most two above them,
+        // empty, and with something for a cutting to root in underneath.
+        //
+        // Never on the gnome's own row, and that is the whole of what keeps
+        // a colony from walling itself in: juniper is a static solid, a gnome
+        // will not walk into one and can only climb a single course, so a
+        // hedge planted along the walkway is a fence. Planted overhead it is
+        // a canopy, and the gnomes keep their path.
+        let mut chosen = None;
+        'search: for (bush, dj) in bushes.iter().flat_map(|&b| (1..=2).map(move |d| (b, d))) {
+            let j = bush.j + dj;
+            if j <= pos.j || j > pos.j + 2 {
+                continue;
+            }
+            for di in [0, -1, 1] {
+                let at = GridIndex::new(bush.i + di, j);
+                let under = GridIndex::new(at.i, at.j - 1);
+                if !world.in_bounds(at) || !world.in_bounds(under) {
+                    continue;
+                }
+                if !world.cell(at).is_gas(world.materials()) {
+                    continue;
+                }
+                let below = world.materials().get(world.material_at(under));
+                let rooted = below.mobility == Mobility::Static
+                    || below.phase == Phase::Solid
+                    || below.phase == Phase::Granular;
+                if rooted {
+                    chosen = Some(at);
+                    break 'search;
+                }
+            }
+        }
+        let Some(above) = chosen else {
+            return false;
+        };
+        let cell = world.cell(above);
+        // Push the air (and whatever it is carrying) into a neighbour rather
+        // than letting the cutting overwrite it — see `gas::displace`.
+        let p = world.linear_index(above);
+        if !crate::gas::displace(world, p) {
+            return false;
+        }
+        world.conjure_mass(above, t::JUNIPER, CUTTING_G, cell.temperature);
+        self.last_plant = Some(self.tick);
+        let g = &mut self.gnomes[idx];
+        g.belly -= CUTTING_G;
+        g.last_act = Act::Planted;
+        true
     }
 
     /// Refills the flask from whatever is within reach: a cell of gin
@@ -672,7 +789,12 @@ impl Colony {
                 return dir;
             }
         }
-        if g.gin < GIN_HUNGRY || g.belly < BELLY_HUNGRY {
+        // Toward the garden when there is a meal to find *or* a cutting to
+        // put in: a gnome with food to spare is a gardener.
+        if g.gin < GIN_HUNGRY
+            || g.belly < BELLY_HUNGRY
+            || (g.belly >= BELLY_TO_PLANT && self.may_plant())
+        {
             // The still's output before the raw botanical, since a mouthful
             // of it is worth more.
             let larder = self
@@ -937,6 +1059,69 @@ mod tests {
         assert!(colony.gnomes[0].gin > 10.0, "berries should restore Gin");
         assert!(w.total_mass() < mass_before, "the berry left the world");
         assert!(w.conservation_residuals().mass.abs() < 1e-4);
+    }
+
+    /// Farming, in its smallest honest form: a gnome standing by a bush with
+    /// food to spare puts a cutting in above it, and the mass comes out of
+    /// its own belly rather than out of nowhere — so the ledger moves *back*
+    /// toward zero, because the belly has been holding it negative since the
+    /// berry was picked.
+    #[test]
+    fn a_gnome_with_food_to_spare_plants_a_cutting_from_its_own_belly() {
+        let mut w = cavern();
+        w.fill(GridIndex::new(6, 1), t::JUNIPER, 293.0);
+        w.rebaseline();
+        let mut gnome = Gnome::new(GridIndex::new(5, 1));
+        gnome.belly = BELLY_FULL;
+        let mut colony = Colony::new(vec![gnome]);
+        // The cadence starts the colony able to plant on its first update.
+        colony.update(&mut w);
+
+        assert_eq!(colony.gnomes[0].last_act, Act::Planted);
+        assert_eq!(
+            w.material_at(GridIndex::new(6, 2)),
+            t::JUNIPER,
+            "the cutting should be in the course above the bush:\n{}",
+            crate::report::ascii_map(&w)
+        );
+        assert!(
+            // Within one step's breathing, which happens on the same update.
+            (colony.gnomes[0].belly - (BELLY_FULL - CUTTING_G)).abs() < 2.0 * RESPIRATION_G,
+            "the cutting came from somewhere other than the belly: {}",
+            colony.gnomes[0].belly
+        );
+        // Planting is matter entering the world, so it is booked — positive,
+        // which is the ledger coming back toward zero after a meal.
+        assert!(w.ledger().mass_conjured > 0.04);
+        assert!(w.conservation_residuals().mass.abs() < 1e-9);
+    }
+
+    /// ...and never on its own row, whatever is standing there — a hedge
+    /// across the walkway is a fence, and a gnome cannot climb a fence.
+    #[test]
+    fn a_gnome_never_plants_a_cutting_across_its_own_path() {
+        let mut w = cavern();
+        for i in 4..9 {
+            w.fill(GridIndex::new(i, 1), t::JUNIPER, 293.0);
+        }
+        w.rebaseline();
+        let mut gnome = Gnome::new(GridIndex::new(3, 1));
+        gnome.belly = BELLY_FULL;
+        let mut colony = Colony::new(vec![gnome]);
+        for _ in 0..PLANT_PERIOD * 3 {
+            colony.update(&mut w);
+        }
+        for i in 0..20 {
+            if (4..9).contains(&i) {
+                continue;
+            }
+            assert_ne!(
+                w.material_at(GridIndex::new(i, 1)),
+                t::JUNIPER,
+                "a cutting went in on the walkway at {i}:\n{}",
+                crate::report::ascii_map(&w)
+            );
+        }
     }
 
     #[test]

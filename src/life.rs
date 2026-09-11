@@ -433,21 +433,10 @@ pub fn spread(world: &mut World, metabolisms: &[Metabolism]) {
         let Some(q) = seed_target(world, p) else {
             continue;
         };
-        // Get the air out of the way, into the lowest-pressure gas cell
-        // beside it. If there is nowhere for it to go, the seed waits.
-        let outlet = neighbours(world, q)
-            .filter(|&r| r != p && world.is_gas_at(r))
-            .min_by(|&a, &b| {
-                crate::gas::pressure_at(world, a)
-                    .partial_cmp(&crate::gas::pressure_at(world, b))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-        let Some(outlet) = outlet else { continue };
-        for s in 0..crate::material::MIX_SLOTS {
-            let grams = world.cell_at(q).mix[s];
-            if grams > 0.0 {
-                crate::gas::move_species(world, q, outlet, s, grams);
-            }
+        // Get the air out of the way. If there is nowhere for it to go, the
+        // seed waits.
+        if !crate::gas::displace(world, q) {
+            continue;
         }
 
         let mut parent = world.cell_at(p);
