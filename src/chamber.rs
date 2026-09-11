@@ -168,7 +168,7 @@ impl GasChamber {
 /// Builds the chamber at the given size. 48x32 is the tuned default.
 pub fn gas_chamber(width: usize, height: usize) -> GasChamber {
     let (w, h) = (width as i32, height as i32);
-    let mut world = World::new(width, height, MaterialTable::terrarium(), t::AIR, 291.0);
+    let mut world = World::new_open(width, height, MaterialTable::terrarium(), 291.0);
     let room_k = 291.0;
 
     // Stone shell.

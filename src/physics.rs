@@ -45,7 +45,7 @@ use std::collections::HashMap;
 
 /// One fixed simulation step: movement, then gas flow and mixing, then
 /// conduction, then phase change, then evaporation and condensation, then
-/// chemistry.
+/// chemistry, then light and life.
 ///
 /// Order matters only for feel, not for conservation — each stage conserves
 /// on its own. Movement runs first so freshly fallen material conducts
@@ -63,6 +63,8 @@ pub fn step(world: &mut World, dt: Scalar) {
     apply_phase_changes(world);
     crate::vapour::step(world, dt);
     crate::chemistry::react(world);
+    crate::light::illuminate(world);
+    crate::life::step(world, dt);
     world.step_count = world.step_count.wrapping_add(1);
 }
 
@@ -814,7 +816,7 @@ mod tests {
     use crate::world::World;
 
     fn air_world(w: usize, h: usize) -> World {
-        World::new(w, h, MaterialTable::terrarium(), t::AIR, 290.0)
+        World::new_open(w, h, MaterialTable::terrarium(), 290.0)
     }
 
     // --- Movement ---

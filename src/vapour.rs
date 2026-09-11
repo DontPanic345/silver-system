@@ -643,7 +643,7 @@ mod tests {
     use crate::physics;
 
     fn world(w: usize, h: usize, temperature: Scalar) -> World {
-        World::new(w, h, MaterialTable::terrarium(), t::AIR, temperature)
+        World::new_open(w, h, MaterialTable::terrarium(), temperature)
     }
 
     fn water_volatile(w: &World) -> Volatile {

@@ -119,11 +119,28 @@ pub struct Material {
     pub latent_energy: Scalar,
     /// How this material moves under gravity — see [`Mobility`].
     pub mobility: Mobility,
-    /// Whether a gnome standing in this material can breathe it. Air and
-    /// steam are breathable-ish; water, stone and lava are not. Used only
-    /// by the gnome layer, but it lives here for the same reason every
-    /// other property does: no per-material `if` chains elsewhere.
+    /// Whether this species is what a gnome actually breathes — the
+    /// oxidiser, not "air". Only oxygen carries it.
+    ///
+    /// This used to be set on air and on steam, and it was the wrong shape
+    /// as soon as gas cells became mixtures: a cell labelled "air" can be
+    /// three quarters CO₂ and a cell labelled "CO₂" can still hold plenty of
+    /// oxygen, so a flag read off the *label* answers a question about the
+    /// wrong thing. The rule that reads it now sums the partial pressure of
+    /// every breathable species in the mixture — see
+    /// [`crate::world::Cell::breathable_pressure`] — which is what makes
+    /// suffocation a property of the air a gnome is standing in rather than
+    /// of what that air is mostly made of.
     pub breathable: bool,
+    /// Fraction of the light falling on this cell that it absorbs, per
+    /// cell of depth. Zero for a gas (a room of air is not a shade), high
+    /// for rock and for leaves.
+    ///
+    /// Read by `src/light.rs`, which marches sunlight down each column and
+    /// attenuates it by this. It is the one number that makes shade — and
+    /// therefore where a plant will grow — a property of what is standing
+    /// in the way rather than of a rule naming any particular material.
+    pub opacity: Scalar,
     /// Specific gas constant `R` in J/(g·K), or `0.0` for anything that
     /// isn't a gas.
     ///
@@ -184,9 +201,22 @@ impl Material {
                 Phase::Liquid | Phase::Gas => Mobility::Flowing,
             },
             breathable: false,
+            opacity: match phase {
+                // A gas is transparent; everything condensed is not. These
+                // are defaults, overridable per material — water is clearer
+                // than rock and says so below.
+                Phase::Gas => 0.0,
+                _ => 1.0,
+            },
             gas_constant: 0.0,
             thermal_expansion: 0.0,
         }
+    }
+
+    /// Sets [`Material::opacity`], builder-style.
+    pub fn with_opacity(mut self, opacity: Scalar) -> Self {
+        self.opacity = opacity.clamp(0.0, 1.0);
+        self
     }
 
     /// Sets [`Material::thermal_expansion`], builder-style.
@@ -354,6 +384,112 @@ pub struct Reaction {
     pub direction: Direction,
 }
 
+/// One side of a [`Metabolism`]'s books: so many grams of a material, per
+/// unit of turnover.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Reagent {
+    pub material: MaterialId,
+    pub grams: Scalar,
+}
+
+/// Shorthand for a [`Reagent`].
+pub const fn reagent(material: MaterialId, grams: Scalar) -> Reagent {
+    Reagent { material, grams }
+}
+
+/// A living process: a cell of `host` draws `intake` out of itself and its
+/// neighbours and puts `output` back, in **declared mass proportions**.
+///
+/// This is the biology tier of `NORTH_STARS.md` #2's ordering (physics →
+/// chemistry → biology → game layer), and it exists because the tier below
+/// it cannot express what life does. A [`Reaction`] is a *relabelling*: each
+/// of two touching cells keeps its own mass and only changes what it is
+/// called, which is why `src/chemistry.rs`'s doc comment says flatly that it
+/// has no stoichiometry. But `6 CO₂ + 6 H₂O → C₆H₁₂O₆ + 6 O₂` is nothing
+/// *but* stoichiometry — a gram of plant is made of 1.47 g of carbon dioxide
+/// and 0.6 g of water, and gives 1.07 g of oxygen back, and if those ratios
+/// are not obeyed the carbon in a jar is not conserved even when the total
+/// mass is.
+///
+/// So a metabolism moves real, unequal masses between cells. Conservation is
+/// still by construction, in two parts:
+///
+/// - **Mass.** `Σ intake == Σ output` is asserted when the table is built,
+///   and the runtime moves exactly those grams: what leaves the donors
+///   arrives in the host, and what leaves the host arrives in the acceptors.
+/// - **Energy.** Every parcel of mass carries its own enthalpy with it, and
+///   the *host* settles the difference — so the heat of the process shows up
+///   as the host cell's temperature changing, and cannot be anything else.
+///   See `src/life.rs`.
+///
+/// `heat` is the energy released per unit of turnover, J, at `heat_at_k`,
+/// and it is a declaration in exactly the sense [`Arm::heat`] is: it pins
+/// the participating materials' [`Material::latent_energy`] offsets, through
+/// the same single relaxation that already solves them from transitions and
+/// reactions. Declaring it on one direction of a process therefore fixes the
+/// other direction for free — photosynthesis and respiration cannot disagree
+/// about the energy in a gram of plant, because only one of them is allowed
+/// to say.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Metabolism {
+    /// For reports and test failures; never matched on.
+    pub name: &'static str,
+    /// The living cell that runs the process. Reagents are drawn from it
+    /// and its four neighbours, and products are put back the same way.
+    pub host: MaterialId,
+    /// Grams consumed per unit of turnover.
+    pub intake: Vec<Reagent>,
+    /// Grams produced per unit of turnover.
+    pub output: Vec<Reagent>,
+    /// Units of turnover per second, at full drive.
+    pub rate: Scalar,
+    /// The band of incident light this process runs in, as a fraction of
+    /// full sun — see `src/light.rs`. Photosynthesis wants the bright half,
+    /// a plant's own respiration the dark half, and a process that does not
+    /// care takes the whole range.
+    pub light_min: Scalar,
+    pub light_max: Scalar,
+    /// The temperature band it runs in. Outside it, nothing happens: a
+    /// frozen bush does not grow and a boiled one does not either.
+    pub min_k: Scalar,
+    pub max_k: Scalar,
+    /// Energy released per unit of turnover, J, or `None` for "whatever the
+    /// rest of the table already implies" — see [`Arm::heat`], which this
+    /// follows exactly.
+    pub heat: Option<Scalar>,
+    /// The temperature `heat` is quoted at.
+    pub heat_at_k: Scalar,
+}
+
+impl Metabolism {
+    /// Total grams on each side, which the table asserts are equal.
+    pub fn intake_grams(&self) -> Scalar {
+        self.intake.iter().map(|r| r.grams).sum()
+    }
+
+    pub fn output_grams(&self) -> Scalar {
+        self.output.iter().map(|r| r.grams).sum()
+    }
+
+    /// Net grams of the host material this process gains per unit of
+    /// turnover: positive for growth, negative for a plant burning itself.
+    pub fn host_gain(&self) -> Scalar {
+        let out: Scalar = self
+            .output
+            .iter()
+            .filter(|r| r.material == self.host)
+            .map(|r| r.grams)
+            .sum();
+        let inn: Scalar = self
+            .intake
+            .iter()
+            .filter(|r| r.material == self.host)
+            .map(|r| r.grams)
+            .sum();
+        out - inn
+    }
+}
+
 /// The most species a single gas cell can hold at once — every gas in the
 /// table plus every liquid a gas condenses into (carried as suspended mist).
 /// A fixed-size array rather than a map because it is copied with every
@@ -423,6 +559,11 @@ pub struct MaterialTable {
     evaporating: Vec<Volatile>,
     /// Vapours that condense, read off cooling transitions into a liquid.
     condensing: Vec<Volatile>,
+    /// What a cell of open air in this world is made of — see
+    /// [`MaterialTable::atmosphere`].
+    atmosphere: Vec<(MaterialId, Scalar)>,
+    /// Living processes — see [`Metabolism`].
+    metabolisms: Vec<Metabolism>,
     /// Per-slot copies of the properties every mixture sum reads — see
     /// [`SlotProps`].
     slot_props: SlotProps,
@@ -438,6 +579,9 @@ pub struct SlotProps {
     pub latent_energy: [Scalar; MIX_SLOTS],
     pub gas_constant: [Scalar; MIX_SLOTS],
     pub is_gas: [bool; MIX_SLOTS],
+    /// Whether this slot's species is one a gnome can breathe — see
+    /// [`Material::breathable`].
+    pub breathable: [bool; MIX_SLOTS],
 }
 
 impl MaterialTable {
@@ -456,10 +600,43 @@ impl MaterialTable {
             slot_of: Vec::new(),
             evaporating: Vec::new(),
             condensing: Vec::new(),
+            atmosphere: Vec::new(),
+            metabolisms: Vec::new(),
             slot_props: SlotProps::default(),
         };
         table.index_mixtures();
         table
+    }
+
+    /// Declares what a cell of open air in this world holds, in grams per
+    /// species — see [`MaterialTable::atmosphere`].
+    pub fn with_atmosphere(mut self, mix: Vec<(MaterialId, Scalar)>) -> Self {
+        self.atmosphere = mix;
+        self
+    }
+
+    /// What a cell of open air in this world is made of, in grams per
+    /// species.
+    ///
+    /// Before night 5 there was no such thing: "air" was a single material
+    /// and a cell of it was pure. That was fine while nothing consumed any
+    /// part of the air, and wrong the moment something did — a gnome
+    /// breathes *oxygen*, not air, and a plant gives oxygen back, so the two
+    /// have to be different entries in the same mixture or neither can
+    /// happen. The composition is the real one, by mole fraction, and the
+    /// masses are derived from it rather than typed in, so a cell of open
+    /// air sits at exactly [`MaterialTable::reference_pressure`] and a world
+    /// painted with it starts with no pressure step anywhere in it.
+    ///
+    /// Empty for a table that never declared one, in which case a caller
+    /// asking for open air gets a single full cell of the first gas.
+    pub fn atmosphere(&self) -> &[(MaterialId, Scalar)] {
+        &self.atmosphere
+    }
+
+    /// This table's living processes — see [`Metabolism`].
+    pub fn metabolisms(&self) -> &[Metabolism] {
+        &self.metabolisms
     }
 
     /// Per-slot species properties — see [`SlotProps`].
@@ -617,6 +794,7 @@ impl MaterialTable {
             props.latent_energy[s] = m.latent_energy;
             props.gas_constant[s] = m.gas_constant;
             props.is_gas[s] = is_gas(m);
+            props.breathable[s] = m.breathable;
         }
         self.slots = slots;
         self.slot_of = slot_of;
@@ -670,45 +848,77 @@ impl MaterialTable {
     ///
     /// Panics if two rules imply contradictory offsets for the same
     /// material — that is a badly specified table, and it should be loud.
-    pub fn with_chemistry(
+    pub fn with_chemistry(self, transitions: Vec<Transition>, reactions: Vec<Reaction>) -> Self {
+        self.with_biology(transitions, reactions, Vec::new())
+    }
+
+    /// [`MaterialTable::with_chemistry`], plus the table's living processes
+    /// — see [`Metabolism`]. All three rule kinds feed the same one
+    /// relaxation, for the reason spelled out there: a material that takes
+    /// part in a phase change, a reaction *and* a metabolism must come out
+    /// of it with one enthalpy offset, not three.
+    pub fn with_biology(
         mut self,
         transitions: Vec<Transition>,
         reactions: Vec<Reaction>,
+        metabolisms: Vec<Metabolism>,
     ) -> Self {
         let n = self.materials.len();
-        let capacity = |i: usize, materials: &[Material]| materials[i].heat_capacity;
 
-        // One constraint per declared material change: `offset[to] ==
-        // offset[from] + shift`. Both rule kinds reduce to this.
+        // Every declared rule reduces to one linear equation in the
+        // materials' enthalpy offsets:
+        //
+        //     Σ_terms  grams · L[material]  ==  rhs
+        //
+        // with `grams` positive for what the rule produces and negative for
+        // what it consumes, and
+        //
+        //     rhs = -released - Θ · Σ_terms grams · c[material].
+        //
+        // A two-material transition or reaction arm is just the two-term
+        // case of it — which is why this replaced the pairwise solver rather
+        // than sitting beside it. A metabolism is the same equation with
+        // five or six terms and unequal coefficients.
         struct Constraint {
-            from: usize,
-            to: usize,
-            shift: Scalar,
+            terms: Vec<(usize, Scalar)>,
+            rhs: Scalar,
             source: &'static str,
         }
         let mut constraints: Vec<Constraint> = Vec::new();
-        let mut push = |from: MaterialId,
-                        to: MaterialId,
-                        absorbed: Scalar,
+        let mut push = |terms: Vec<(MaterialId, Scalar)>,
+                        released: Scalar,
                         threshold_k: Scalar,
                         source: &'static str,
                         materials: &[Material]| {
-            let (a, b) = (from.0 as usize, to.0 as usize);
-            if a == b {
+            // Combine repeated materials, so water appearing on both sides
+            // of a process contributes its net coefficient once.
+            let mut combined: Vec<(usize, Scalar)> = Vec::new();
+            for (id, grams) in terms {
+                let i = id.0 as usize;
+                match combined.iter_mut().find(|(m, _)| *m == i) {
+                    Some(entry) => entry.1 += grams,
+                    None => combined.push((i, grams)),
+                }
+            }
+            combined.retain(|&(_, grams)| grams != 0.0);
+            if combined.is_empty() {
                 return;
             }
+            let sensible: Scalar = combined
+                .iter()
+                .map(|&(m, grams)| grams * materials[m].heat_capacity)
+                .sum();
             constraints.push(Constraint {
-                from: a,
-                to: b,
-                shift: absorbed + (capacity(a, materials) - capacity(b, materials)) * threshold_k,
+                terms: combined,
+                rhs: -released - threshold_k * sensible,
                 source,
             });
         };
         for tr in &transitions {
+            // A transition's `latent_heat` is energy *absorbed*.
             push(
-                tr.from,
-                tr.to,
-                tr.latent_heat,
+                vec![(tr.to, 1.0), (tr.from, -1.0)],
+                -tr.latent_heat,
                 tr.threshold_k,
                 "transition",
                 &self.materials,
@@ -716,13 +926,10 @@ impl MaterialTable {
         }
         for r in &reactions {
             for arm in [r.subject, r.partner] {
-                // `heat` is energy released, the opposite sign to a
-                // transition's absorbed `latent_heat`.
                 if let Some(heat) = arm.heat {
                     push(
-                        arm.from,
-                        arm.to,
-                        -heat,
+                        vec![(arm.to, 1.0), (arm.from, -1.0)],
+                        heat,
                         r.threshold_k,
                         "reaction",
                         &self.materials,
@@ -730,43 +937,65 @@ impl MaterialTable {
                 }
             }
         }
+        for m in &metabolisms {
+            if let Some(heat) = m.heat {
+                let terms = m
+                    .output
+                    .iter()
+                    .map(|r| (r.material, r.grams))
+                    .chain(m.intake.iter().map(|r| (r.material, -r.grams)))
+                    .collect();
+                push(terms, heat, m.heat_at_k, "metabolism", &self.materials);
+            }
+        }
 
         let mut offset: Vec<Option<Scalar>> = vec![None; n];
-        // Relaxation: propagate from whatever is already pinned, seeding a
-        // fresh component at zero whenever a pass makes no progress.
+        // Relaxation: solve any constraint down to its last unknown, seeding
+        // a fresh component at zero whenever a pass makes no progress.
         loop {
             let mut progressed = false;
             for c in &constraints {
-                match (offset[c.from], offset[c.to]) {
-                    (Some(la), None) => {
-                        offset[c.to] = Some(la + c.shift);
-                        progressed = true;
+                let unknown: Vec<usize> = c
+                    .terms
+                    .iter()
+                    .filter(|&&(m, _)| offset[m].is_none())
+                    .map(|&(m, _)| m)
+                    .collect();
+                let known_sum: Scalar = c
+                    .terms
+                    .iter()
+                    .filter_map(|&(m, grams)| offset[m].map(|l| grams * l))
+                    .sum();
+                match unknown.len() {
+                    0 => assert!(
+                        (known_sum - c.rhs).abs() <= 1e-2 * (1.0 + c.rhs.abs()),
+                        "this {} implies Σ grams·L == {}, but the offsets another rule already \
+                         fixed make it {} — the table's chemistry contradicts itself \
+                         (materials {:?})",
+                        c.source,
+                        c.rhs,
+                        known_sum,
+                        c.terms.iter().map(|&(m, _)| m).collect::<Vec<_>>()
+                    ),
+                    1 => {
+                        let m = unknown[0];
+                        let grams = c.terms.iter().find(|&&(x, _)| x == m).map(|&(_, g)| g);
+                        if let Some(grams) = grams {
+                            offset[m] = Some((c.rhs - known_sum) / grams);
+                            progressed = true;
+                        }
                     }
-                    (None, Some(lb)) => {
-                        offset[c.from] = Some(lb - c.shift);
-                        progressed = true;
-                    }
-                    (Some(la), Some(lb)) => {
-                        assert!(
-                            (lb - (la + c.shift)).abs() <= 1e-2 * (1.0 + lb.abs()),
-                            "{} {} -> {} implies a latent-energy offset of {} for material {}, \
-                             but another rule already fixed it at {} — the table's chemistry \
-                             contradicts itself",
-                            c.source,
-                            c.from,
-                            c.to,
-                            la + c.shift,
-                            c.to,
-                            lb
-                        );
-                    }
-                    (None, None) => {}
+                    _ => {}
                 }
             }
             if !progressed {
                 // Seed the next unresolved component, if any remains.
-                match constraints.iter().find(|c| offset[c.from].is_none()) {
-                    Some(c) => offset[c.from] = Some(0.0),
+                match constraints
+                    .iter()
+                    .flat_map(|c| c.terms.iter())
+                    .find(|&&(m, _)| offset[m].is_none())
+                {
+                    Some(&(m, _)) => offset[m] = Some(0.0),
                     None => break,
                 }
             }
@@ -776,6 +1005,17 @@ impl MaterialTable {
             if let Some(value) = o {
                 self.materials[i].latent_energy = value;
             }
+        }
+
+        for m in &metabolisms {
+            assert!(
+                (m.intake_grams() - m.output_grams()).abs() <= 1e-9 * m.intake_grams().max(1.0),
+                "metabolism {:?} takes in {} g and gives back {} g — a living process moves \
+                 mass around, it does not make any",
+                m.name,
+                m.intake_grams(),
+                m.output_grams()
+            );
         }
 
         // A reaction arm acting on a gas rewrites one species *inside* a
@@ -801,6 +1041,7 @@ impl MaterialTable {
 
         self.transitions = transitions;
         self.reactions = reactions;
+        self.metabolisms = metabolisms;
         self.index_mixtures();
         self
     }
@@ -937,14 +1178,37 @@ impl MaterialTable {
         // the wash instead of rising to the ceiling, and it is not a rule
         // anyone wrote: it is 8.314/46.07.
         const R_SPIRIT: Scalar = 0.1805;
+        // Oxygen: 8.314/32. Heavier than the air it is mixed into, which is
+        // why a still room's oxygen sits very slightly low — and why a
+        // gnome in a cellar is in more trouble than one on a ladder.
+        const R_O2: Scalar = 0.2598;
         const RHO_AIR: Scalar = 0.0012;
         const P0: Scalar = RHO_AIR * R_AIR * T0;
+        /// Mole fraction of oxygen in open air.
+        const X_O2: Scalar = 0.21;
 
-        let mut materials = vec![Material::new(0.0, 0.0, 0.0, 0.0, Phase::Gas, (0, 0, 0)); 13];
+        let mut materials = vec![Material::new(0.0, 0.0, 0.0, 0.0, Phase::Gas, (0, 0, 0)); 14];
+        // "Air" is now the *inert* bulk of the atmosphere — the nitrogen and
+        // argon that a gnome breathes in and straight back out, and that a
+        // fire leaves alone. What a gnome actually needs is `OXYGEN`, which
+        // is a separate species sharing the same cells. Air keeps the
+        // standard air gas constant rather than nitrogen's 0.2968: every
+        // scenario in this crate is tuned against the density it implies,
+        // and the 3% difference buys nothing that is worth re-tuning three
+        // scenarios for.
         materials[t::AIR.0 as usize] =
             Material::new(RHO_AIR, 0.02, 1.005, 0.05, Phase::Gas, (16, 18, 28))
-                .breathable()
                 .with_gas_constant(R_AIR);
+        materials[t::OXYGEN.0 as usize] = Material::new(
+            P0 / (R_O2 * T0),
+            0.02,
+            0.918,
+            0.05,
+            Phase::Gas,
+            (60, 110, 170),
+        )
+        .breathable()
+        .with_gas_constant(R_O2);
         materials[t::STEAM.0 as usize] = Material::new(
             P0 / (R_STEAM * T0),
             0.01,
@@ -953,7 +1217,6 @@ impl MaterialTable {
             Phase::Gas,
             (170, 180, 200),
         )
-        .breathable()
         .with_gas_constant(R_STEAM);
         // Carbon dioxide: heavier than air at the same pressure, and not
         // breathable. `NORTH_STARS.md` #4 names ONI's gas handling as one of
@@ -982,9 +1245,10 @@ impl MaterialTable {
         // real one very much does.
         materials[t::WATER.0 as usize] =
             Material::new(1.0, 0.5, 4.186, 0.6, Phase::Liquid, (40, 90, 200))
-                .with_thermal_expansion(5e-4);
+                .with_thermal_expansion(5e-4)
+                .with_opacity(0.2);
         materials[t::ICE.0 as usize] =
-            Material::new(0.92, 0.0, 2.093, 2.2, Phase::Solid, (170, 210, 240));
+            Material::new(0.92, 0.0, 2.093, 2.2, Phase::Solid, (170, 210, 240)).with_opacity(0.15);
         materials[t::SAND.0 as usize] =
             Material::new(1.6, 0.0, 0.83, 0.3, Phase::Solid, (200, 175, 105))
                 .with_mobility(Mobility::Granular);
@@ -992,8 +1256,11 @@ impl MaterialTable {
             Material::new(2.5, 0.0, 0.8, 2.0, Phase::Solid, (105, 105, 115));
         materials[t::LAVA.0 as usize] =
             Material::new(2.4, 8.0, 1.0, 1.5, Phase::Liquid, (235, 110, 40));
+        // A bush shades what is under it — nearly, but not quite, wholly:
+        // enough that a second bush directly beneath a first one grows
+        // slowly, which is the whole of why plants have a shape.
         materials[t::JUNIPER.0 as usize] =
-            Material::new(0.5, 0.0, 2.0, 0.2, Phase::Solid, (70, 130, 90));
+            Material::new(0.5, 0.0, 2.0, 0.2, Phase::Solid, (70, 130, 90)).with_opacity(0.8);
         // The brewing chain. `wash` is what a warm tun makes of juniper and
         // water; it boils into `spirit` 22 K below water's boiling point,
         // and `spirit` condenses back into `gin`. Nothing in that chain is
@@ -1009,7 +1276,8 @@ impl MaterialTable {
         // off the still inside half a minute of simulated time.
         materials[t::WASH.0 as usize] =
             Material::new(1.02, 0.6, 3.9, 6.0, Phase::Liquid, (150, 112, 62))
-                .with_thermal_expansion(5e-4);
+                .with_thermal_expansion(5e-4)
+                .with_opacity(0.45);
         materials[t::SPIRIT.0 as usize] = Material::new(
             P0 / (R_SPIRIT * T0),
             0.01,
@@ -1021,7 +1289,8 @@ impl MaterialTable {
         .with_gas_constant(R_SPIRIT);
         materials[t::GIN.0 as usize] =
             Material::new(0.94, 0.35, 2.44, 0.6, Phase::Liquid, (196, 224, 236))
-                .with_thermal_expansion(1.1e-3);
+                .with_thermal_expansion(1.1e-3)
+                .with_opacity(0.12);
         materials[t::CHARCOAL.0 as usize] =
             Material::new(0.45, 0.0, 0.84, 0.25, Phase::Solid, (38, 34, 32))
                 .with_mobility(Mobility::Granular);
@@ -1081,9 +1350,81 @@ impl MaterialTable {
             },
         ];
 
+        // Biology. Two rows, and they are each other's exact reverse — the
+        // carbon cycle, written once.
+        //
+        // The proportions are the real ones. Photosynthesis is
+        // `6 CO₂ + 6 H₂O → C₆H₁₂O₆ + 6 O₂`, and per gram of sugar (180
+        // g/mol) that is 264/180 g of carbon dioxide and 108/180 g of water
+        // in, 192/180 g of oxygen out. Juniper stands in for the sugar,
+        // which is the one liberty taken: a bush is not glucose, but its
+        // carbon came in through this door and leaves through it.
+        const CO2_PER_G: Scalar = 264.0 / 180.0;
+        const H2O_PER_G: Scalar = 108.0 / 180.0;
+        const O2_PER_G: Scalar = 192.0 / 180.0;
+        /// Energy stored per gram of plant built, J. Tuned, and flagged the
+        /// same way `Q_BURN` above is: real photosynthesis banks about
+        /// 15 600 J in a gram of sugar, and a cell of plant respiring that
+        /// back at any watchable rate would cook itself, because a cell
+        /// cannot shed heat the way a leaf in moving air does. This figure
+        /// is the same order as the latent heats already in this table,
+        /// which is the scale the rest of the simulation is tuned at.
+        const Q_PHOTO: Scalar = 2000.0;
+        /// The band a plant works in: above freezing, below the temperature
+        /// at which its own water would be leaving faster than it arrives.
+        const T_GROW_MIN: Scalar = 279.0;
+        const T_GROW_MAX: Scalar = 330.0;
+        /// Light, as a fraction of full sun, that divides a plant's day
+        /// from its night.
+        const DAYLIGHT: Scalar = 0.25;
+
+        let metabolisms = vec![
+            // Photosynthesis: the one declared energy figure in the cycle.
+            // Everything downstream — how much heat a rotting bush gives
+            // back, how warm a gnome's breath is — follows from it.
+            Metabolism {
+                name: "photosynthesis",
+                host: t::JUNIPER,
+                intake: vec![reagent(t::CO2, CO2_PER_G), reagent(t::WATER, H2O_PER_G)],
+                output: vec![reagent(t::JUNIPER, 1.0), reagent(t::OXYGEN, O2_PER_G)],
+                rate: 6.0e-4,
+                light_min: DAYLIGHT,
+                light_max: 1.0,
+                min_k: T_GROW_MIN,
+                max_k: T_GROW_MAX,
+                heat: Some(-Q_PHOTO),
+                heat_at_k: T0,
+            },
+            // ...and a plant's own respiration, which is that run backwards
+            // in the dark. Declaring nothing is the point: its heat is
+            // forced to be exactly what photosynthesis banked, so a bush
+            // cannot be a battery that gains on the round trip.
+            Metabolism {
+                name: "plant respiration",
+                host: t::JUNIPER,
+                intake: vec![reagent(t::JUNIPER, 1.0), reagent(t::OXYGEN, O2_PER_G)],
+                output: vec![reagent(t::CO2, CO2_PER_G), reagent(t::WATER, H2O_PER_G)],
+                rate: 1.2e-4,
+                light_min: 0.0,
+                light_max: DAYLIGHT,
+                min_k: T_GROW_MIN,
+                max_k: T_IGNITE,
+                heat: None,
+                heat_at_k: T0,
+            },
+        ];
+
+        // Open air, by mole fraction: partial pressures add to exactly the
+        // reference pressure, so a world painted with it starts flat.
+        let atmosphere = vec![
+            (t::AIR, (1.0 - X_O2) * P0 / (R_AIR * T0)),
+            (t::OXYGEN, X_O2 * P0 / (R_O2 * T0)),
+        ];
+
         MaterialTable::new(materials)
-            .with_chemistry(transitions, reactions)
+            .with_biology(transitions, reactions, metabolisms)
             .with_reference_pressure(P0)
+            .with_atmosphere(atmosphere)
     }
 }
 
@@ -1112,11 +1453,16 @@ pub mod terrarium {
     pub const GIN: MaterialId = MaterialId(11);
     /// What is left of a botanical that burned instead of being brewed.
     pub const CHARCOAL: MaterialId = MaterialId(12);
+    /// The gas a gnome actually breathes and a plant actually makes.
+    /// Appended at the end, after the twelve ids every earlier scenario and
+    /// test already names.
+    pub const OXYGEN: MaterialId = MaterialId(13);
 
     /// Every id above, in table order — for tests and reporting that want
     /// to iterate the whole table by name.
-    pub const ALL: [MaterialId; 13] = [
+    pub const ALL: [MaterialId; 14] = [
         AIR, STEAM, WATER, ICE, SAND, STONE, LAVA, JUNIPER, CO2, WASH, SPIRIT, GIN, CHARCOAL,
+        OXYGEN,
     ];
 
     /// Human-readable name for a terrarium id, for JSON reports.
@@ -1135,6 +1481,7 @@ pub mod terrarium {
             10 => "spirit",
             11 => "gin",
             12 => "charcoal",
+            13 => "oxygen",
             _ => "unknown",
         }
     }

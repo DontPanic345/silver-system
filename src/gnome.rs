@@ -73,6 +73,57 @@ pub const LETHAL_MAX: Scalar = 340.0;
 
 /// Steps a gnome can hold its breath in something unbreathable.
 pub const BREATH_STEPS: u32 = 40;
+
+/// The partial pressure of breathable gas a gnome needs, as a fraction of
+/// one atmosphere. Open air is 0.21 of an atmosphere of oxygen, and a human
+/// is in trouble below about half of that; a gnome is hardier.
+///
+/// Before night 5 there was no such number, because "can I breathe here" was
+/// a flag on the material a cell was *labelled* with. That answered the
+/// wrong question as soon as gas cells became mixtures — and it made the
+/// whole ONI complaint that `NORTH_STARS.md` #4 is built around
+/// unreachable, since a room cannot run out of air if nothing in it is ever
+/// consumed. Now a gnome suffocates in a sealed room because it has actually
+/// breathed the oxygen out of it, and the bushes put it back.
+pub const MIN_BREATHABLE: Scalar = 0.08;
+
+/// Grams of biomass a gnome burns per step, and the gnome's body
+/// temperature — the two numbers respiration is made of.
+///
+/// The rate is tuned, and the reason is a scale mismatch worth writing down.
+/// A creature this size really does burn a few milligrams of sugar a second;
+/// the jar it lives in holds about a gram of air, a quarter of which is
+/// oxygen. At a realistic rate four gnomes would breathe a sealed terrarium
+/// flat in half a minute of simulated time, which is not a colony sim, it is
+/// an execution. The grid's cells are not metres and a gnome is not a cell,
+/// so there is no consistent scale to appeal to here; this figure is chosen
+/// so a colony spends roughly a fifth of its jar's oxygen over the few
+/// minutes a demonstration runs for, which is enough that the bushes putting
+/// it back is a fact you can read off a graph rather than a claim.
+pub const RESPIRATION_G: Scalar = 3.0e-6;
+pub const BODY_K: Scalar = 310.0;
+
+/// The stoichiometry of burning a gram of biomass, taken straight off the
+/// table's own photosynthesis row so the two can never drift apart: a gnome
+/// undoes exactly what a plant did.
+fn respiration_ratios(world: &World) -> Option<(Scalar, Scalar, Scalar)> {
+    let m = world
+        .materials()
+        .metabolisms()
+        .iter()
+        .find(|m| m.name == "photosynthesis")?;
+    let grams = |rs: &[crate::material::Reagent], id| {
+        rs.iter()
+            .filter(|r| r.material == id)
+            .map(|r| r.grams)
+            .sum::<Scalar>()
+    };
+    Some((
+        grams(&m.output, t::OXYGEN),
+        grams(&m.intake, t::CO2),
+        grams(&m.intake, t::WATER),
+    ))
+}
 /// How close an embodied gnome must be to pull one back from the ethereal
 /// layer, and how many steps of proximity it takes.
 pub const RESCUE_RADIUS: i32 = 4;
@@ -123,6 +174,18 @@ pub struct Gnome {
     pub last_act: Act,
     /// Which way this gnome is walking.
     pub facing: i8,
+    /// Grams of biomass eaten and not yet breathed out again.
+    ///
+    /// A gnome's body is the one part of this world that is outside the
+    /// simulation, and this is how much of the world is currently inside it.
+    /// Everything that goes in is booked out of the [`Ledger`] and
+    /// everything that comes back is booked in, so a gnome that has eaten a
+    /// berry and finished digesting it has left the world's books exactly
+    /// where it found them — which is what makes the jar's carbon cycle
+    /// closed rather than merely tidy.
+    ///
+    /// [`Ledger`]: crate::world::Ledger
+    pub belly: Scalar,
 }
 
 impl Gnome {
@@ -135,6 +198,7 @@ impl Gnome {
             breath: BREATH_STEPS,
             last_act: Act::Idle,
             facing: 1,
+            belly: 0.0,
         }
     }
 
@@ -355,11 +419,14 @@ impl Colony {
             1.0
         };
         let mostly_empty = here.phase == Phase::Liquid && fill < 0.5;
-        if here.breathable || mostly_empty {
+        let air_here = cell.breathable_pressure(world.materials())
+            >= MIN_BREATHABLE * world.materials().reference_pressure();
+        if air_here || mostly_empty {
             self.gnomes[idx].breath = BREATH_STEPS;
         } else if self.gnomes[idx].breath > 0 {
             self.gnomes[idx].breath -= 1;
         }
+        self.respire(world, idx, pos);
 
         // --- Lethal heat or cold: mitigate with Gin, or leave the world ---
         let too_hot = cell.temperature > LETHAL_MAX;
@@ -398,11 +465,14 @@ impl Colony {
             }
             // A cheap Gin-powered gasp: replace the cell you are stuck in
             // with breathable air. Costs matter, so it is not free.
-            let cost = world.materials().get(t::AIR).density * GIN_PER_GRAM + 4.0;
+            let cost = world.materials().get(t::OXYGEN).density * GIN_PER_GRAM + 4.0;
             if self.gnomes[idx].can_afford(cost) {
                 self.spend(world, idx, cost);
-                let air_mass = world.materials().get(t::AIR).density;
-                world.conjure_mass(pos, t::AIR, air_mass, cell.temperature);
+                // Oxygen, not "air": a bubble of the inert bulk of the
+                // atmosphere would be no help at all now that breathing
+                // reads what is actually in a cell.
+                let gasp = world.materials().get(t::OXYGEN).density;
+                world.conjure_mass(pos, t::OXYGEN, gasp, cell.temperature);
                 self.gnomes[idx].breath = BREATH_STEPS;
                 self.gnomes[idx].last_act = Act::Breathed;
                 return;
@@ -441,6 +511,49 @@ impl Colony {
         }
     }
 
+    /// Burns a little of what this gnome has eaten, against the oxygen in
+    /// the cell it is standing in, and breathes out carbon dioxide and water
+    /// vapour — the other half of the jar's carbon cycle, and the reason a
+    /// sealed room full of gnomes eventually runs out of air.
+    ///
+    /// The proportions are read off the material table's own photosynthesis
+    /// row (see [`respiration_ratios`]), so a gnome undoes precisely what a
+    /// bush did, gram for gram, and the carbon in a jar goes round rather
+    /// than accumulating anywhere. Everything moves through
+    /// [`World::conjure_mass`]: what the gnome eats leaves the world's
+    /// books and what it exhales comes back, so a gnome part-way through
+    /// digesting a berry shows up as a small non-zero ledger entry and a
+    /// gnome that has finished shows up as none.
+    ///
+    /// Exhaled at [`BODY_K`] rather than at ambient, which is the whole of
+    /// how a gnome warms the room it is in.
+    fn respire(&mut self, world: &mut World, idx: usize, pos: GridIndex) {
+        let belly = self.gnomes[idx].belly;
+        if belly <= 0.0 {
+            return;
+        }
+        let Some((o2_per_g, co2_per_g, h2o_per_g)) = respiration_ratios(world) else {
+            return;
+        };
+        let cell = world.cell(pos);
+        if !cell.is_gas(world.materials()) {
+            return;
+        }
+        let oxygen = cell.grams_of(world.materials(), t::OXYGEN);
+        // Half the oxygen in the cell at most, so a gnome cannot strip its
+        // own cell bare in one step and suffocate itself instantly.
+        let burn = belly
+            .min(RESPIRATION_G)
+            .min(0.5 * oxygen / o2_per_g.max(1e-12));
+        if burn <= 0.0 {
+            return;
+        }
+        world.conjure_mass(pos, t::OXYGEN, -burn * o2_per_g, cell.temperature);
+        world.conjure_mass(pos, t::CO2, burn * co2_per_g, BODY_K);
+        world.conjure_mass(pos, t::STEAM, burn * h2o_per_g, BODY_K);
+        self.gnomes[idx].belly -= burn;
+    }
+
     /// Refills the flask from whatever is within reach: a cell of gin
     /// first, a juniper bush second. Returns whether anything was drunk or
     /// eaten.
@@ -466,9 +579,13 @@ impl Colony {
             }
         }
         if let Some(bush) = self.find_adjacent(world, pos, t::JUNIPER) {
-            world.conjure_mass(bush, t::JUNIPER, -BERRY_MASS, temperature);
+            let picked = -world.conjure_mass(bush, t::JUNIPER, -BERRY_MASS, temperature);
+            if picked <= 0.0 {
+                return false;
+            }
             let g = &mut self.gnomes[idx];
-            g.gin = (g.gin + GIN_PER_BERRY).min(MAX_GIN);
+            g.gin = (g.gin + GIN_PER_BERRY * picked / BERRY_MASS).min(MAX_GIN);
+            g.belly += picked;
             g.last_act = Act::Foraged;
             return true;
         }
@@ -491,6 +608,11 @@ impl Colony {
         world.conjure_mass(cup, t::GIN, -held, temperature);
         let g = &mut self.gnomes[idx];
         g.gin = (g.gin + held * GIN_PER_GRAM_DRUNK).min(MAX_GIN);
+        // Ethanol is biomass too: it goes into the same belly and comes
+        // back out of the same lungs. Treated at juniper's proportions,
+        // which is the one liberty — a gram of spirit oxidises to rather
+        // more CO₂ than a gram of sugar does.
+        g.belly += held;
         g.last_act = Act::Drank;
         true
     }
@@ -641,7 +763,7 @@ mod tests {
     use crate::physics;
 
     fn cavern() -> World {
-        let mut w = World::new(20, 12, MaterialTable::terrarium(), t::AIR, 293.0);
+        let mut w = World::new_open(20, 12, MaterialTable::terrarium(), 293.0);
         for i in 0..20 {
             w.fill(GridIndex::new(i, 0), t::STONE, 293.0);
         }
@@ -782,7 +904,7 @@ mod tests {
         // outlet high above it with no physical path between, and the water
         // gets there anyway — magically, at a price, and without a gram
         // appearing from nowhere.
-        let mut w = World::new(9, 12, MaterialTable::terrarium(), t::AIR, 293.0);
+        let mut w = World::new_open(9, 12, MaterialTable::terrarium(), 293.0);
         for i in 0..9 {
             w.fill(GridIndex::new(i, 0), t::STONE, 293.0);
             w.fill(GridIndex::new(i, 4), t::STONE, 293.0);
@@ -831,7 +953,7 @@ mod tests {
 
     #[test]
     fn a_colony_survives_a_long_run_and_the_books_still_balance() {
-        let mut w = World::new(32, 20, MaterialTable::terrarium(), t::AIR, 293.0);
+        let mut w = World::new_open(32, 20, MaterialTable::terrarium(), 293.0);
         for i in 0..32 {
             w.fill(GridIndex::new(i, 0), t::STONE, 293.0);
             w.fill(GridIndex::new(i, 1), t::STONE, 293.0);

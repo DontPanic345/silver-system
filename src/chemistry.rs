@@ -185,7 +185,7 @@ mod tests {
     use crate::physics;
 
     fn world(w: usize, h: usize) -> World {
-        World::new(w, h, MaterialTable::terrarium(), t::AIR, 291.0)
+        World::new_open(w, h, MaterialTable::terrarium(), 291.0)
     }
 
     #[test]
@@ -325,7 +325,7 @@ mod tests {
     /// still, and nothing in the code names any of these materials.
     #[test]
     fn a_warm_tun_ferments_and_then_distils_while_the_water_stays_put() {
-        let mut w = World::new(6, 8, MaterialTable::terrarium(), t::AIR, 360.0);
+        let mut w = World::new_open(6, 8, MaterialTable::terrarium(), 360.0);
         for i in 0..6 {
             w.fill(GridIndex::new(i, 0), t::STONE, 365.0);
         }

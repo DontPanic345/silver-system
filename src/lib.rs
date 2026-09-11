@@ -85,6 +85,12 @@ pub mod vapour;
 /// Chemistry: data-driven reactions between touching cells.
 pub mod chemistry;
 
+/// Light: how far the sky reaches into the world, and the day that drives it.
+pub mod light;
+
+/// Life: data-driven metabolisms — growth, respiration, and the carbon cycle.
+pub mod life;
+
 /// The gnomes: the game layer, Gin economy, and ethereal mechanics.
 pub mod gnome;
 

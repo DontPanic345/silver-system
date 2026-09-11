@@ -579,7 +579,7 @@ mod tests {
     use crate::world::Cell;
 
     fn air_world(w: usize, h: usize) -> World {
-        World::new(w, h, MaterialTable::terrarium(), t::AIR, 291.0)
+        World::new_open(w, h, MaterialTable::terrarium(), 291.0)
     }
 
     /// Scales everything in a gas cell by `factor` — a pressurised or

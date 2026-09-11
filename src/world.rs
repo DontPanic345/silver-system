@@ -152,9 +152,43 @@ impl Cell {
         cell
     }
 
+    /// A cell of open air — whatever [`MaterialTable::atmosphere`] says that
+    /// is — at `temperature`. Falls back to a full cell of the table's first
+    /// gas for a table that never declared one.
+    pub fn open_air(materials: &MaterialTable, temperature: Scalar) -> Self {
+        let mix = materials.atmosphere();
+        if mix.is_empty() {
+            return Cell::full(materials, materials.vacuum_label(), temperature);
+        }
+        Cell::gas(materials, mix, temperature)
+    }
+
     /// Whether this is a gas cell, whose contents live in [`Cell::mix`].
     pub fn is_gas(&self, materials: &MaterialTable) -> bool {
         materials.is_gas(self.material)
+    }
+
+    /// The partial pressure of everything in this cell that a gnome can
+    /// actually breathe — see [`crate::material::Material::breathable`].
+    ///
+    /// This is the reading that replaced "is this cell labelled with a
+    /// breathable material". A mixture has no single answer to that
+    /// question: a cell three-quarters full of CO₂ is labelled CO₂ and still
+    /// holds a quarter of a lungful, and a cell of fog is labelled steam and
+    /// holds a full one. What a gnome cares about is how much oxygen is
+    /// pressing on it, which is a sum, not a label.
+    pub fn breathable_pressure(&self, materials: &MaterialTable) -> Scalar {
+        if !self.is_gas(materials) {
+            return 0.0;
+        }
+        let props = materials.slot_props();
+        self.mix
+            .iter()
+            .enumerate()
+            .filter(|&(s, _)| props.breathable[s])
+            .map(|(s, &m)| m * props.gas_constant[s])
+            .sum::<Scalar>()
+            * self.temperature
     }
 
     /// Re-derives a gas cell's total mass and its label from its mixture.
@@ -290,6 +324,20 @@ pub struct World {
     ledger: Ledger,
     /// What the water cycle has done — see [`crate::vapour::Tally`].
     pub(crate) tally: crate::vapour::Tally,
+    /// What life has done — see [`crate::life::Tally`].
+    pub(crate) life: crate::life::Tally,
+    /// How much of the sky's light reaches each cell, as a fraction of full
+    /// sun — recomputed every step by `src/light.rs`.
+    pub(crate) light: Vec<Scalar>,
+    /// How bright the sky over this world is, 0 to 1. Set by whatever is
+    /// driving the day — see [`crate::light::Sun`] — and read by nothing
+    /// except the light march.
+    ///
+    /// A bare `World` starts at full daylight that *illuminates but does
+    /// not warm*: the joules sunlight carries are a scenario's business, the
+    /// same way a [`crate::terrarium::Thermostat`]'s are, because they go
+    /// through the ledger and the ledger belongs to the scenario.
+    pub sky: Scalar,
     /// Gas mass flux across each cell's right-hand face, g/s, positive
     /// toward `+i` — the gas's momentum. See `gas::flow`.
     pub(crate) flux_x: Vec<Scalar>,
@@ -328,6 +376,9 @@ impl World {
             materials,
             ledger: Ledger::default(),
             tally: crate::vapour::Tally::default(),
+            life: crate::life::Tally::default(),
+            light: vec![1.0; n],
+            sky: 1.0,
             flux_x: vec![0.0; n],
             flux_y: vec![0.0; n],
             initial_mass: 0.0,
@@ -336,6 +387,50 @@ impl World {
         };
         world.rebaseline();
         world
+    }
+
+    /// A `width` x `height` world full of **open air** at `temperature` —
+    /// the table's declared [atmosphere](MaterialTable::atmosphere), a
+    /// mixture, rather than a single pure gas.
+    ///
+    /// This is what every scenario and every test uses, and the distinction
+    /// from [`World::new`] with a gas fill is not cosmetic: a world filled
+    /// with pure "air" has no oxygen in it at all, so nothing can breathe and
+    /// nothing can burn. `World::new` still exists for a world that really
+    /// is meant to be full of one substance — a tank of CO₂, a block of ice.
+    pub fn new_open(
+        width: usize,
+        height: usize,
+        materials: MaterialTable,
+        temperature: Scalar,
+    ) -> Self {
+        let fill = materials.vacuum_label();
+        let mut world = World::new(width, height, materials, fill, temperature);
+        let air = Cell::open_air(&world.materials, temperature);
+        for p in 0..width * height {
+            world.set_cell_at(p, air);
+        }
+        world.rebaseline();
+        world
+    }
+
+    /// Paints one cell with open air at `temperature` — [`World::fill`]'s
+    /// counterpart for the atmosphere, which is a mixture and so has no
+    /// single material to name.
+    pub fn fill_atmosphere(&mut self, index: GridIndex, temperature: Scalar) {
+        let air = Cell::open_air(&self.materials, temperature);
+        self.set_cell(index, air);
+    }
+
+    /// How much of the sky's light reaches the cell at flat position `p`, as
+    /// a fraction of full sun — see `src/light.rs`.
+    pub fn light_at(&self, p: usize) -> Scalar {
+        self.light[p]
+    }
+
+    /// The light field, in [`World::linear_index`] order.
+    pub fn light_cells(&self) -> &[Scalar] {
+        &self.light
     }
 
     /// Re-snapshots the conservation baseline from the world's current
@@ -349,12 +444,19 @@ impl World {
         self.initial_energy = self.total_energy();
         self.ledger = Ledger::default();
         self.tally = crate::vapour::Tally::default();
+        self.life = crate::life::Tally::default();
     }
 
     /// What the water cycle has done since the baseline — grams evaporated,
     /// condensed and rained. See [`crate::vapour::Tally`].
     pub fn tally(&self) -> crate::vapour::Tally {
         self.tally
+    }
+
+    /// What life has done since the baseline — grams of living matter built
+    /// and spent. See [`crate::life::Tally`].
+    pub fn life_tally(&self) -> crate::life::Tally {
+        self.life
     }
 
     pub fn width(&self) -> usize {
@@ -597,6 +699,12 @@ impl World {
     /// charged to the ledger either).
     pub fn conjure_energy(&mut self, index: GridIndex, joules: f64) -> Scalar {
         let p = self.linear_index(index);
+        self.conjure_energy_at(p, joules)
+    }
+
+    /// [`World::conjure_energy`] by flat position — for anything that walks
+    /// the whole grid, such as sunlight landing on it.
+    pub fn conjure_energy_at(&mut self, p: usize, joules: f64) -> Scalar {
         let capacity = self.cell_at(p).capacity(&self.materials);
         if capacity <= 0.0 {
             return 0.0;
@@ -765,7 +873,7 @@ mod tests {
     use crate::material::terrarium as t;
 
     fn world() -> World {
-        World::new(4, 4, MaterialTable::terrarium(), t::AIR, 290.0)
+        World::new_open(4, 4, MaterialTable::terrarium(), 290.0)
     }
 
     #[test]

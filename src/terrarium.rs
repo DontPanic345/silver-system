@@ -127,7 +127,7 @@ const ROOF_K: Scalar = 283.0;
 /// the browser view and the headless runner.
 pub fn gnome_terrarium(width: usize, height: usize) -> Terrarium {
     let (w, h) = (width as i32, height as i32);
-    let mut world = World::new(width, height, MaterialTable::terrarium(), t::AIR, 291.0);
+    let mut world = World::new_open(width, height, MaterialTable::terrarium(), 291.0);
 
     // The jar: a stone shell all the way round.
     for i in 0..w {
@@ -317,11 +317,23 @@ mod tests {
         );
         assert_eq!(boiled, 0, "nothing should be boiling in a terrarium");
         // And the water is still water — in the pool, in the air, or on its
-        // way down.
+        // way down — except for exactly what life took apart or put back.
+        //
+        // This used to be a flat "water is conserved", and it stopped being
+        // true the night plants arrived, correctly: photosynthesis splits
+        // water to build a bush and the bush's own respiration puts it back,
+        // so the free water in a jar rises and falls with how much plant is
+        // standing in it. What is still exact is the *proportion*, which is
+        // what this now asserts — the same 108/180 g per gram of plant that
+        // the material table declares, measured at scenario scale.
         let water = terra.world.mass_of(t::WATER) + terra.world.mass_of(t::STEAM);
+        let life = terra.world.life_tally();
+        let h2o_per_g = 108.0 / 180.0;
+        let expected = (life.respired_g - life.grown_g) * h2o_per_g;
         assert!(
-            (water - water0).abs() < 1e-6 * water0,
-            "water went {water0} -> {water} g"
+            (water - water0 - expected).abs() < 1e-6 * water0,
+            "water went {water0} -> {water} g, but life only moved {expected} g of it \
+             ({life:?})"
         );
     }
 

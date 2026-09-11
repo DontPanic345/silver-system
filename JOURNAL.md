@@ -443,3 +443,19 @@ Left undone: splitting air into N₂/O₂ so gnomes and fires consume oxygen
 and make CO₂ into a mixed room (the obvious next step now); gases dissolved
 in liquids; wash as a real water–ethanol solution; pressure-dependent
 boiling for submerged cells; and making the terrarium's cycle visible.
+
+
+_2026-09-11 The real problems of the experiment are showing up now.
+The real problem is me! Obviously.
+Acts of omission are still acts.
+The system can only progress in the drection already set down. It would be impossible for this system to course correct by going 2 steps back to take 1 step forward. That option is not available to an agent on any single run. Something like that needs to come from outside the system.
+Like a chess piece King. It starts in the center of the board, nothing at where it is currently standing. All around in every direction at the edge of the board is a finished product, every step it has to move closer to the finished product. So after the first step, the direction is already set. Each edge square is a different finsihed product, how will it move the other side of the board without turning back. It's monotonic.
+This previous nights run had to go back into the dictation to resove the stratified CO2 issue. The first distillation read it one way. To me the first interptation reads weird and is ambgious. The night that added CO2 pressure did add it in a stratified way, this may have been a techincal reason and was part of pressing to mixed gasses, or it may have read the statement the wrong way. 
+I highlighted the still be key to the whole thing 'to really make it pop' - I was probably wrong, this was just one thought that poped into my head one day - it shouldn't form a major govering piece. (As it stands I think the still is actually a very good proofing ground as it relys on so many mechanics).
+I never reviewed the NORTH_STARS. I never reviewed the prompt. Now, even though it didn't come from my fingers, it **did** actually come from me, because I allowed it.
+So the weighting that gets assigned to the previous nights work left undone/unblocked swamps anything anything else - because the best way to progress is to build on the previous work.
+And all of this is completely obvious and predictable.
+Note to self, after discussion with the agent, trying to get around going to f64, I was convinced it really is the best option at this point. The issue is the size of the evaporation amount compared to water that it is leaving. It just too small for the f32, given that exponent is already set, you can't fudge it any other way than by increasing the precision.
+f64 and clipping the wings of the GPU is fine for this experiment, but note this point as we may be coming back!
+Providing the /usage-check was huge success, the agent happily went up to 80% of the 5 hourly window. Next to optimise is when to finish, as the run had a long debugging session with lots of back forth? Best leave that out of the cache and start again with clean slate. Or has the run been going well, that agent is best placed to continue as everything is already loaded.
+_
