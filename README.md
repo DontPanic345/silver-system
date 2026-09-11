@@ -38,9 +38,26 @@ All of it is emergent: there is no script, only conduction, buoyancy, one
 vapour-pressure curve per liquid, a table of declared mass proportions, and a
 Gin budget.
 
+And since night 6 you can **reach into it**. Point at any cell and the page
+tells you what it is, how hot, how heavy, what gases are mixed into it and
+how much daylight reaches it. Pick up the dig tool and click, and a gnome
+walks over and digs — after it has breathed and eaten, not before. What it
+digs goes into its *hands*, as real grams at the temperature it came out at,
+and stays out of the world until somebody puts it down again: build is
+"put down what you are carrying". There is no resource counter and no
+material palette, which means **you cannot build what you have not dug**, and
+the wall you get is the hole you made. Warming and chilling a cell are the
+magic, and they cost the colony Gin like every other spell. See
+`src/order.rs`.
+
 ```sh
 # Headless: JSON snapshots (and ASCII maps on stderr) — no browser needed.
 cargo run --release --bin terrarium -- --steps 8000 --every 2000 --map --temps
+
+# The same jar with two player orders written on it before it starts: dig
+# the meadow at (10, 3), and build the spoil back down at (12, 5).
+cargo run --release --bin terrarium -- --steps 900 --every 300 --map \
+    --dig 10,3 --build 12,5
 
 # In a browser, with a live conservation read-out:
 bash scripts/build-wasm.sh
@@ -101,9 +118,11 @@ approximation.
 Three things are allowed to break that, and all of them go through the same
 ledger: gnome magic (paid for in Gin), the terrarium's declared hot/cold
 boundary and its sunlight (a sealed jar reaches equilibrium and its water
-cycle stops — see `src/terrarium.rs`), and a gnome's belly (what it eats
-leaves the world and what it breathes out comes back, so a gnome part-way
-through digesting a berry is a small non-zero ledger entry). So the standing invariant is not "nothing changes" but
+cycle stops — see `src/terrarium.rs`), and a gnome's belly and hands (what it
+eats leaves the world and what it breathes out comes back, so a gnome
+part-way through digesting a berry is a small non-zero ledger entry — and so
+is one walking across the jar with a rock in its arms). So the standing
+invariant is not "nothing changes" but
 
 ```text
 total_mass_now == total_mass_at_start + ledger.mass_conjured
@@ -127,6 +146,7 @@ live. `residual_mass_g` in that output is the whole argument in one number.
 | `src/life.rs` | Metabolisms: stoichiometric growth and respiration, and how a plant spreads |
 | `src/chamber.rs` | The gas demonstration room, its bottle, vent and scrubber; the relief valve |
 | `src/gnome.rs` | Gin economy, the ethereal layer, rescue, foraging, drinking, breathing, planting, ethereal pipes |
+| `src/order.rs` | The glass pane: dig/build/temper orders a player writes on cells, and what a gnome carries |
 | `src/terrarium.rs` | The flagship scenario and its declared boundary conditions |
 | `src/still.rs` | The brewing scenario: mash tun, lyne arm, condenser, receiver |
 | `src/report.rs` | JSON snapshots and an ASCII map, for headless verification |
@@ -223,13 +243,15 @@ NODE_PATH=/usr/local/lib/node_modules node tests/e2e/scenario_canvas.test.mjs
 NODE_PATH=/usr/local/lib/node_modules node tests/e2e/terrarium_canvas.test.mjs
 NODE_PATH=/usr/local/lib/node_modules node tests/e2e/gases_canvas.test.mjs
 NODE_PATH=/usr/local/lib/node_modules node tests/e2e/still_canvas.test.mjs
+NODE_PATH=/usr/local/lib/node_modules node tests/e2e/terrarium_orders.test.mjs
 ```
 
-The last three are the ones worth keeping green: each drives a real page in
+The last four are the ones worth keeping green: each drives a real page in
 headless Chromium, lets it run for real wall-clock seconds, and then checks
 *both* the numbers the page reports and the actual canvas pixels — the CO₂
-layer arriving on the floor, the gin pooling in the receiver — so a claim
-has to survive being looked at as well as being computed.
+layer arriving on the floor, the gin pooling in the receiver, the hole
+appearing where a real mouse clicked — so a claim has to survive being
+looked at as well as being computed.
 
 ## The fallback (M0.3, not in current use)
 

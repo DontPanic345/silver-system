@@ -546,3 +546,76 @@ tier and `NORTH_STARS.md` #3 names it. Also untouched, and carried over: the
 book-copying knowledge economy, the Gnome Grandmother, buildings, nitrogen,
 gases dissolved in liquids, wash as a real water–ethanol solution, and
 pressure-dependent boiling.
+
+**Night 6/7 — 2026-09-11 — Opus 5/high — The glass pane, and a wall that is
+the hole you dug.** Chose the fourth tier — human interaction — over the
+obvious leftover, which was decomposition (night 5's own named next step,
+and the piece that would close the carbon cycle without lungs). Three
+reasons. `NORTH_STARS.md` #2's stated order is physics → chemistry →
+biology → game layer, and after five nights the first three had all been
+opened and the fourth had not been touched at all; #3's capstone sentence is
+"a terrarium people can see on their screens **and interact with**", and
+until tonight every page in this repo was a window you could only watch; and
+it is night six of seven, so a tier left unopened now stays unopened. The
+commentary above night 5 is the fourth reason. The king moves outward and
+cannot come back, and the strongest pull each night is toward whatever the
+last night left unblocked — so when a genuinely sideways move is available
+and defensible, take it.
+
+Built: `src/order.rs`. The player never touches the world; the player writes
+an order on a cell and a gnome walks over and does it, after it has breathed
+and eaten and never before. **Dig** takes a cell of solid into a gnome's
+hands as real grams at the temperature it came out at; **build** puts that
+load back down; **temper** warms or chills a cell and is the magic, priced in
+Gin at the same rate a gnome pays to save its own life. The colony carries
+the queue, the renderer draws the markers and a pip of what each gnome is
+holding, `report::cell_json` is the inspector, and `www/terrarium.html` has
+a tool palette, click-to-designate, hover-to-inspect and an orders panel.
+`--dig/--build/--warm/--chill i,j` do the same thing headlessly.
+
+Four findings worth keeping:
+
+1. *A gnome's hands are its belly's sibling* — mass that has left the world,
+   booked out of the ledger until it is put back. That one decision is the
+   whole game design: there is no resource counter anywhere, so **you cannot
+   build what you have not dug**, and the wall you get is the hole you made,
+   gram for gram and kelvin for kelvin. `NORTH_STARS.md` #4 opens by
+   objecting to ONI turning dug rock into an abstract number; this is what it
+   looks like not to.
+2. *The physics does the game design if you let it.* My first build target
+   was a cell of air above the walkway, and the test failed because sand is
+   granular and fell. A wall has to be built on something. Nothing in the
+   order code knows that.
+3. *Every overlay you draw on a cell eats the pixels a pixel-check was
+   using.* The order marker takes the border, the gnome takes the middle,
+   the carry pip takes the top-left corner — and each one in turn broke the
+   e2e check that had been sampling exactly there. A canvas assertion has to
+   name which pixel and why. (The pip also had to be framed in near-black:
+   a pale gnome carrying pale sand was the same dot as an empty-handed one,
+   which I only saw by looking at a rendered frame.)
+4. *A gnome standing beside the cell digs it on the very next step*, so
+   "one order outstanding" is a race the page loses. Pausing to mark up and
+   then resuming is the fix — and is how a person plays anyway.
+
+Verified: 176 lib tests in release, clippy and rustfmt clean, and all seven
+e2e checks, including a new `terrarium_orders.test.mjs` that clicks the real
+canvas with a real mouse, watches the hole appear in real pixels against its
+undug neighbour in the same frame, and watches the spoil come back down as a
+wall — mass residual 5.4e-14 throughout. I looked at rendered frames of a
+marked-up jar and of a gnome carrying a load rather than trusting the
+numbers. What I did **not** verify: any run with orders past about 2500
+steps; whether a colony kept busy with orders starves its garden; the
+warm/chill and rub-out tools by eye or in any e2e (they have unit tests
+only); what happens when the cell under a standing order changes phase
+before anyone reaches it; and I did not re-open `gases.html` or `still.html`
+this session. A carried load does not cool while it is carried, which is a
+lie of the same family as instantaneous digestion.
+
+Deliberately left undone: **decomposition** is still the open piece of the
+biology tier — nothing rots, so carbon only comes back through lungs — and
+carbon aside, a colony that can dig now has nowhere to put anything: there
+is no stockpile, no drag-to-designate over a region, no priority between
+orders, and no building that is a *machine* rather than a block. Also still
+carried over: the book-copying knowledge economy, the Gnome Grandmother,
+nitrogen, dissolved gases, wash as a real solution, and pressure-dependent
+boiling.

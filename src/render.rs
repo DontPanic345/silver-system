@@ -210,15 +210,19 @@ pub fn render_world_to_rgb8(
         // its head — so a gnome hauling a rock across the jar is visibly a
         // gnome hauling a rock and not one that wandered off.
         if let Some(load) = gnome.hands {
+            // Framed in near-black, because the load and the gnome are both
+            // often pale: a gnome carrying sand and a gnome carrying nothing
+            // were all but the same dot without it.
             let load_colour = world.materials().get(load.material).colour;
-            let pip = (cell_px / 3).max(1);
+            let pip = (cell_px / 3).max(1) + 2;
             for dy in 0..pip {
                 for dx in 0..pip {
+                    let frame = dx == 0 || dy == 0 || dx == pip - 1 || dy == pip - 1;
                     put(
                         &mut buf,
                         pos.i as u32 * cell_px + dx,
                         image_row as u32 * cell_px + dy,
-                        load_colour,
+                        if frame { (10, 10, 14) } else { load_colour },
                     );
                 }
             }

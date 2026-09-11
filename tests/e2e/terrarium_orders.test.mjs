@@ -71,22 +71,26 @@ function serveDir(dir) {
   });
 }
 
-// The mean channel value of one world cell, read out of the live canvas.
-// `inset` picks how far in from the cell's corner to sample: the middle for
-// the material itself, a pixel or two in for the order marker's outline.
-const cellPixel = (page, i, j, inset) =>
+// The colour of one pixel of one world cell, read out of the live canvas.
+// `at` is [dx, dy] within the cell, and picking it is fiddly on purpose:
+// three things are drawn over a cell besides its material — the order
+// marker's outline on the border (2px), a gnome's body in the middle
+// (inset 3 to 8), and the pip of what that gnome is carrying at its
+// top-left (6px). GROUND is the one corner of a 12px cell none of them
+// reach; MARKER is on the border but clear of the pip.
+const GROUND = [9, 9];
+const MARKER = [9, 1];
+const cellPixel = (page, i, j, at) =>
   page.evaluate(
-    ([i, j, inset]) => {
+    ([i, j, at]) => {
       const canvas = document.getElementById('canvas');
       const px = window.__cellPx;
       const rows = canvas.height / px;
       const ctx = canvas.getContext('2d');
-      const x = i * px + (inset === null ? Math.floor(px / 2) : inset);
-      const y = (rows - 1 - j) * px + (inset === null ? Math.floor(px / 2) : inset);
-      const d = ctx.getImageData(x, y, 1, 1).data;
+      const d = ctx.getImageData(i * px + at[0], (rows - 1 - j) * px + at[1], 1, 1).data;
       return { r: d[0], g: d[1], b: d[2], mean: (d[0] + d[1] + d[2]) / 3 };
     },
-    [i, j, inset]
+    [i, j, at]
   );
 
 // Where in the viewport the middle of world cell (i, j) is — against the
@@ -179,15 +183,11 @@ async function main() {
     const CONTROL = [13, 3];
     const WALL = [12, 4];
 
-    // Pause the jar to mark it up, the way a person would. Cells are sampled
-    // one pixel in from their corner rather than in the middle: the middle
-    // is where a gnome standing in the cell is drawn, and this test is about
-    // the ground, not about who happens to be on it.
-    const CORNER = 1;
+    // Pause the jar to mark it up, the way a person would.
     await page.click('#pause');
     await page.evaluate(() => window.__repaint());
-    const before = await cellPixel(page, ...HOLE, CORNER);
-    const control = await cellPixel(page, ...CONTROL, CORNER);
+    const before = await cellPixel(page, ...HOLE, GROUND);
+    const control = await cellPixel(page, ...CONTROL, GROUND);
     if (!(before.mean > 40)) {
       fail(`FAIL terrarium_orders: the meadow cell reads as dark already (${JSON.stringify(before)}).`);
     }
@@ -218,7 +218,7 @@ async function main() {
     // Checked with the jar paused, because a gnome standing next to the cell
     // will dig it on the very next step and there would be nothing to see.
     await page.evaluate(() => window.__repaint());
-    const marker = await cellPixel(page, ...HOLE, CORNER);
+    const marker = await cellPixel(page, ...HOLE, MARKER);
     if (!(marker.r > marker.b + 60)) {
       fail(`FAIL terrarium_orders: no dig marker visible at the cell (${JSON.stringify(marker)}).`);
     }
@@ -240,8 +240,8 @@ async function main() {
       fail(`FAIL terrarium_orders: mass residual ${dug.residual_mass_relative} after digging.`);
     }
 
-    const after = await cellPixel(page, ...HOLE, CORNER);
-    const controlAfter = await cellPixel(page, ...CONTROL, CORNER);
+    const after = await cellPixel(page, ...HOLE, GROUND);
+    const controlAfter = await cellPixel(page, ...CONTROL, GROUND);
     // Compared against the undug meadow beside it *in the same frame*, so
     // this survives the whole jar dimming at night.
     if (!(after.mean < 0.6 * controlAfter.mean)) {
@@ -255,7 +255,7 @@ async function main() {
     await pickTool(page, 'build');
     // Read the empty cell *before* marking it: the order's own outline is
     // drawn on the cell's border, which is exactly where this samples.
-    const airBefore = await cellPixel(page, ...WALL, CORNER);
+    const airBefore = await cellPixel(page, ...WALL, GROUND);
     await clickCell(page, ...WALL);
     await waitForOrders(page, 2, 30000);
     const built = await report(page);
@@ -269,7 +269,7 @@ async function main() {
     if (wall.material !== 'sand') {
       fail(`FAIL terrarium_orders: the built cell is ${wall.material}, not sand.`);
     }
-    const wallPx = await cellPixel(page, ...WALL, CORNER);
+    const wallPx = await cellPixel(page, ...WALL, GROUND);
     if (!(wallPx.mean > airBefore.mean + 20)) {
       fail(
         `FAIL terrarium_orders: the wall is not visible — ` +
