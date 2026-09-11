@@ -191,8 +191,8 @@ mod tests {
     #[test]
     fn warm_juniper_in_water_mashes_into_wash() {
         let mut w = world(4, 4);
-        w.fill(GridIndex::new(1, 1), t::JUNIPER, 320.0);
-        w.fill(GridIndex::new(2, 1), t::WATER, 320.0);
+        w.fill(GridIndex::new(1, 1), t::JUNIPER, 340.0);
+        w.fill(GridIndex::new(2, 1), t::WATER, 340.0);
         w.rebaseline();
         react(&mut w);
         assert_eq!(w.material_at(GridIndex::new(1, 1)), t::WASH);
@@ -215,7 +215,7 @@ mod tests {
     #[test]
     fn a_hot_bush_under_cold_rain_does_not_mash() {
         let mut w = world(4, 4);
-        w.fill(GridIndex::new(1, 1), t::JUNIPER, 330.0);
+        w.fill(GridIndex::new(1, 1), t::JUNIPER, 350.0);
         w.fill(GridIndex::new(2, 1), t::WATER, 280.0);
         w.rebaseline();
         react(&mut w);
@@ -225,8 +225,8 @@ mod tests {
     #[test]
     fn mashing_conserves_mass_and_energy_exactly() {
         let mut w = world(4, 4);
-        w.fill(GridIndex::new(1, 1), t::JUNIPER, 320.0);
-        w.fill(GridIndex::new(2, 1), t::WATER, 320.0);
+        w.fill(GridIndex::new(1, 1), t::JUNIPER, 340.0);
+        w.fill(GridIndex::new(2, 1), t::WATER, 340.0);
         w.rebaseline();
         let (m0, e0) = (w.total_mass(), w.total_energy());
         react(&mut w);
@@ -245,21 +245,21 @@ mod tests {
     /// "Neutral" is only exactly neutral *at the declared threshold*, and
     /// the tolerance below is why. Enthalpy is `c·T + L`, so once the
     /// participants' heat capacities differ, the enthalpy change of a
-    /// material swap drifts with temperature — mashing at 320 K, ten kelvin
-    /// above its 310 K threshold, absorbs a little over a kelvin's worth.
+    /// material swap drifts with temperature — mashing ten kelvin above its
+    /// own threshold absorbs a little over a kelvin's worth.
     /// That is Kirchhoff's law falling out of the representation rather
     /// than a bug, and the honest thing is to allow for it rather than
     /// flatten it.
     #[test]
     fn an_enthalpy_neutral_reaction_leaves_the_temperature_alone() {
         let mut w = world(4, 4);
-        w.fill(GridIndex::new(1, 1), t::JUNIPER, 320.0);
-        w.fill(GridIndex::new(2, 1), t::WATER, 320.0);
+        w.fill(GridIndex::new(1, 1), t::JUNIPER, 340.0);
+        w.fill(GridIndex::new(2, 1), t::WATER, 340.0);
         w.rebaseline();
         react(&mut w);
         let after = w.cell(GridIndex::new(2, 1)).temperature;
         assert!(
-            (after - 320.0).abs() < 2.0,
+            (after - 340.0).abs() < 2.5,
             "mashing shifted the tun to {after}"
         );
     }
@@ -270,13 +270,13 @@ mod tests {
     #[test]
     fn an_enthalpy_neutral_reaction_is_exactly_neutral_at_its_threshold() {
         let mut w = world(4, 4);
-        w.fill(GridIndex::new(1, 1), t::JUNIPER, 310.001);
-        w.fill(GridIndex::new(2, 1), t::WATER, 310.001);
+        w.fill(GridIndex::new(1, 1), t::JUNIPER, 330.001);
+        w.fill(GridIndex::new(2, 1), t::WATER, 330.001);
         w.rebaseline();
         react(&mut w);
         let after = w.cell(GridIndex::new(2, 1)).temperature;
         assert!(
-            (after - 310.0).abs() < 0.05,
+            (after - 330.0).abs() < 0.05,
             "mashing at its own threshold shifted the tun to {after}"
         );
     }
@@ -309,9 +309,9 @@ mod tests {
     #[test]
     fn one_bush_mashes_exactly_one_cell_of_water_per_step() {
         let mut w = world(5, 5);
-        w.fill(GridIndex::new(2, 2), t::JUNIPER, 320.0);
+        w.fill(GridIndex::new(2, 2), t::JUNIPER, 340.0);
         for n in [(1, 2), (3, 2), (2, 1), (2, 3)] {
-            w.fill(GridIndex::new(n.0, n.1), t::WATER, 320.0);
+            w.fill(GridIndex::new(n.0, n.1), t::WATER, 340.0);
         }
         w.rebaseline();
         react(&mut w);

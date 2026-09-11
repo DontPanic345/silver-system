@@ -1146,7 +1146,16 @@ impl MaterialTable {
         const T_ROCK_MELT: Scalar = 1500.0;
         /// Warm enough for a tun to work: below this, juniper sitting in
         /// water is just a wet bush.
-        const T_MASH: Scalar = 310.0;
+        ///
+        /// It was 310 K until night 5, and 310 K is simply too low — a real
+        /// mash is held at 63–70 °C, which is 336–343 K, and a terrarium's
+        /// meadow sits near 313. So the first garden with a water bed under
+        /// it turned into eight grams of wash overnight, took the gnomes'
+        /// footing out from under them (wash is a liquid; juniper is not),
+        /// and had them gasping Gin to keep from drowning in their own
+        /// allotment. Moving it to the real figure fixes the garden and
+        /// costs the still nothing: its hob runs at 365 K.
+        const T_MASH: Scalar = 330.0;
         /// Ignition point for a botanical.
         const T_IGNITE: Scalar = 620.0;
         /// Heat released burning a gram of juniper.
@@ -1187,7 +1196,7 @@ impl MaterialTable {
         /// Mole fraction of oxygen in open air.
         const X_O2: Scalar = 0.21;
 
-        let mut materials = vec![Material::new(0.0, 0.0, 0.0, 0.0, Phase::Gas, (0, 0, 0)); 14];
+        let mut materials = vec![Material::new(0.0, 0.0, 0.0, 0.0, Phase::Gas, (0, 0, 0)); 15];
         // "Air" is now the *inert* bulk of the atmosphere — the nitrogen and
         // argon that a gnome breathes in and straight back out, and that a
         // fire leaves alone. What a gnome actually needs is `OXYGEN`, which
@@ -1291,6 +1300,12 @@ impl MaterialTable {
             Material::new(0.94, 0.35, 2.44, 0.6, Phase::Liquid, (196, 224, 236))
                 .with_thermal_expansion(1.1e-3)
                 .with_opacity(0.12);
+        // Glass: stone that light goes through. Every number here is
+        // stone's except `opacity`, deliberately — a lid that behaved
+        // differently in any other way would be a second mechanism where one
+        // data field will do.
+        materials[t::GLASS.0 as usize] =
+            Material::new(2.5, 0.0, 0.84, 1.0, Phase::Solid, (150, 172, 184)).with_opacity(0.05);
         materials[t::CHARCOAL.0 as usize] =
             Material::new(0.45, 0.0, 0.84, 0.25, Phase::Solid, (38, 34, 32))
                 .with_mobility(Mobility::Granular);
@@ -1376,7 +1391,7 @@ impl MaterialTable {
         const T_GROW_MAX: Scalar = 330.0;
         /// Light, as a fraction of full sun, that divides a plant's day
         /// from its night.
-        const DAYLIGHT: Scalar = 0.25;
+        const DAYLIGHT: Scalar = 0.15;
 
         let metabolisms = vec![
             // Photosynthesis: the one declared energy figure in the cycle.
@@ -1387,7 +1402,7 @@ impl MaterialTable {
                 host: t::JUNIPER,
                 intake: vec![reagent(t::CO2, CO2_PER_G), reagent(t::WATER, H2O_PER_G)],
                 output: vec![reagent(t::JUNIPER, 1.0), reagent(t::OXYGEN, O2_PER_G)],
-                rate: 6.0e-4,
+                rate: 8.0e-3,
                 light_min: DAYLIGHT,
                 light_max: 1.0,
                 min_k: T_GROW_MIN,
@@ -1404,7 +1419,7 @@ impl MaterialTable {
                 host: t::JUNIPER,
                 intake: vec![reagent(t::JUNIPER, 1.0), reagent(t::OXYGEN, O2_PER_G)],
                 output: vec![reagent(t::CO2, CO2_PER_G), reagent(t::WATER, H2O_PER_G)],
-                rate: 1.2e-4,
+                rate: 2.0e-4,
                 light_min: 0.0,
                 light_max: DAYLIGHT,
                 min_k: T_GROW_MIN,
@@ -1457,12 +1472,20 @@ pub mod terrarium {
     /// Appended at the end, after the twelve ids every earlier scenario and
     /// test already names.
     pub const OXYGEN: MaterialId = MaterialId(13);
+    /// Stone that light goes through: the lid of a terrarium.
+    ///
+    /// It exists because of a fact discovered the hard way — a jar with a
+    /// stone lid is a jar in permanent darkness, and once plants care about
+    /// light, that is the difference between a garden and a cellar. Nothing
+    /// distinguishes it from stone except [`Material::opacity`], which is the
+    /// point: "transparent" is a number in the table, not a rule anywhere.
+    pub const GLASS: MaterialId = MaterialId(14);
 
     /// Every id above, in table order — for tests and reporting that want
     /// to iterate the whole table by name.
-    pub const ALL: [MaterialId; 14] = [
+    pub const ALL: [MaterialId; 15] = [
         AIR, STEAM, WATER, ICE, SAND, STONE, LAVA, JUNIPER, CO2, WASH, SPIRIT, GIN, CHARCOAL,
-        OXYGEN,
+        OXYGEN, GLASS,
     ];
 
     /// Human-readable name for a terrarium id, for JSON reports.
@@ -1482,6 +1505,7 @@ pub mod terrarium {
             11 => "gin",
             12 => "charcoal",
             13 => "oxygen",
+            14 => "glass",
             _ => "unknown",
         }
     }

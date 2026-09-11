@@ -46,6 +46,7 @@
 //! [`Ledger`]: crate::world::Ledger
 
 use crate::gnome::{Colony, EtherealPipe, Gnome};
+use crate::light::Sun;
 use crate::material::{terrarium as t, MaterialTable};
 use crate::math::{GridIndex, Scalar};
 use crate::physics;
@@ -99,18 +100,30 @@ pub struct Terrarium {
     pub world: World,
     pub colony: Colony,
     pub thermostats: Vec<Thermostat>,
+    /// The window the jar sits in — see [`crate::light::Sun`]. It is a
+    /// declared hole in the jar's energy budget just as the thermostats are,
+    /// and its joules land in the same ledger.
+    pub sun: Sun,
     pub steps: u64,
 }
 
 impl Terrarium {
-    /// One tick: boundary conditions, then physics, then the gnomes.
+    /// One tick: the sun, then the other boundary conditions, then physics,
+    /// then the gnomes.
     pub fn step(&mut self, dt: Scalar) {
+        self.sun.shine(&mut self.world, self.steps, dt);
         for th in &self.thermostats {
             th.apply(&mut self.world);
         }
         physics::step(&mut self.world, dt);
         self.colony.update(&mut self.world);
         self.steps += 1;
+    }
+
+    /// How bright it is in the jar right now, 0 to 1 — the number the
+    /// browser view draws the sky with and the headless report prints.
+    pub fn daylight(&self) -> Scalar {
+        self.sun.intensity(self.steps)
     }
 }
 
@@ -121,6 +134,17 @@ const SHELL: i32 = 2;
 const VENT_K: Scalar = 365.0;
 /// Temperature the roof is held at.
 const ROOF_K: Scalar = 283.0;
+/// Steps in one day. At the 0.05 s step both the browser view and the
+/// headless runner use, that is a hundred seconds of simulated time — long
+/// enough for the jar to warm and cool visibly, short enough that a run of a
+/// few thousand steps sees more than one.
+const DAY_STEPS: u64 = 2000;
+/// Joules per second the sun delivers to one fully-absorbing cell — see
+/// [`Sun::power`]. Tuned against the thermostats already in this jar: over a
+/// whole day it contributes roughly a fifth of what they do, which is enough
+/// to give the pool a diurnal swing of a few kelvin without the roof having
+/// to fight it.
+const SUN_POWER: Scalar = 4.0;
 
 /// Builds the sealed gnome terrarium at the given size. Sizes below about
 /// 24x24 leave no room for the cycle; 48x36 is the tuned default used by
@@ -129,13 +153,26 @@ pub fn gnome_terrarium(width: usize, height: usize) -> Terrarium {
     let (w, h) = (width as i32, height as i32);
     let mut world = World::new_open(width, height, MaterialTable::terrarium(), 291.0);
 
-    // The jar: a stone shell all the way round.
+    // The jar: a stone shell all the way round, with a glass lid.
+    //
+    // The lid used to be stone like the rest, and that was invisible until
+    // night 5 gave plants a reason to care where the light was: a jar with a
+    // stone lid is a jar in permanent darkness, so its garden could only ever
+    // run the night half of its books and spend itself down. Glass is stone
+    // with one number changed (`Material::opacity`), which is the right shape
+    // for it — see `src/light.rs`.
     for i in 0..w {
         for j in 0..h {
             let edge = i < SHELL || j < SHELL || i >= w - SHELL || j >= h - SHELL;
-            if edge {
-                world.fill(GridIndex::new(i, j), t::STONE, 291.0);
+            if !edge {
+                continue;
             }
+            let lid = j >= h - SHELL;
+            world.fill(
+                GridIndex::new(i, j),
+                if lid { t::GLASS } else { t::STONE },
+                291.0,
+            );
         }
     }
 
@@ -193,21 +230,32 @@ pub fn gnome_terrarium(width: usize, height: usize) -> Terrarium {
     // lid a little above freezing condenses vapour into liquid water, which
     // falls — which is the half of the cycle worth having.
 
-    // Juniper at the meadow's far end: the colony's Gin supply, standing on
-    // the meadow itself, where a gnome can walk up beside a bush and pick
-    // it. Under a stone shelf, because it has to stay *dry*: warm water
-    // touching juniper ferments both into wash (see `src/chemistry.rs`), so
-    // a bush that catches warm rain is a mash tun the colony did not ask
-    // for. (It used to stand on a raised plinth past the far end of the
-    // pool — out of reach twice over, since gnomes will not wade and a
-    // gnome cannot pick a bush a row above the floor it stands on.)
-    let plinth_to = SHELL + 4;
-    for i in SHELL..plinth_to {
+    // The garden, at the meadow's far end: the colony's Gin supply, and
+    // since night 5 a *growing* one.
+    //
+    // It used to be four bushes under a stone shelf, and the shelf was there
+    // for a good reason — warm water touching juniper ferments both into
+    // wash (`src/chemistry.rs`), so a bush that catches warm rain is a mash
+    // tun nobody asked for. The shelf is gone now, and had to go, because a
+    // plant in permanent shade is a plant that never photosynthesises: it
+    // only runs the night half of its books, spending itself down. What
+    // replaces the shelf is temperature. The meadow sits at the cold end of
+    // the jar, a long way from the vent, and mashing needs the *pair* past
+    // 310 K; rain that lands here is roof-cold.
+    //
+    // Under the bushes is a bed of water, walled in so it cannot spill onto
+    // the walkway. It is the garden's whole water supply: photosynthesis
+    // takes real grams of it apart to build plant, and the bed draws down
+    // over a long run — which is the shape of the irrigation problem a
+    // colony should have, not a bug to plumb away.
+    let garden_to = SHELL + 5;
+    for i in SHELL..garden_to {
+        world.fill(GridIndex::new(i, SHELL + 1), t::WATER, 291.0);
         world.fill(GridIndex::new(i, SHELL + 2), t::JUNIPER, 291.0);
     }
-    for i in SHELL..=plinth_to + 1 {
-        world.fill(GridIndex::new(i, SHELL + 4), t::STONE, 291.0);
-    }
+    // The bed's far wall, one course proud of the water, so the gnomes'
+    // walkway stays dry and a gnome standing on it is still next to a bush.
+    world.fill(GridIndex::new(garden_to, SHELL + 1), t::STONE, 291.0);
 
     world.rebaseline();
 
@@ -217,8 +265,19 @@ pub fn gnome_terrarium(width: usize, height: usize) -> Terrarium {
     // halfway up the jar. It used to drop its water onto a ledge over the
     // meadow, which was harmless beside a 950 K vent that boiled it away,
     // and floods the gnomes' home beside a warm spring that does not.
+    // On the walkway between the garden's far wall and the pool's bank —
+    // and *derived* from both, not stepped out by hand. Four gnomes on a
+    // fixed stride from a fixed start put two of them inside the bank and
+    // the pool the moment the garden got wider, where they spent five
+    // hundred Gin and fifty grams of the pool gasping for air.
+    let walk_from = garden_to + 1;
+    let walk_to = pool_from - 2;
     let gnomes: Vec<Gnome> = (0..4)
-        .map(|k| Gnome::new(GridIndex::new(plinth_to + 2 + k * 2, SHELL + 2)))
+        .map(|k| {
+            let span = (walk_to - walk_from).max(1);
+            let i = walk_from + (k * span) / 4;
+            Gnome::new(GridIndex::new(i, SHELL + 2))
+        })
         .collect();
     let pipe = EtherealPipe::new(
         GridIndex::new(pool_from + 2, SHELL + 2),
@@ -255,6 +314,9 @@ pub fn gnome_terrarium(width: usize, height: usize) -> Terrarium {
         world,
         colony,
         thermostats,
+        // Starting a fifth of the way into the day, so the first thing a
+        // viewer sees is a jar in morning light rather than one in the dark.
+        sun: Sun::new(SUN_POWER, DAY_STEPS).starting_at(0.2),
         steps: 0,
     }
 }
@@ -281,9 +343,13 @@ mod tests {
         }
         for i in 0..w {
             assert_eq!(terra.world.material_at(GridIndex::new(i, 0)), t::STONE);
-            assert_eq!(terra.world.material_at(GridIndex::new(i, h - 1)), t::STONE);
+            assert_eq!(
+                terra.world.material_at(GridIndex::new(i, h - 1)),
+                t::GLASS,
+                "the lid is glass, so the garden under it can see the sun"
+            );
         }
-        for j in 0..h {
+        for j in 0..h - SHELL {
             assert_eq!(terra.world.material_at(GridIndex::new(0, j)), t::STONE);
             assert_eq!(terra.world.material_at(GridIndex::new(w - 1, j)), t::STONE);
         }
@@ -327,9 +393,13 @@ mod tests {
         // what this now asserts — the same 108/180 g per gram of plant that
         // the material table declares, measured at scenario scale.
         let water = terra.world.mass_of(t::WATER) + terra.world.mass_of(t::STEAM);
+        // Both halves of the cycle: what the plants took apart or put back,
+        // and what the gnomes breathed out. They run on the same declared
+        // proportions, which is the point — one number per side, and the
+        // jar's water balance closes to a part in a million.
         let life = terra.world.life_tally();
         let h2o_per_g = 108.0 / 180.0;
-        let expected = (life.respired_g - life.grown_g) * h2o_per_g;
+        let expected = (life.respired_g - life.grown_g + terra.colony.respired_g()) * h2o_per_g;
         assert!(
             (water - water0 - expected).abs() < 1e-6 * water0,
             "water went {water0} -> {water} g, but life only moved {expected} g of it \
@@ -359,6 +429,122 @@ mod tests {
                 "a gnome is standing somewhere lethal: {here} K at {:?}",
                 g.pos
             );
+        }
+    }
+
+    /// The jar's **carbon** goes round. Every gram of plant holds 0.4 g of
+    /// carbon (glucose is 72 parts carbon in 180) and every gram of carbon
+    /// dioxide holds 12 in 44, and a gnome's belly holds whatever it has
+    /// eaten and not yet breathed out. Those three places are the only ones
+    /// carbon can be in this jar, so their total is a constant — and it is
+    /// constant to a part in a billion, not approximately, because every
+    /// process that moves carbon moves it in declared proportions.
+    ///
+    /// This is the test the whole biology tier exists to be able to pass. A
+    /// world where a plant "grows" without taking its mass from somewhere
+    /// specific cannot state this quantity at all, let alone hold it.
+    #[test]
+    fn the_carbon_in_the_jar_goes_round_rather_than_accumulating() {
+        let mut terra = default_terrarium();
+        let carbon = |terra: &Terrarium| {
+            let plant = terra.world.mass_of(t::JUNIPER) + terra.world.mass_of(t::WASH);
+            let belly: f64 = terra.colony.gnomes.iter().map(|g| g.belly).sum();
+            0.4 * (plant + belly) + (12.0 / 44.0) * terra.world.mass_of(t::CO2)
+        };
+        let before = carbon(&terra);
+        for _ in 0..4000 {
+            terra.step(0.05);
+        }
+        let after = carbon(&terra);
+        assert!(
+            terra.world.mass_of(t::CO2) > 1e-4,
+            "nothing ever breathed: {} g of CO2",
+            terra.world.mass_of(t::CO2)
+        );
+        assert!(
+            (after - before).abs() < 1e-9 * before,
+            "carbon went {before} -> {after} g"
+        );
+    }
+
+    /// The garden is a garden: it takes carbon out of the air and puts on
+    /// weight, rather than only ever being eaten down.
+    #[test]
+    fn the_garden_grows_instead_of_only_being_picked() {
+        let mut terra = default_terrarium();
+        let before = terra.world.mass_of(t::JUNIPER);
+        let cells_before = terra.world.count_of(t::JUNIPER);
+        for _ in 0..6000 {
+            terra.step(0.05);
+        }
+        let life = terra.world.life_tally();
+        assert!(
+            life.grown_g > 2.0 * life.respired_g,
+            "a plant's day should beat its night: {life:?}"
+        );
+        assert!(
+            terra.world.mass_of(t::JUNIPER) > before,
+            "the garden shrank: {before} -> {} g ({life:?})",
+            terra.world.mass_of(t::JUNIPER)
+        );
+        assert!(
+            terra.world.count_of(t::JUNIPER) > cells_before,
+            "and it should have spread as well as fattened"
+        );
+    }
+
+    /// There is a day and a night, and the jar notices: the pool is warmer
+    /// at midday than it is before dawn.
+    #[test]
+    fn the_jar_has_weather_because_it_has_a_day() {
+        let mut terra = default_terrarium();
+        let pool = GridIndex::new(terra.world.width() as i32 - 6, SHELL + 5);
+        // Two days in, so the jar is past its opening transient.
+        for _ in 0..4000 {
+            terra.step(0.05);
+        }
+        let mut warmest: Scalar = 0.0;
+        let mut coolest = Scalar::INFINITY;
+        let mut brightest: Scalar = 0.0;
+        let mut darkest = Scalar::INFINITY;
+        for _ in 0..2000 {
+            terra.step(0.05);
+            let t = terra.world.cell(pool).temperature;
+            warmest = warmest.max(t);
+            coolest = coolest.min(t);
+            brightest = brightest.max(terra.daylight());
+            darkest = darkest.min(terra.daylight());
+        }
+        assert!(
+            brightest > 0.9 && darkest == 0.0,
+            "the sun should rise and set: {darkest} to {brightest}"
+        );
+        assert!(
+            warmest - coolest > 0.5,
+            "the pool should swing over a day, got {coolest} to {warmest} K"
+        );
+    }
+
+    #[test]
+    fn a_gnome_needs_the_oxygen_the_garden_makes() {
+        let mut terra = default_terrarium();
+        let before = terra.world.mass_of(t::OXYGEN);
+        for _ in 0..4000 {
+            terra.step(0.05);
+        }
+        // The colony really does breathe its jar down — that is the whole
+        // point of oxygen being a species rather than a flag.
+        assert!(
+            terra.world.mass_of(t::OXYGEN) < before,
+            "nobody breathed anything: {before} g"
+        );
+        assert!(
+            terra.colony.respired_g() > 0.0,
+            "the colony never burned any food"
+        );
+        // ...but not so fast that anyone suffocates in a demonstration.
+        for g in &terra.colony.gnomes {
+            assert!(g.is_embodied(), "a gnome suffocated inside 4000 steps");
         }
     }
 

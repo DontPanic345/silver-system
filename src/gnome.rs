@@ -64,6 +64,18 @@ pub const GIN_PER_GRAM_DRUNK: Scalar = 60.0;
 /// Below this, a gnome starts looking for juniper instead of working.
 pub const GIN_HUNGRY: Scalar = 45.0;
 
+/// Grams of food in the belly below which a gnome goes looking for a meal,
+/// whatever its flask says.
+///
+/// Gin and food used to be the same appetite, and that quietly broke the
+/// carbon cycle the moment there was one: a colony in a comfortable jar
+/// spends almost no Gin, so its flasks stay full, so it never eats, so it
+/// never breathes out any carbon, so the garden it lives in starves. A gnome
+/// is hungry because it is alive, not because it is out of mana.
+pub const BELLY_HUNGRY: Scalar = 0.02;
+/// Grams of food a gnome will carry before it stops picking berries.
+pub const BELLY_FULL: Scalar = 0.06;
+
 /// The temperature band a gnome is comfortable in, in kelvin.
 pub const COMFORT_MIN: Scalar = 265.0;
 pub const COMFORT_MAX: Scalar = 320.0;
@@ -198,7 +210,10 @@ impl Gnome {
             breath: BREATH_STEPS,
             last_act: Act::Idle,
             facing: 1,
-            belly: 0.0,
+            // Fed, rather than starving on arrival: a gnome that has to find
+            // its first meal before it can breathe is a gnome that suffocates
+            // on the way to breakfast.
+            belly: BERRY_MASS,
         }
     }
 
@@ -271,6 +286,12 @@ pub struct Colony {
     seed: u64,
     /// Updates run so far, for pipes that only fire every so often.
     tick: u64,
+    /// Grams of food the colony has burned since it started — the other
+    /// half of the jar's carbon books, beside [`crate::life::Tally`]. What
+    /// a gnome breathes out is water and carbon dioxide in the same declared
+    /// proportions a plant took them in at, so this one number is what makes
+    /// a scenario-level water or carbon balance checkable at all.
+    respired_g: f64,
 }
 
 impl Colony {
@@ -280,6 +301,7 @@ impl Colony {
             pipes: Vec::new(),
             seed: 0x9E3779B97F4A7C15,
             tick: 0,
+            respired_g: 0.0,
         }
     }
 
@@ -300,6 +322,12 @@ impl Colony {
     /// design hangs on, so worth reading directly.
     pub fn total_gin(&self) -> f64 {
         self.gnomes.iter().map(|g| g.gin).sum()
+    }
+
+    /// Grams of food this colony has breathed out — see
+    /// [`Colony::respired_g`].
+    pub fn respired_g(&self) -> f64 {
+        self.respired_g
     }
 
     pub fn embodied_count(&self) -> usize {
@@ -465,7 +493,13 @@ impl Colony {
             }
             // A cheap Gin-powered gasp: replace the cell you are stuck in
             // with breathable air. Costs matter, so it is not free.
-            let cost = world.materials().get(t::OXYGEN).density * GIN_PER_GRAM + 4.0;
+            // Priced by what it actually displaces, not by what it makes.
+            // A gasp replaces the cell a gnome is stuck in, so drowning in a
+            // pool banishes a whole gram of water through the ledger; when
+            // that was charged as if it only conjured a milligram of gas, a
+            // colony that fell in the water drained the pool it fell into,
+            // fifty grams at a time, and never ran out of Gin doing it.
+            let cost = (cell.mass + world.materials().get(t::OXYGEN).density) * GIN_PER_GRAM + 4.0;
             if self.gnomes[idx].can_afford(cost) {
                 self.spend(world, idx, cost);
                 // Oxygen, not "air": a bubble of the inert bulk of the
@@ -481,10 +515,9 @@ impl Colony {
             return;
         }
 
-        // --- Drink, or forage, when the flask runs low ---
-        if self.gnomes[idx].gin < GIN_HUNGRY
-            && self.drink_or_forage(world, idx, pos, cell.temperature)
-        {
+        // --- Drink, or forage, when the flask or the belly runs low ---
+        let hungry = self.gnomes[idx].gin < GIN_HUNGRY || self.gnomes[idx].belly < BELLY_HUNGRY;
+        if hungry && self.drink_or_forage(world, idx, pos, cell.temperature) {
             return;
         }
 
@@ -552,6 +585,7 @@ impl Colony {
         world.conjure_mass(pos, t::CO2, burn * co2_per_g, BODY_K);
         world.conjure_mass(pos, t::STEAM, burn * h2o_per_g, BODY_K);
         self.gnomes[idx].belly -= burn;
+        self.respired_g += burn;
     }
 
     /// Refills the flask from whatever is within reach: a cell of gin
@@ -578,8 +612,15 @@ impl Colony {
                 return true;
             }
         }
+        if self.gnomes[idx].belly >= BELLY_FULL {
+            return false;
+        }
         if let Some(bush) = self.find_adjacent(world, pos, t::JUNIPER) {
-            let picked = -world.conjure_mass(bush, t::JUNIPER, -BERRY_MASS, temperature);
+            // Never strip a bush bare: a berry is what a bush can spare, and
+            // a garden picked down to nothing cannot grow back.
+            let spare = (world.cell(bush).mass - 0.25 * world.materials().get(t::JUNIPER).density)
+                .clamp(0.0, BERRY_MASS);
+            let picked = -world.conjure_mass(bush, t::JUNIPER, -spare, temperature);
             if picked <= 0.0 {
                 return false;
             }
@@ -631,7 +672,7 @@ impl Colony {
                 return dir;
             }
         }
-        if g.gin < GIN_HUNGRY {
+        if g.gin < GIN_HUNGRY || g.belly < BELLY_HUNGRY {
             // The still's output before the raw botanical, since a mouthful
             // of it is worth more.
             let larder = self
