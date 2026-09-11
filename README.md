@@ -34,9 +34,23 @@ goes round rather than accumulating — it is constant, across plants, air and
 gnome bellies, to a part in a billion. Oxygen is a real species too, so a
 sealed room can be breathed flat, and the garden is what stops it.
 
+And since night 7 things **die and rot**. A bush drops dead leaves, a bush
+that freezes dies outright, and what is left in either case is `litter`,
+which falls and piles like sand. Litter rots: it breathes oxygen, puts its
+carbon back into the air as carbon dioxide, and grows `fungus` on itself —
+pale violet mould that then feeds on the litter around it, spreads through a
+heap in the dark, and spends itself away when there is nothing left to eat.
+So carbon now gets back into the air without passing through anything's
+lungs, and the jar's carbon constant covers five places instead of three:
+standing plant, dead leaf, mould, air, and gnome. The terrarium is seeded
+with a compost heap at the garden gate, the way you would plant a real one
+with a handful of leaf mould, and you can watch it go down.
+
 All of it is emergent: there is no script, only conduction, buoyancy, one
 vapour-pressure curve per liquid, a table of declared mass proportions, and a
-Gin budget.
+Gin budget. Nothing in the code names juniper, litter or mould; the rot cycle
+is five rows of the material table (`src/material.rs`) run by the same one
+pass that already ran photosynthesis (`src/life.rs`).
 
 And since night 6 you can **reach into it**. Point at any cell and the page
 tells you what it is, how hot, how heavy, what gases are mixed into it and
@@ -103,8 +117,9 @@ Gas cells are the exception to "one material per cell": a gas cell holds a
 *mixture*, grams of each species plus any liquid mist, so gases share cells
 and mix, and every transfer between two gas cells moves mass with its own
 energy and re-solves the receiving cell's temperature from its books. A
-partly-empty liquid cell pours into its neighbours (`physics::
-coalesce_loose`) and hands the space back to the atmosphere. All of it is
+partly-empty cell of anything loose — a liquid, or something granular like
+sand or leaf litter — pours into its neighbours (`physics::coalesce_loose`)
+and hands the space back to the atmosphere. All of it is
 built from transfers that already conserve.
 
 A living cell is the same story with unequal masses: a `Metabolism` declares
@@ -113,7 +128,20 @@ C₆H₁₂O₆ + 6 O₂` is 1.47 g and 0.6 g in, 1.07 g out, per gram of plant)
 table asserts the two sides balance, and every parcel carries its own
 enthalpy with the host settling the difference. So the heat of photosynthesis
 is emergent, and the carbon in a sealed jar is a constant rather than an
-approximation.
+approximation. Rot is the same machinery run backwards at 40% efficiency —
+a gram of dead leaf is 0.4 g of mould plus 0.88 g of carbon dioxide plus
+0.36 g of water, which is photosynthesis's own proportions scaled by the
+share actually being burned — and the one heat figure it declares is
+likewise photosynthesis's, so a compost heap warms by exactly what the sun
+put into the leaves and cannot warm by more.
+
+Conservation of *mass* is not conservation of *atoms*, and the difference is
+the whole reason the carbon figure is worth quoting. A living process that
+produces something solid takes a cell of air to put it in, and if that air is
+simply overwritten, the carbon dioxide in it is gone: the books balance and
+the jar has quietly eaten its own atmosphere. So products are placed with
+`gas::displace`, gases before solids, and nothing is consumed until every
+product has somewhere to go.
 
 Three things are allowed to break that, and all of them go through the same
 ledger: gnome magic (paid for in Gin), the terrarium's declared hot/cold
@@ -138,12 +166,12 @@ live. `residual_mass_g` in that output is the whole argument in one number.
 | --- | --- |
 | `src/material.rs` | Materials, phase transitions, reactions and metabolisms as data; enthalpy offsets derived, not declared |
 | `src/world.rs` | Cells with mass, temperature and latent progress; the magic ledger |
-| `src/physics.rs` | Movement, buoyancy, hydrostatic levelling, liquid coalescence, conduction, phase change |
+| `src/physics.rs` | Movement, buoyancy, hydrostatic levelling, coalescence of loose matter, conduction, phase change |
 | `src/gas.rs` | Gas mixtures: pressure (`P = T·Σ m·R`), bulk flow with momentum, interdiffusion |
 | `src/vapour.rs` | Vapour pressure: evaporation below boiling, condensation, dew, mist and rain |
 | `src/chemistry.rs` | Reactions between touching cells: mashing, combustion |
 | `src/light.rs` | How far the sky reaches into the world, and the day that drives it |
-| `src/life.rs` | Metabolisms: stoichiometric growth and respiration, and how a plant spreads |
+| `src/life.rs` | Metabolisms: stoichiometric growth, respiration and rot; how something living spreads |
 | `src/chamber.rs` | The gas demonstration room, its bottle, vent and scrubber; the relief valve |
 | `src/gnome.rs` | Gin economy, the ethereal layer, rescue, foraging, drinking, breathing, planting, ethereal pipes |
 | `src/order.rs` | The glass pane: dig/build/temper orders a player writes on cells, and what a gnome carries |

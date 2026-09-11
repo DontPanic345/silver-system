@@ -1363,7 +1363,7 @@ impl MaterialTable {
                 .with_mobility(Mobility::Granular)
                 .with_opacity(0.6);
         materials[t::FUNGUS.0 as usize] =
-            Material::new(0.03, 0.0, 2.0, 0.18, Phase::Solid, (206, 190, 228)).with_opacity(0.5);
+            Material::new(0.03, 0.0, 2.0, 0.18, Phase::Solid, (200, 170, 235)).with_opacity(0.5);
 
         let heating = |from, to, threshold_k, latent_heat| Transition {
             from,

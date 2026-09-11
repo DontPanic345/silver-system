@@ -18,9 +18,11 @@
 //  4. The jar has a day, in the actual pixels: the mean channel value of the
 //     whole canvas at midday is measurably higher than at midnight, sampled
 //     by walking the live page forward until it has seen both. The garden
-//     grows (gaining more than its own night respiration spends), something
-//     breathes carbon dioxide out, and nowhere in the jar is the air too thin
-//     to breathe.
+//     puts on weight, something breathes carbon dioxide out, and nobody is
+//     short of breath.
+//  6. The jar *rots*, in the actual pixels: the compost heap it is seeded
+//     with goes down, and mould — which nobody placed, and which is the only
+//     pale violet thing in the material table — is visibly growing on it.
 //  5. The pool is level, in the actual pixels. Night 4 shipped — briefly, and
 //     with every other test green — a pool that stood as a slope against the
 //     jar's far wall; it was caught only by looking at a rendered frame.
@@ -129,6 +131,27 @@ async function main() {
     });
     const first = await page.evaluate(() => window.__lastReport);
     const firstPixels = await canvasFingerprint(page);
+
+    // How many pixels in the jar are mould-coloured. Fungus is the only
+    // thing in the material table drawn pale violet — brighter than the
+    // ethereal gnome marker, and the only material whose blue beats its red
+    // while its red beats its green. Counting it is how "something grew that
+    // nobody placed" becomes a pixel fact rather than a claim: the scenario
+    // seeds a heap of dead leaves and no mould whatsoever
+    // (`terrarium::gnome_terrarium`), so every violet pixel here grew.
+    const mouldPixels = () =>
+      page.evaluate(() => {
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        let n = 0;
+        for (let i = 0; i < data.length; i += 4) {
+          const [r, g, b] = [data[i], data[i + 1], data[i + 2]];
+          if (r > 175 && r > g + 20 && b > r + 15) n++;
+        }
+        return n;
+      });
+    const litterAt = (report) => report.materials.find((m) => m.name === 'litter')?.mass_g ?? 0;
 
     await page.waitForTimeout(1200);
     const second = await page.evaluate(() => window.__lastReport);
@@ -271,23 +294,50 @@ async function main() {
     if (!(life.grown_g > 0)) {
       fail(`FAIL terrarium_canvas: the garden never grew (${JSON.stringify(life)}).`);
     }
-    if (!(life.grown_g > life.respired_g)) {
+    // The garden is standing heavier than it was: photosynthesis is winning
+    // against what the bushes spend at night, what they shed, and what the
+    // gnomes pick. (The jar's *net* carbon dioxide balance is the other way
+    // round this early on, and correctly so — the seeded compost heap is
+    // rotting far faster than a five-cell garden can breathe the carbon back
+    // in. It turns over by about step 6000; see the lib test.)
+    const juniperAt = (report) => report.materials.find((m) => m.name === 'juniper')?.mass_g ?? 0;
+    if (!(juniperAt(third) > juniperAt(first))) {
       fail(
-        `FAIL terrarium_canvas: the garden's night beat its day ` +
-          `(${JSON.stringify(life)}) — it is losing weight, not growing.`
+        `FAIL terrarium_canvas: the garden shrank, ${juniperAt(first)} -> ${juniperAt(third)} g ` +
+          `(${JSON.stringify(life)}).`
+      );
+    }
+    // Rot, in the pixels. Mould is visibly growing on the compost heap, the
+    // heap is visibly going down, and the report agrees with the picture.
+    const mouldNow = await mouldPixels();
+    const fungusCells = third.materials.find((m) => m.name === 'fungus')?.cells ?? 0;
+    const litterCells = third.materials.find((m) => m.name === 'litter')?.cells ?? 0;
+    if (!(mouldNow > 0 && fungusCells > 0)) {
+      fail(
+        `FAIL terrarium_canvas: nothing grew on the compost — ${mouldNow} mould pixels, ` +
+          `${fungusCells} cells of fungus, ${litterCells} of litter.`
+      );
+    }
+    if (!(litterAt(third) < litterAt(first))) {
+      fail(
+        `FAIL terrarium_canvas: the compost heap is not rotting down — ` +
+          `${litterAt(first)} -> ${litterAt(third)} g of litter.`
       );
     }
     if (!(third.air.co2_g > 0)) {
       fail('FAIL terrarium_canvas: nothing in the jar ever breathed out any carbon dioxide.');
     }
-    // A margin, not the threshold itself. The thinnest air in the jar is a
-    // *local* minimum — a gnome standing in a nook breathing its own pocket
-    // down — and it dips toward the 0.08 atm suffocation line and recovers
-    // as the room mixes. What must not happen is anyone actually going under.
-    if (!(third.air.min_breathable_atm > 0.05)) {
+    // Nobody is holding their breath. `min_breathable_atm` is the thinnest
+    // air *in the jar*, which is a different and much weaker question: a
+    // garden dense enough to seal a cell inside its own canopy breathes that
+    // cell down to nothing and leaves it there, so the jar-wide figure goes
+    // to zero and stays there while every gnome is breathing freely
+    // somewhere else. What must not happen is anyone actually going short.
+    if (!(third.colony.min_breath > 0)) {
       fail(
-        `FAIL terrarium_canvas: the thinnest air in the jar is ` +
-          `${third.air.min_breathable_atm} atm — a gnome is suffocating.`
+        `FAIL terrarium_canvas: a gnome is out of air (min_breath ` +
+          `${third.colony.min_breath}, thinnest cell in the jar ` +
+          `${third.air.min_breathable_atm} atm).`
       );
     }
     if (third.colony.ethereal !== 0) {
@@ -304,8 +354,10 @@ async function main() {
           `energy residual ${third.residual_energy_relative}, ` +
           `evaporated ${v.evaporated_g.toFixed(3)} g, rained ${v.rained_g.toFixed(3)} g, ` +
           `mean ${third.mean_temperature_k.toFixed(1)} K, ` +
-          `grown ${third.life.grown_g.toFixed(4)} g against ${third.life.respired_g.toFixed(4)} g respired, ` +
-          `CO2 ${third.air.co2_g.toFixed(4)} g, thinnest air ${third.air.min_breathable_atm.toFixed(3)} atm, ` +
+          `grown ${third.life.grown_g.toFixed(4)} g, garden ${juniperAt(first).toFixed(3)} -> ${juniperAt(third).toFixed(3)} g, ` +
+          `litter ${litterAt(first).toFixed(4)} -> ${litterAt(third).toFixed(4)} g, ` +
+          `mould ${mouldNow} px over ${fungusCells} cells (${litterCells} of litter), ` +
+          `CO2 ${third.air.co2_g.toFixed(4)} g, breath ${third.colony.min_breath}/40, ` +
           `midday ${noon ? noon.brightness.toFixed(2) : '?'} vs midnight ` +
           `${night ? night.brightness.toFixed(2) : '?'} mean channel, ` +
           `${third.colony.embodied} gnomes embodied.`

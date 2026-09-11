@@ -619,3 +619,105 @@ orders, and no building that is a *machine* rather than a block. Also still
 carried over: the book-copying knowledge economy, the Gnome Grandmother,
 nitrogen, dissolved gases, wash as a real solution, and pressure-dependent
 boiling.
+
+**Night 7/7 — 2026-09-12 — Opus 5/high — Rot, and a jar that is still busy at
+eighty thousand steps.** I started by *measuring* rather than choosing: night
+5 had left an open question — the colony looked like a net oxygen sink, and
+nobody had ever run the jar past 12000 steps — so the first thing I did was
+run it to 60000. The suffocation never happens; oxygen dips to 0.28 g at
+10000 and comes back above where it started. What does happen is worse and
+quieter. **By step 30000 the colony had stopped.** Gin spent to 1.2 of 400,
+`mass_conjured` frozen to the microgram for the next 30000 steps: four gnomes
+alive, embodied, breathing, and doing nothing at all, in a jar where every
+invariant still held to 1e-14. That measurement chose the night for me. The
+alternatives were the knowledge economy (still the largest untouched piece of
+`NORTH_STARS.md` #4) and a soil/humus loop; both would have added to a world
+that had quietly stopped being a world.
+
+So: **decomposition**, the piece nights 5 and 6 both named and both skipped,
+plus whatever it took to make the long run genuinely run. Two materials and
+five rows of the table: a bush sheds `litter`, a frost kills one outright,
+litter rots into `fungus` and carbon dioxide, mould eats the litter around it
+and spreads through a heap in the dark, and mould with nothing left to eat
+spends itself. Nothing in code names any of them. Carbon now gets back into
+the air without going through lungs, and the jar's carbon constant covers
+five places instead of three. The `Metabolism` machinery could not express
+any of it before tonight, for one reason: a living process could only emit
+gases, mists, and more of its own host.
+
+Five findings worth keeping:
+
+1. *Conserving mass and conserving atoms come apart again, in a new place.*
+   `life::give` now puts something solid into a cell of air — and the air has
+   to go somewhere, not nowhere. Worse, **products must be placed gases
+   first**: a solid product *consumes* a gas cell and a gas product does not,
+   so a rot with one cell of air beside it put its mould there and then had
+   nowhere to breathe out. The carbon dioxide it could not place was handed
+   back to the host as more host. Six micrograms a step, mass exact to
+   1e-14, and the jar was turning its own atmosphere into dead leaves.
+2. *A cell that is mostly empty is mostly air — but only if it is loose.* A
+   gnome standing in the first grains of a drift of litter was being treated
+   as buried alive: it gasped, conjured oxygen it was already standing in,
+   and the colony bled 400 Gin and a third of a gram of oxygen into the jar
+   in 12000 steps. The fix has a sharp edge: a cell of juniper at a tenth of
+   its density is not a gappy bush, it is a *small* one, so "under half full
+   is passable" had to be restricted to granular materials. When it wasn't,
+   the colony walked straight through the garden into the water bed behind
+   it and banished the pool a gram at a time to breathe.
+3. *Magic should be the last resort, and it wasn't even the second.* A gnome
+   out of air now steps sideways before it pays. That one rule is most of
+   why the colony is solvent at 80000 steps where it was broke at 30000.
+4. *A summary number can be alarming and useless at the same time.* The
+   thinnest air **in the jar** goes to zero around step 20000 and stays
+   there — a garden dense enough to seal a cell inside its own canopy
+   breathes that cell flat overnight and never refills it. That is correct,
+   and it says nothing about whether anyone is suffocating, which is what it
+   was being read as. The report now carries both it and the worst gnome's
+   remaining breath.
+5. *Scale decides what you can see.* The whole jar's biology moves a few
+   micrograms a step, so a compost heap built from leaf fall alone would take
+   a hundred thousand steps to appear. The scenario is seeded with one
+   instead — which is also just what you do when you plant a terrarium — and
+   leaf fall is what keeps it topped up rather than what has to create it.
+
+Verified: 182 lib tests in release, clippy and rustfmt clean, all seven e2e
+checks, including a new one that counts mould-coloured pixels on the live
+canvas (the scenario seeds litter and no mould, so every violet pixel grew)
+and watches the heap go down, 0.0599 → 0.0413 g, while the garden puts on
+weight. I looked at a rendered frame of the garden corner rather than
+trusting the numbers: brown litter among the bushes, three cells of violet
+mould, a gnome standing in the leaves. Over 80000 headless steps: residuals
+5.5e-14, all four gnomes embodied throughout, the colony still eating in the
+last quarter (that is now a lib test), oxygen flat at 0.33 ± 0.02 g, and a
+standing litter stock that builds to 0.07 g after the seeded heap is gone.
+
+What I did **not** verify: any non-default grid size; the frost-kill
+transition anywhere except its own unit test (nothing in the terrarium gets
+near 274 K); `gases.html` or `still.html` by eye; and whether the
+`coalesce_loose` generalisation changes anything about sand, which is always
+full in every scenario we have. I did not check whether the 30000-step stall
+I found in the old code had a single cause — my changes removed it, and I
+did not go back to confirm which one.
+
+Deliberately left undone, and the honest ugly bit: **by 80000 steps the
+garden has grown over the walkway and the colony lives inside the hedge** —
+four gnomes in one cell, bellies empty, idle, Gin trickling between 2 and 30.
+Nobody dies and the jar keeps running, but they are stuck, and the cause is
+pathing rather than physics: juniper is a static solid, a gnome can climb one
+course, and a bush that seeds the cell behind you walls you in. Also
+untouched: the book-copying knowledge economy, the Gnome Grandmother, a soil
+nutrient that would make rot load-bearing for farming rather than only for
+carbon (the obvious next piece, and the reason to build humus), nitrogen,
+dissolved gases, wash as a real solution, and pressure-dependent boiling.
+
+_On the seven-night experiment itself, since this is the last of them: it
+compounded. Nothing was reset, every night built on the night before, and the
+substrate that survived is the whole of it rather than a scaffold. The shape
+of the failure is worth naming though, and it is the one the user predicted
+in the note above night 5: the pull is always toward what last night left
+undone, and four of the seven nights took exactly that. What broke the
+pattern both times was **measuring before choosing** — night 6 read the
+journal as a whole and moved sideways on purpose; tonight ran the jar four
+times longer than anyone had and let the number pick. A run of nights like
+this one might be better briefed to spend its first twenty minutes measuring
+the state it inherited rather than reading about it._

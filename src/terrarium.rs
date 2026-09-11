@@ -287,7 +287,10 @@ pub fn gnome_terrarium(width: usize, height: usize) -> Terrarium {
     // fixed stride from a fixed start put two of them inside the bank and
     // the pool the moment the garden got wider, where they spent five
     // hundred Gin and fifty grams of the pool gasping for air.
-    let walk_from = garden_to + 1;
+    // Clear of the compost heap at the garden gate — a gnome that starts
+    // inside a heap of leaves is not hurt by it, but it is an odd first
+    // frame and an odd first breath.
+    let walk_from = garden_to + 3;
     let walk_to = pool_from - 2;
     let gnomes: Vec<Gnome> = (0..4)
         .map(|k| {
@@ -585,6 +588,57 @@ mod tests {
         for g in &terra.colony.gnomes {
             assert!(g.is_embodied(), "a gnome suffocated inside 4000 steps");
         }
+    }
+
+    /// The jar is still *running* late on, not merely still conserving.
+    ///
+    /// This is the test the seventh night's first measurement asked for. Run
+    /// long enough, the colony used to stop: by step 30000 of the version
+    /// before tonight it had spent its last Gin, eaten nothing more, and sat
+    /// there — four gnomes alive, embodied, and doing nothing, with the
+    /// ledger's `mass_conjured` frozen to the microgram for the next 30000
+    /// steps. Every invariant held. Nothing was happening. So what is
+    /// asserted here is appetite: the colony has eaten in the *last* quarter
+    /// of the run, not just in the first.
+    #[test]
+    fn the_colony_is_still_feeding_itself_late_in_a_long_run() {
+        let mut terra = default_terrarium();
+        for _ in 0..7500 {
+            terra.step(0.05);
+        }
+        let eaten_by_then = terra.colony.respired_g();
+        let rotted_by_then = terra.world.mass_of(t::CO2);
+        for _ in 0..2500 {
+            terra.step(0.05);
+        }
+        assert!(
+            terra.colony.respired_g() > eaten_by_then,
+            "nobody has eaten anything since step 7500 ({eaten_by_then} g)"
+        );
+        assert_eq!(
+            terra.colony.embodied_count(),
+            4,
+            "somebody left the world: {:?}",
+            terra
+                .colony
+                .gnomes
+                .iter()
+                .map(|g| g.gin)
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            terra.colony.total_gin() > 10.0,
+            "the colony is broke: {} Gin",
+            terra.colony.total_gin()
+        );
+        // And the jar still has a working air supply — the garden is putting
+        // oxygen back faster than it is being breathed away.
+        assert!(
+            terra.world.mass_of(t::OXYGEN) > 0.2,
+            "the jar has been breathed down to {} g of oxygen",
+            terra.world.mass_of(t::OXYGEN)
+        );
+        assert!(rotted_by_then > 0.0);
     }
 
     #[test]

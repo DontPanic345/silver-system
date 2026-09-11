@@ -762,6 +762,97 @@ mod tests {
         assert!(r.energy_relative.abs() < 1e-9, "{:e}", r.energy_relative);
     }
 
+    /// Mould grows in the dark, and spreads there. A compost heap under a
+    /// canopy is the normal case, not the exception, and the seeding rule
+    /// used to require sunlight for want of anything that did not.
+    #[test]
+    fn mould_spreads_through_a_heap_in_the_dark() {
+        let mut w = compost(0.03);
+        // A second cell of litter beside the first, and no sky at all.
+        let q = w.linear_index(GridIndex::new(4, 1));
+        let mut cell = w.cell_at(q);
+        cell.material = t::LITTER;
+        cell.mass = 0.03;
+        cell.temperature = 295.0;
+        cell.mix = NO_MIX;
+        w.set_cell_at(q, cell);
+        w.sky = 0.0;
+        crate::light::illuminate(&mut w);
+        w.rebaseline();
+        for _ in 0..1200 {
+            crate::physics::step(&mut w, 0.05);
+        }
+        assert_eq!(w.light_at(q), 0.0, "this test is about the dark");
+        assert!(
+            w.count_of(t::FUNGUS) >= 2,
+            "the mould should have spread through the heap:\n{}",
+            crate::report::ascii_map(&w)
+        );
+    }
+
+    /// A frozen bush is dead, and what is left of it is litter for something
+    /// else to eat. One row of the transition table, and the same machinery
+    /// that melts ice.
+    #[test]
+    fn a_bush_that_freezes_becomes_litter() {
+        let mut w = World::new_open(5, 5, MaterialTable::terrarium(), 260.0);
+        for i in 0..5 {
+            w.fill(GridIndex::new(i, 0), t::STONE, 260.0);
+        }
+        w.fill(GridIndex::new(2, 1), t::JUNIPER, 265.0);
+        w.rebaseline();
+        let (m0, e0) = (w.total_mass(), w.total_energy());
+        for _ in 0..400 {
+            crate::physics::step(&mut w, 0.05);
+        }
+        assert_eq!(
+            w.material_at(GridIndex::new(2, 1)),
+            t::LITTER,
+            "a bush left at 260 K should be dead:\n{}",
+            crate::report::ascii_map(&w)
+        );
+        assert!((w.total_mass() - m0).abs() < 1e-9 * m0);
+        assert!((w.total_energy() - e0).abs() < 1e-6 * e0.abs());
+    }
+
+    /// Shedding puts something solid into a cell of air, which no living
+    /// process could do before tonight. The air has to go *somewhere* — and
+    /// the whole point of `gas::displace` is that it is not simply deleted,
+    /// which the jar's mass books would survive and its carbon books would
+    /// not.
+    #[test]
+    fn a_bush_sheds_dead_matter_without_destroying_the_air_it_puts_it_in() {
+        let mut w = greenhouse(0.02);
+        let air0 = w.mass_of(t::AIR);
+        let co2_0 = w.mass_of(t::CO2);
+        let (m0, e0) = (w.total_mass(), w.total_energy());
+        for _ in 0..2000 {
+            crate::light::illuminate(&mut w);
+            step(&mut w, 0.05);
+        }
+        assert!(
+            w.mass_of(t::LITTER) > 0.0,
+            "nothing was ever shed:\n{}",
+            crate::report::ascii_map(&w)
+        );
+        assert!(
+            (w.mass_of(t::AIR) - air0).abs() < 1e-12,
+            "the inert air changed: {air0} -> {} g",
+            w.mass_of(t::AIR)
+        );
+        // The carbon dioxide in the cells that got built over is still in the
+        // world; the bush has only been taking it in through the door marked
+        // photosynthesis.
+        let taken = -w.life_moved(t::CO2);
+        assert!(
+            (co2_0 - w.mass_of(t::CO2) - taken).abs() < 1e-12,
+            "{} g of CO2 went somewhere life did not take it",
+            co2_0 - w.mass_of(t::CO2) - taken
+        );
+        assert!((w.total_mass() - m0).abs() < 1e-9 * m0);
+        assert!((w.total_energy() - e0).abs() < 1e-9 * e0.abs());
+    }
+
     #[test]
     fn a_lit_bush_with_carbon_dioxide_and_water_grows() {
         let mut w = greenhouse(0.02);

@@ -388,6 +388,20 @@ impl Colony {
         self.respired_g
     }
 
+    /// Steps of held breath left in the worst-off embodied gnome — full
+    /// ([`BREATH_STEPS`]) when everybody is breathing freely, zero when
+    /// somebody is out of air and about to pay for some. The colony's own
+    /// summary of whether the jar is still liveable *where anyone actually
+    /// stands*, as opposed to in its thinnest forgotten pocket.
+    pub fn min_breath(&self) -> u32 {
+        self.gnomes
+            .iter()
+            .filter(|g| g.is_embodied())
+            .map(|g| g.breath)
+            .min()
+            .unwrap_or(0)
+    }
+
     pub fn embodied_count(&self) -> usize {
         self.gnomes.iter().filter(|g| g.is_embodied()).count()
     }

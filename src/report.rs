@@ -24,11 +24,13 @@ use crate::world::World;
 ///  "residual_mass_relative":F,"residual_energy_relative":F,
 ///  "ledger":{"mass_conjured_g":F,"energy_conjured_j":F,"gin_spent":F},
 ///  "vapour":{"evaporated_g":F,"condensed_g":F,"rained_g":F},
-///  "life":{"grown_g":F,"respired_g":F},
+///  "life":{"grown_g":F,"respired_g":F,"co2_taken_g":F,"oxygen_made_g":F},
 ///  "air":{"oxygen_g":F,"co2_g":F,"min_breathable_atm":F,"daylight":F},
 ///  "materials":[{"name":S,"cells":N,"mass_g":F},...],
 ///  "colony":{"gnomes":N,"embodied":N,"ethereal":N,"total_gin":F,
-///            "carried_g":F},
+///            "carried_g":F,"respired_g":F,"min_breath":N,
+///            "who":[{"i":N,"j":N,"gin":F,"belly_g":F,"breath":N,
+///                    "embodied":B,"act":S},...]},
 ///  "orders":{"open":N,"completed":N,"cancelled":N}}
 /// ```
 ///
@@ -51,12 +53,13 @@ pub fn snapshot_json(world: &World, colony: &Colony, step: u64) -> String {
          \"residual_mass_relative\":{:e},\"residual_energy_relative\":{:e},\
          \"ledger\":{{\"mass_conjured_g\":{:.6},\"energy_conjured_j\":{:.4},\"gin_spent\":{:.4}}},\
          \"vapour\":{{\"evaporated_g\":{:.6},\"condensed_g\":{:.6},\"rained_g\":{:.6}}},\
-         \"life\":{{\"grown_g\":{:.8},\"respired_g\":{:.8}}},\
+         \"life\":{{\"grown_g\":{:.8},\"respired_g\":{:.8},\"co2_taken_g\":{:.8},\
+         \"oxygen_made_g\":{:.8}}},\
          \"air\":{{\"oxygen_g\":{:.6},\"co2_g\":{:.6},\"min_breathable_atm\":{:.5},\
          \"daylight\":{:.4}}},\
          \"materials\":[{}],\
          \"colony\":{{\"gnomes\":{},\"embodied\":{},\"ethereal\":{},\"total_gin\":{:.3},\
-         \"carried_g\":{:.6},\"respired_g\":{:.6},\"who\":[{}]}},\
+         \"carried_g\":{:.6},\"respired_g\":{:.6},\"min_breath\":{},\"who\":[{}]}},\
          \"orders\":{{\"open\":{},\"completed\":{},\"cancelled\":{}}}}}",
         world.mean_temperature(),
         world.total_mass(),
@@ -73,6 +76,12 @@ pub fn snapshot_json(world: &World, colony: &Colony, step: u64) -> String {
         tally.rained_g,
         life.grown_g,
         life.respired_g,
+        // The two directions of the carbon cycle, as grams rather than as a
+        // proxy: what living things have taken out of the air, and what they
+        // have put back as oxygen. Net of everything — a garden growing, a
+        // bush respiring in the dark, a compost heap rotting.
+        -world.life_moved(terrarium::CO2),
+        world.life_moved(terrarium::OXYGEN),
         world.mass_of(terrarium::OXYGEN),
         world.mass_of(terrarium::CO2),
         atmosphere,
@@ -84,6 +93,15 @@ pub fn snapshot_json(world: &World, colony: &Colony, step: u64) -> String {
         colony.total_gin(),
         colony.carried_g(),
         colony.respired_g(),
+        // Steps of held breath left in the worst-off gnome — the direct
+        // answer to "is anybody suffocating", which `min_breathable_atm`
+        // above is not. That one is the thinnest air *in the jar*, and a
+        // dense garden grows sealed pockets inside its own canopy whose
+        // oxygen the plants in them breathe down to nothing overnight, so it
+        // reads 0.00 atm from about step 20000 of a long run while every
+        // gnome is breathing perfectly well somewhere else. Full is
+        // `gnome::BREATH_STEPS`; anything less means somebody is holding it.
+        colony.min_breath(),
         gnomes_json(colony),
         colony.orders.len(),
         colony.orders.completed(),
@@ -207,10 +225,15 @@ pub fn chamber_json(world: &World, step: u64) -> String {
     )
 }
 
-/// The lowest breathable partial pressure anywhere a gnome could stand, in
-/// atmospheres — the number that says whether a colony is about to run out
-/// of air. Taken over gas cells only, and over the whole world, so a pocket
-/// of foul air shows up even if the room's average is fine.
+/// The lowest breathable partial pressure in any gas cell in the world, in
+/// atmospheres.
+///
+/// Over the whole world, so a pocket of foul air shows up even when the
+/// room's average is fine — which is what it is for, and also why it is not
+/// the number to ask "is the colony in trouble" (see `min_breath` in
+/// [`snapshot_json`]). A garden dense enough to seal a cell inside its own
+/// canopy takes that cell to nothing overnight and leaves it there, and this
+/// reads zero for the rest of the run while every gnome breathes freely.
 fn breathable_range(world: &World) -> f64 {
     let reference = world.materials().reference_pressure();
     if reference <= 0.0 {
@@ -223,9 +246,6 @@ fn breathable_range(world: &World) -> f64 {
         .min(9.9)
 }
 
-/// The per-material list both snapshots carry: how many cells each
-/// material labels, and how many grams of it the world holds anywhere —
-/// whole cells, its share of every gas mixture, and mist.
 /// Each gnome, one object apiece: where it is, what it is holding in flask
 /// and belly, and what it did on the step just simulated.
 ///
@@ -254,6 +274,9 @@ fn gnomes_json(colony: &Colony) -> String {
         .join(",")
 }
 
+/// The per-material list both snapshots carry: how many cells each
+/// material labels, and how many grams of it the world holds anywhere —
+/// whole cells, its share of every gas mixture, and mist.
 fn materials_json(world: &World) -> String {
     terrarium::ALL
         .iter()
