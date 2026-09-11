@@ -536,10 +536,20 @@ mod tests {
             co2_taken > 0.0,
             "the garden should be a net sink of carbon dioxide: {co2_taken} g ({life:?})"
         );
+        // The standing crop *holds its ground*, rather than gaining. That
+        // is a weaker claim than this test used to make and it is the true
+        // one: since night 8 the gnomes can actually reach the garden, and
+        // four of them graze it within a few per cent of what this jar's
+        // carbon budget grows, so the standing crop wanders up and down a
+        // per cent or two either side of where it started depending on
+        // where in a meal the run happens to stop. What is not ambiguous is
+        // the three assertions around this one: it is spreading, it is a
+        // net sink of carbon dioxide, and the organic matter in the jar as
+        // a whole is up.
+        let crop = terra.world.mass_of(t::JUNIPER);
         assert!(
-            terra.world.mass_of(t::JUNIPER) > before,
-            "the garden shrank: {before} -> {} g ({life:?})",
-            terra.world.mass_of(t::JUNIPER)
+            crop > 0.95 * before,
+            "the garden was eaten down: {before} -> {crop} g ({life:?})"
         );
         assert!(
             terra.world.count_of(t::JUNIPER) > cells_before,

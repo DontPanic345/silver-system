@@ -265,6 +265,7 @@
         + `${cell.mass_g.toFixed(3)} g, ${cell.pressure_atm.toFixed(2)} atm, `
         + `light ${cell.light.toFixed(2)}`
         + (mix ? `\nholding ${mix}` : '')
+        + (cell.gnomes ? `\n${cell.gnomes} gnome${cell.gnomes > 1 ? 's' : ''} standing here` : '')
         + (cell.order ? `\nordered: ${cell.order}` : '');
     }
 

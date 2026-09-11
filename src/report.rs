@@ -152,9 +152,18 @@ pub fn cell_json(world: &World, colony: &Colony, at: crate::math::GridIndex) -> 
         Some(crate::order::Job::Temper { target_k }) => format!("\"temper:{target_k:.0}\""),
         None => "null".to_string(),
     };
+    // Who is standing here. A gnome is drawn over the cell it is in, so
+    // anything reading this cell's pixels — the inspector under a person's
+    // mouse, a browser test checking that a dug cell now looks like a hole —
+    // needs to be able to tell "empty" from "empty, with somebody in it".
+    let gnomes = colony
+        .gnomes
+        .iter()
+        .filter(|g| g.is_embodied() && g.pos == at)
+        .count();
     format!(
         "{{\"i\":{},\"j\":{},\"material\":\"{}\",\"temperature_k\":{:.2},\"mass_g\":{:.5},\
-         \"pressure_atm\":{:.4},\"light\":{:.3},\"order\":{},\"mix\":[{}]}}",
+         \"pressure_atm\":{:.4},\"light\":{:.3},\"order\":{},\"gnomes\":{},\"mix\":[{}]}}",
         at.i,
         at.j,
         terrarium::name(cell.material),
@@ -163,6 +172,7 @@ pub fn cell_json(world: &World, colony: &Colony, at: crate::math::GridIndex) -> 
         cell.pressure(world.materials()) / world.materials().reference_pressure(),
         world.light_at(p),
         order,
+        gnomes,
         mix.join(",")
     )
 }

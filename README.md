@@ -64,6 +64,20 @@ the wall you get is the hole you made. Warming and chilling a cell are the
 magic, and they cost the colony Gin like every other spell. See
 `src/order.rs`.
 
+Since night 8 the gnomes **find their own way there**. A gnome floods the
+world with routes over the moves it can actually make — fall before walk,
+climb one course, chimney straight up out of a pit, never onto the pool,
+never into anything near lethal — and walks the route, so an order at the far
+end of the jar behind the garden is an order that gets done (`src/path.rs`).
+What it cannot reach it says so about: an order nobody can walk to is drawn
+dashed and dim, counted on the page, and eventually given up on. A colony
+shut in by the garden growing across its path lifts the hedge up a course and
+keeps its own way open — a swap, so the bush loses nothing — and only cuts one
+down when there is nowhere to lift it to, at which point what is left is what
+the table already says a shed bush leaves. None of that names a material:
+"crop" is *anything something in the table grows*, and "food" is a column
+(`Material::nutrition`).
+
 ```sh
 # Headless: JSON snapshots (and ASCII maps on stderr) — no browser needed.
 cargo run --release --bin terrarium -- --steps 8000 --every 2000 --map --temps
@@ -72,6 +86,11 @@ cargo run --release --bin terrarium -- --steps 8000 --every 2000 --map --temps
 # the meadow at (10, 3), and build the spoil back down at (12, 5).
 cargo run --release --bin terrarium -- --steps 900 --every 300 --map \
     --dig 10,3 --build 12,5
+
+# Why is the colony doing that? One line per gnome per step on stderr:
+# where it is, what it just did, how much of the world it can currently
+# reach, its Gin and its belly.
+cargo run --release --bin terrarium -- --steps 400 --every 400 --trace
 
 # In a browser, with a live conservation read-out:
 bash scripts/build-wasm.sh
@@ -172,8 +191,9 @@ live. `residual_mass_g` in that output is the whole argument in one number.
 | `src/chemistry.rs` | Reactions between touching cells: mashing, combustion |
 | `src/light.rs` | How far the sky reaches into the world, and the day that drives it |
 | `src/life.rs` | Metabolisms: stoichiometric growth, respiration and rot; how something living spreads |
+| `src/path.rs` | Where a gnome can get to: the mobility graph and breadth-first routes over it |
 | `src/chamber.rs` | The gas demonstration room, its bottle, vent and scrubber; the relief valve |
-| `src/gnome.rs` | Gin economy, the ethereal layer, rescue, foraging, drinking, breathing, planting, ethereal pipes |
+| `src/gnome.rs` | Gin economy, the ethereal layer, rescue, foraging, drinking, breathing, planting, harvesting, ethereal pipes |
 | `src/order.rs` | The glass pane: dig/build/temper orders a player writes on cells, and what a gnome carries |
 | `src/terrarium.rs` | The flagship scenario and its declared boundary conditions |
 | `src/still.rs` | The brewing scenario: mash tun, lyne arm, condenser, receiver |
@@ -272,9 +292,10 @@ NODE_PATH=/usr/local/lib/node_modules node tests/e2e/terrarium_canvas.test.mjs
 NODE_PATH=/usr/local/lib/node_modules node tests/e2e/gases_canvas.test.mjs
 NODE_PATH=/usr/local/lib/node_modules node tests/e2e/still_canvas.test.mjs
 NODE_PATH=/usr/local/lib/node_modules node tests/e2e/terrarium_orders.test.mjs
+NODE_PATH=/usr/local/lib/node_modules node tests/e2e/terrarium_routing.test.mjs
 ```
 
-The last four are the ones worth keeping green: each drives a real page in
+The last five are the ones worth keeping green: each drives a real page in
 headless Chromium, lets it run for real wall-clock seconds, and then checks
 *both* the numbers the page reports and the actual canvas pixels — the CO₂
 layer arriving on the floor, the gin pooling in the receiver, the hole

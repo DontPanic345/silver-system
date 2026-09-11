@@ -179,9 +179,17 @@ async function main() {
 
     // The meadow the gnomes walk on: sand at j = 3, and the cell next door
     // is the control this test compares against.
-    const HOLE = [10, 3];
-    const CONTROL = [13, 3];
-    const WALL = [12, 4];
+    // Far enough east of the compost heap at the garden gate that the mould
+    // creeping along the floor does not fill the hole before it can be read:
+    // since night 8 a crust of mould is granular, so it slides and piles the
+    // way leaf litter does, and the first version of this test dug a cell
+    // three paces from the heap and got a violet hole rather than a dark one.
+    const HOLE = [13, 3];
+    const CONTROL = [11, 3];
+    // Two cells clear of the hole: sand is granular, so a wall built right
+    // beside a fresh hole slides diagonally into it and the person who built
+    // it is left looking at air.
+    const WALL = [11, 4];
 
     // Pause the jar to mark it up, the way a person would.
     await page.click('#pause');
@@ -197,19 +205,19 @@ async function main() {
     const point = await cellPoint(page, ...HOLE);
     await page.mouse.move(point.x, point.y);
     await page
-      .waitForFunction(() => /\(10, 3\) sand/.test(document.getElementById('inspector').textContent),
+      .waitForFunction(() => /\(13, 3\) sand/.test(document.getElementById('inspector').textContent),
         { timeout: 3000 })
       .catch(() => {});
     const readout = await page.textContent('#inspector');
-    if (!/\(10, 3\) sand/.test(readout)) {
-      fail(`FAIL terrarium_orders: inspector says "${readout}" for the sand at (10, 3).`);
+    if (!/\(13, 3\) sand/.test(readout)) {
+      fail(`FAIL terrarium_orders: inspector says "${readout}" for the sand at (13, 3).`);
     }
 
     // --- Write "dig" on it with a real click ---
     await pickTool(page, 'dig');
     await clickCell(page, ...HOLE);
     const marked = await report(page);
-    const ordered = await page.evaluate(() => window.__cell(10, 3));
+    const ordered = await page.evaluate(() => window.__cell(13, 3));
     if (ordered.order !== 'dig') {
       fail(`FAIL terrarium_orders: the click landed on (${ordered.i}, ${ordered.j}) — ${ordered.order}.`);
     }
@@ -240,14 +248,31 @@ async function main() {
       fail(`FAIL terrarium_orders: mass residual ${dug.residual_mass_relative} after digging.`);
     }
 
+    // Wait for a frame with nobody standing in the hole. Since night 8 the
+    // gnomes walk the whole jar rather than shuffling where they were put,
+    // so the gnome that dug this cell is quite likely to be *in* it — and a
+    // gnome is drawn over the cell it is in, which makes the hole read
+    // bright rather than dark for reasons that have nothing to do with
+    // digging.
+    await page
+      .waitForFunction(() => window.__cell(13, 3).gnomes === 0, { timeout: 20000 })
+      .catch(() => {});
+    await page.click('#pause');
+    await page.evaluate(() => window.__repaint());
+    const standing = await page.evaluate(() => window.__cell(13, 3));
     const after = await cellPixel(page, ...HOLE, GROUND);
     const controlAfter = await cellPixel(page, ...CONTROL, GROUND);
+    await page.click('#pause');
+    if (standing.gnomes > 0) {
+      fail(`FAIL terrarium_orders: somebody stood in the hole for 20 s (${JSON.stringify(standing)}).`);
+    }
     // Compared against the undug meadow beside it *in the same frame*, so
     // this survives the whole jar dimming at night.
     if (!(after.mean < 0.6 * controlAfter.mean)) {
       fail(
         `FAIL terrarium_orders: the hole does not look like a hole — ` +
-          `dug cell ${after.mean.toFixed(1)} vs meadow ${controlAfter.mean.toFixed(1)}.`
+          `dug cell ${after.mean.toFixed(1)} (${standing.material}) vs meadow ` +
+          `${controlAfter.mean.toFixed(1)}.`
       );
     }
 
@@ -265,7 +290,7 @@ async function main() {
     if (!(built.colony.carried_g < 1e-6)) {
       fail(`FAIL terrarium_orders: hands still full after building (${built.colony.carried_g} g).`);
     }
-    const wall = await page.evaluate(() => window.__cell(12, 4));
+    const wall = await page.evaluate(() => window.__cell(11, 4));
     if (wall.material !== 'sand') {
       fail(`FAIL terrarium_orders: the built cell is ${wall.material}, not sand.`);
     }
@@ -285,10 +310,10 @@ async function main() {
 
     if (!failed) {
       console.log(
-        `PASS terrarium_orders: clicked (10, 3) at step ${marked.step}, dug by step ${dug.step} ` +
+        `PASS terrarium_orders: clicked (13, 3) at step ${marked.step}, dug by step ${dug.step} ` +
           `(cell ${before.mean.toFixed(0)} -> ${after.mean.toFixed(0)} mean channel against ` +
           `${controlAfter.mean.toFixed(0)} beside it, ${dug.colony.carried_g.toFixed(2)} g in hand), ` +
-          `built at (12, 4) by step ${built.step} ` +
+          `built at (11, 4) by step ${built.step} ` +
           `(${airBefore.mean.toFixed(0)} -> ${wallPx.mean.toFixed(0)}), ` +
           `mass residual ${built.residual_mass_relative}, control cell steady at ` +
           `${control.mean.toFixed(0)} -> ${controlAfter.mean.toFixed(0)}.`

@@ -131,26 +131,24 @@ pub fn dangerous(world: &World, at: GridIndex) -> bool {
     t > LETHAL_MAX - SHUN_MARGIN_K || t < LETHAL_MIN + SHUN_MARGIN_K
 }
 
-/// Cells a gnome can reach and still count as penned in — see
-/// [`Colony::travel`].
-///
-/// Low on purpose. The walkable world of the default jar is about
-/// seventeen cells, because a gnome walks a floor rather than swimming
-/// about in a room, so "walled in" has to mean *very* few places to stand
-/// or it means "in the terrarium".
-pub const PENNED_IN: usize = 4;
-
 /// Steps a gnome spends penned in and with nothing it can reach before it
 /// will cut a crop to get out.
 ///
-/// Cutting is a last resort and this is what makes it one. Without a wait,
-/// a gnome that dropped into a gap for a moment started hacking, and a
-/// colony that fell into the garden's water bed took the garden apart
-/// getting out of it — 2.5 g of bushes into 1.9 g of leaf litter inside
-/// fifteen hundred steps. A gnome that is walking, eating or working resets
-/// this to nothing, so the only thing that reaches the far end of it is a
-/// gnome that has genuinely been stuck for a while.
-pub const TRAPPED_STEPS: u32 = 120;
+/// Cutting is a last resort and this is the whole of what makes it one.
+/// A gnome that is walking, eating or working resets this to nothing, so
+/// the only thing that reaches the far end of it is a gnome that has been
+/// getting nowhere for a hundred seconds of simulated time.
+///
+/// The number is bounded from both sides and both bounds were measured. Too
+/// short and it is not a last resort but a habit: at 120 steps, four gnomes
+/// that had fallen into the garden's water bed cut a bush every thirty
+/// steps between them and took 2.5 g of garden down to 0.06 g. Too long and
+/// a colony walled off from its own garden by one bush that seeded itself
+/// across the gap never gets out — which is the thing night 7 left behind
+/// and this night exists to fix. At 2000 the hedge costs the colony one
+/// bush and about two minutes, and a colony that keeps falling into a hole
+/// somebody dug cuts at most a couple of cells before it is out.
+pub const TRAPPED_STEPS: u32 = 2000;
 
 /// Steps a gnome can hold its breath in something unbreathable.
 pub const BREATH_STEPS: u32 = 40;
@@ -238,9 +236,13 @@ pub enum Act {
     Breathed,
     /// Put a cutting from its own stores into the world — farming.
     Planted,
-    /// Cut a mature crop that was in the way — the other half of farming,
-    /// and the colony's answer to a hedge it has walled itself in with.
+    /// Cut a crop that was in the way — the last resort when a hedge has
+    /// shut the colony in and it cannot be lifted aside.
     Harvested,
+    /// Heaved a crop up a course, out of the walking row: the colony's
+    /// first answer to a hedge that has grown across the path, and the one
+    /// that costs the garden nothing at all.
+    Heaved,
     /// Took a cell of solid out of the world, on the player's orders.
     Dug,
     /// Put a carried cell back down, on the player's orders.
@@ -684,7 +686,7 @@ impl Colony {
                 .skip(1)
                 .find(|&n| path::harvestable(world, n))
             {
-                if self.harvest(world, idx, crop) {
+                if self.heave(world, idx, crop) || self.harvest(world, idx, crop) {
                     return;
                 }
             }
@@ -784,25 +786,29 @@ impl Colony {
             }
         }
 
-        // Nothing open. A gnome that is *penned in* may cut a crop out of
-        // its way — and only to get *out*, and only when penned.
+        // Nothing open. A gnome that has had nowhere to go for a good
+        // while may cut a crop out of its way — and only to get *out*.
         //
-        // Both halves of that were learned the same way, from one dig order
-        // in the garden. Letting any gnome that could not reach food cut
-        // made a lawnmower rather than a hedge-trimmer: every bush nearby
-        // had been picked below a berry, so each gnome cut its way toward
-        // the next bush that had one. Restricting it to penned gnomes was
-        // not enough on its own, because the pen a gnome actually ends up
-        // in is the hole the player dug into the garden, and cutting
-        // *toward lunch* from in there still chews through the whole plot.
-        // Cutting toward the nearest cell outside the pen costs one bush,
-        // or two. 2.5 g of garden became 1.9 g of leaf litter in fifteen
-        // hundred steps before this rule; it now survives the same dig.
-        if routes.reach() > PENNED_IN {
-            self.gnomes[idx].stuck = 0;
-            self.pace(world, idx, pos);
-            return;
-        }
+        // Both halves of that were learned the hard way. Letting any gnome
+        // that could not reach food cut, at once, made a lawnmower rather
+        // than a hedge-trimmer: every bush near a hungry colony has been
+        // picked below a berry, so each gnome cut its way toward the next
+        // bush that had one, and 2.5 g of garden became 1.9 g of leaf
+        // litter inside fifteen hundred steps. And cutting *toward lunch*
+        // from inside the hole a player dug into the garden chews through
+        // the whole plot on the way.
+        //
+        // So: wait [`TRAPPED_STEPS`], then cut toward the nearest cell
+        // outside the little world this gnome is currently confined to.
+        // That costs a bush or two, once, and the counter resets the moment
+        // anything works — walking to a job, reaching a bush, getting out.
+        //
+        // The size of that little world is deliberately *not* a condition.
+        // It was, and four gnomes spent forty thousand steps pacing a
+        // five-cell pocket with the garden two cells away behind a bush,
+        // because five was one more than the threshold. Being unable to get
+        // anywhere you need to be for two minutes is what "walled in"
+        // means; how big the pen is has nothing to do with it.
         self.gnomes[idx].stuck += 1;
         if self.gnomes[idx].stuck < TRAPPED_STEPS {
             self.pace(world, idx, pos);
@@ -812,7 +818,7 @@ impl Colony {
         let out = crops.nearest(|c| routes.steps_to(c).is_none());
         if let Some(next) = out.and_then(|o| crops.next_step(o)) {
             if path::harvestable(world, next) && !path::steppable(world, next) {
-                if self.harvest(world, idx, next) {
+                if self.heave(world, idx, next) || self.harvest(world, idx, next) {
                     self.gnomes[idx].stuck = 0;
                     return;
                 }
@@ -958,7 +964,30 @@ impl Colony {
         })
     }
 
-    /// Cuts the mature crop at `at` down, leaving what the table says a cut
+    /// Lifts the crop at `at` up one course, into the cell above it.
+    ///
+    /// This is the *first* thing a gnome shut in by the garden tries, and it
+    /// is the one that costs nothing: the two cells are swapped, so the
+    /// bush keeps every gram and every joule it had and the ledger has
+    /// nothing to say about it. A hedge that has grown across the walkway
+    /// becomes a canopy over it, which is exactly where night 5's planting
+    /// rule puts a cutting by hand and for the same reason — "planted
+    /// overhead it is a canopy, and the gnomes keep their path".
+    ///
+    /// Cutting the bush down ([`Colony::harvest`]) is what happens when
+    /// there is nowhere to lift it to.
+    fn heave(&mut self, world: &mut World, idx: usize, at: GridIndex) -> bool {
+        let above = GridIndex::new(at.i, at.j + 1);
+        if !world.in_bounds(above) || !world.cell(above).is_gas(world.materials()) {
+            return false;
+        }
+        let (a, b) = (world.linear_index(at), world.linear_index(above));
+        world.swap_cells(a, b);
+        self.gnomes[idx].last_act = Act::Heaved;
+        true
+    }
+
+    /// Cuts the crop at `at` down, leaving what the table says a cut
     /// one leaves — see [`MaterialTable::shed_form`].
     ///
     /// Conserving by construction, and in the strict sense rather than the
