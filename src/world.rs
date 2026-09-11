@@ -338,6 +338,17 @@ pub struct World {
     /// same way a [`crate::terrarium::Thermostat`]'s are, because they go
     /// through the ledger and the ledger belongs to the scenario.
     pub sky: Scalar,
+    /// A floor under the light field, 0 to 1: light that reaches every cell
+    /// regardless of what is in the way.
+    ///
+    /// It exists because "how much of the *sky* can this cell see" is the
+    /// wrong question for a scene that is indoors. The still and the gas
+    /// chamber are sealed stone boxes standing in a workshop; marching
+    /// daylight down through their roofs correctly answers that nothing
+    /// inside them can see the sky, and then renders both pages a quarter
+    /// darker than they were, for a reason that has nothing to do with
+    /// either demonstration. A scenario that is lit says so, in a number.
+    pub ambient: Scalar,
     /// Gas mass flux across each cell's right-hand face, g/s, positive
     /// toward `+i` — the gas's momentum. See `gas::flow`.
     pub(crate) flux_x: Vec<Scalar>,
@@ -379,6 +390,7 @@ impl World {
             life: crate::life::Tally::default(),
             light: vec![1.0; n],
             sky: 1.0,
+            ambient: 0.0,
             flux_x: vec![0.0; n],
             flux_y: vec![0.0; n],
             initial_mass: 0.0,

@@ -162,6 +162,10 @@ pub fn still(width: usize, height: usize) -> Still {
     let (w, h) = (width as i32, height as i32);
     let cold = 291.0;
     let mut world = World::new_open(width, height, MaterialTable::terrarium(), cold);
+    // A workshop, not a hillside: this box is lit from where it stands, not
+    // by whatever the sky can see through its stone roof. See
+    // `World::ambient`.
+    world.ambient = 1.0;
 
     // Shell.
     for i in 0..w {

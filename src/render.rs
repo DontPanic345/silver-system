@@ -142,7 +142,10 @@ pub fn render_world_to_rgb8(
         for i in 0..world.width() {
             let index = GridIndex::new(i as i32, j as i32);
             let cell = world.cell(index);
-            let colour = tint_by_temperature(cell_colour(world, &cell), cell.temperature);
+            let colour = shade_by_light(
+                tint_by_temperature(cell_colour(world, &cell), cell.temperature),
+                world.light_at(world.linear_index(index)),
+            );
             for dy in 0..cell_px {
                 for dx in 0..cell_px {
                     put(
@@ -276,6 +279,26 @@ pub fn cell_colour(world: &crate::world::World, cell: &crate::world::Cell) -> (u
         colour = lerp(colour, pale, opacity);
     }
     colour
+}
+
+/// Dims a colour by how much light reaches the cell, so night is visibly
+/// night and the shade under a bush is visibly shade.
+///
+/// Night takes more out of red and green than out of blue, which is both what
+/// dim light looks like and what keeps the check honest. A flat dim deep
+/// enough to read as night stops this repo's own e2e finding the pool, which
+/// it does by looking for pixels much bluer than they are red; scaling every
+/// channel by 0.6 takes water's blue below the threshold while leaving it,
+/// to a human, obviously a blue pool. Holding blue back makes the scene a
+/// third darker and *more* blue-dominant, so the hue checks get stronger as
+/// the picture gets darker. A flat quarter-range dim was the first attempt
+/// and it was too subtle to see in a still frame at all.
+fn shade_by_light(base: (u8, u8, u8), light: crate::math::Scalar) -> (u8, u8, u8) {
+    let light = light.clamp(0.0, 1.0);
+    let warm = 0.58 + 0.42 * light;
+    let cool = 0.78 + 0.22 * light;
+    let dim = |c: u8, f: f64| (c as f64 * f).round().clamp(0.0, 255.0) as u8;
+    (dim(base.0, warm), dim(base.1, warm), dim(base.2, cool))
 }
 
 /// Shifts a material colour warm or cool according to `temperature_k`.

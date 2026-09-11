@@ -169,6 +169,10 @@ impl GasChamber {
 pub fn gas_chamber(width: usize, height: usize) -> GasChamber {
     let (w, h) = (width as i32, height as i32);
     let mut world = World::new_open(width, height, MaterialTable::terrarium(), 291.0);
+    // A workshop, not a hillside: this box is lit from where it stands, not
+    // by whatever the sky can see through its stone roof. See
+    // `World::ambient`.
+    world.ambient = 1.0;
     let room_k = 291.0;
 
     // Stone shell.

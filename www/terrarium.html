@@ -39,15 +39,20 @@
 <body>
   <h1>Gnome terrarium</h1>
   <p class="lede">
-    A warm spring under a pool, a lid held cold, and four gnomes on a meadow
-    beside the water. Nothing below is scripted and nothing boils: the pool
-    evaporates because warm water does, the humid air rises and meets the
-    cold lid, dew gathers there and falls back as drops. That is a real
-    terrarium's water cycle, and it is slow the way a real one is — a jar of
-    air holds only a few hundredths of a gram of water. A magic fountain
-    (an ethereal pipe, paid for in Gin) lifts water from one end of the pool
-    to the other. The numbers on the right are the same JSON a headless run
-    prints.
+    A warm spring under a pool, a glass lid held cold, a garden on a watered
+    bed, and four gnomes on the meadow between them. Nothing below is
+    scripted and nothing boils: the pool evaporates because warm water does,
+    the humid air meets the cold lid, dew gathers there and falls back as
+    drops. The jar also has a <strong>day</strong> — sunlight comes through
+    the lid, warms what it lands on, and goes out again at dusk, and the
+    whole scene dims with it. That day is what the garden runs on. In the
+    light the bushes take carbon dioxide out of the air and water out of
+    their bed and put on weight; in the dark they spend some of it back. The
+    gnomes eat the bushes and breathe the carbon out again, so the jar's
+    carbon goes round rather than accumulating — which you can watch below as
+    carbon dioxide rising while oxygen falls. A magic fountain (an ethereal
+    pipe, paid for in Gin) lifts water from one end of the pool to the other.
+    The numbers on the right are the same JSON a headless run prints.
   </p>
 
   <div class="stage">
@@ -67,6 +72,16 @@
         <tr><th>Energy conjured</th><td class="num" id="lenergy">—</td></tr>
         <tr><th>Mass conjured</th><td class="num" id="lmass">—</td></tr>
         <tr><th>Gin spent</th><td class="num" id="lgin">—</td></tr>
+      </table>
+
+      <h2>The day, the garden and the air</h2>
+      <table>
+        <tr><th>Daylight</th><td class="num" id="daylight">—</td></tr>
+        <tr><th>Plant grown</th><td class="num" id="grown">—</td></tr>
+        <tr><th>Plant respired</th><td class="num" id="respired">—</td></tr>
+        <tr><th>Oxygen in the jar</th><td class="num" id="o2">—</td></tr>
+        <tr><th>Carbon dioxide</th><td class="num" id="co2">—</td></tr>
+        <tr><th>Thinnest breathable air</th><td class="num" id="minbreath">—</td></tr>
       </table>
 
       <h2>The water cycle</h2>
@@ -91,8 +106,10 @@
          <button id="pause">Pause</button></p>
       <p class="lede">
         Cells are tinted warm when hotter than room temperature and cool
-        when colder. Pale dots are gnomes; a violet dot is a gnome in the
-        ethereal layer, waiting for a rescue.
+        when colder, and dimmed by how much daylight reaches them — so the
+        whole jar darkens at night, and the ground under a bush or a shelf
+        stays darker than the ground beside it. Pale dots are gnomes; a
+        violet dot is a gnome in the ethereal layer, waiting for a rescue.
       </p>
     </div>
   </div>
@@ -128,6 +145,17 @@
         ? 'Every gram and joule is accounted for: the world changed only by what the ledger admits to.'
         : 'Residual drifting — something is creating or destroying matter off the books.';
 
+      const day = report.air.daylight;
+      set('daylight', day > 0.66 ? day.toFixed(2) + ' — midday'
+        : day > 0.15 ? day.toFixed(2) + ' — low sun'
+        : day > 0 ? day.toFixed(2) + ' — dusk' : '0.00 — night');
+      set('grown', report.life.grown_g.toFixed(4) + ' g');
+      set('respired', report.life.respired_g.toFixed(4) + ' g');
+      set('o2', report.air.oxygen_g.toFixed(4) + ' g');
+      set('co2', report.air.co2_g.toFixed(4) + ' g');
+      set('minbreath', report.air.min_breathable_atm.toFixed(3) + ' atm',
+          report.air.min_breathable_atm > 0.08 ? 'ok' : 'warn');
+
       set('evap', report.vapour.evaporated_g.toFixed(3) + ' g');
       set('cond', report.vapour.condensed_g.toFixed(3) + ' g');
       set('rain', report.vapour.rained_g.toFixed(3) + ' g');
@@ -140,7 +168,7 @@
         air: '#101c20', steam: '#aab4c8', water: '#285ac8', ice: '#aad2f0',
         sand: '#c8af69', stone: '#696973', lava: '#eb6e28', juniper: '#468258',
         co2: '#eb9637', wash: '#96703e', spirit: '#c4e2c8', gin: '#c4e0ec',
-        charcoal: '#262220',
+        charcoal: '#262220', oxygen: '#3c6eaa', glass: '#96acb8',
       };
       document.getElementById('materials').innerHTML = report.materials
         .filter((m) => m.cells > 0 || m.mass_g > 1e-4)

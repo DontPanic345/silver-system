@@ -15,7 +15,13 @@
 //  3. The water cycle runs, in the browser build, without anything boiling:
 //     the pool has evaporated and the air has given it back as dew and
 //     rain, and the jar is somewhere a gnome can live.
-//  4. The pool is level, in the actual pixels. Night 4 shipped — briefly, and
+//  4. The jar has a day, in the actual pixels: the mean channel value of the
+//     whole canvas at midday is measurably higher than at midnight, sampled
+//     by walking the live page forward until it has seen both. The garden
+//     grows (gaining more than its own night respiration spends), something
+//     breathes carbon dioxide out, and nowhere in the jar is the air too thin
+//     to breathe.
+//  5. The pool is level, in the actual pixels. Night 4 shipped — briefly, and
 //     with every other test green — a pool that stood as a slope against the
 //     jar's far wall; it was caught only by looking at a rendered frame.
 //     This makes that look a check: the top of the water must sit at the same
@@ -137,6 +143,40 @@ async function main() {
       .catch(() => {});
     const third = await page.evaluate(() => window.__lastReport);
 
+    // --- The day, in actual pixels ---
+    //
+    // The scene is dimmed by how much daylight reaches each cell, so a frame
+    // at midday is measurably brighter than a frame at midnight. This walks
+    // the page forward until it has seen one of each and compares the mean
+    // channel value of the whole canvas — no hue, no single pixel, and
+    // nothing a still image could fake.
+    const meanBrightness = () =>
+      page.evaluate(() => {
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        let sum = 0, n = 0;
+        for (let i = 0; i < data.length; i += 4) {
+          sum += data[i] + data[i + 1] + data[i + 2];
+          n += 3;
+        }
+        return sum / n;
+      });
+
+    const sample = async (want) => {
+      const deadline = Date.now() + 25000;
+      while (Date.now() < deadline) {
+        const day = await page.evaluate(() => window.__lastReport?.air?.daylight ?? -1);
+        if (want === 'day' ? day > 0.8 : day === 0) {
+          return { day, brightness: await meanBrightness() };
+        }
+        await page.waitForTimeout(120);
+      }
+      return null;
+    };
+    const night = await sample('night');
+    const noon = await sample('day');
+
     // The top of the water in each column across the pool: the highest
     // pixel row that is water-blue, scanning down. Water paints blue well
     // above red; air, stone and sand do not.
@@ -199,16 +239,52 @@ async function main() {
     if (found.length < surface.length * 0.8) {
       fail(`FAIL terrarium_canvas: no pool found in the pixels (${JSON.stringify(surface)}).`);
     } else {
-      // Ignore the single highest and lowest column — a falling drop from
-      // the fountain, or a dimple, is not a slope.
-      const sorted = [...found].sort((a, b) => a - b).slice(1, -1);
-      const spread = (sorted[sorted.length - 1] - sorted[0]) / cellPx;
+      // Trim the tails before measuring. The intent of this check is "the
+      // pool's surface is level", and a drop falling from the fountain —
+      // which is blue, and is genuinely twelve cells above the water — is
+      // not part of the pool's surface. Trimming one column each end was too
+      // little: the fountain's drop is wide enough to be sampled twice.
+      const sorted = [...found].sort((a, b) => a - b);
+      const trim = Math.max(1, Math.floor(sorted.length * 0.1));
+      const body = sorted.slice(trim, sorted.length - trim);
+      const spread = (body[body.length - 1] - body[0]) / cellPx;
       if (spread > 2) {
         fail(
           `FAIL terrarium_canvas: the pool is not level — its surface spans ${spread.toFixed(1)} ` +
             `cells across the jar (${JSON.stringify(surface)}).`
         );
       }
+    }
+    if (!night || !noon) {
+      fail(
+        `FAIL terrarium_canvas: never saw both a midday and a midnight frame ` +
+          `(night=${JSON.stringify(night)}, noon=${JSON.stringify(noon)}).`
+      );
+    } else if (!(noon.brightness > night.brightness * 1.05)) {
+      fail(
+        `FAIL terrarium_canvas: the jar does not visibly darken at night — ` +
+          `mean channel ${noon.brightness.toFixed(2)} at midday against ` +
+          `${night.brightness.toFixed(2)} at midnight.`
+      );
+    }
+    const life = third.life;
+    if (!(life.grown_g > 0)) {
+      fail(`FAIL terrarium_canvas: the garden never grew (${JSON.stringify(life)}).`);
+    }
+    if (!(life.grown_g > life.respired_g)) {
+      fail(
+        `FAIL terrarium_canvas: the garden's night beat its day ` +
+          `(${JSON.stringify(life)}) — it is losing weight, not growing.`
+      );
+    }
+    if (!(third.air.co2_g > 0)) {
+      fail('FAIL terrarium_canvas: nothing in the jar ever breathed out any carbon dioxide.');
+    }
+    if (!(third.air.min_breathable_atm > 0.08)) {
+      fail(
+        `FAIL terrarium_canvas: the thinnest air in the jar is ` +
+          `${third.air.min_breathable_atm} atm — a gnome is suffocating.`
+      );
     }
     if (pageErrors.length > 0) {
       fail(`FAIL terrarium_canvas: page errors ${JSON.stringify(pageErrors)}.`);
@@ -220,7 +296,11 @@ async function main() {
           `pixels changed, mass residual ${third.residual_mass_relative}, ` +
           `energy residual ${third.residual_energy_relative}, ` +
           `evaporated ${v.evaporated_g.toFixed(3)} g, rained ${v.rained_g.toFixed(3)} g, ` +
-          `mean ${third.mean_temperature_k.toFixed(1)} K, pool surface rows ${JSON.stringify(found)}, ` +
+          `mean ${third.mean_temperature_k.toFixed(1)} K, ` +
+          `grown ${third.life.grown_g.toFixed(4)} g against ${third.life.respired_g.toFixed(4)} g respired, ` +
+          `CO2 ${third.air.co2_g.toFixed(4)} g, thinnest air ${third.air.min_breathable_atm.toFixed(3)} atm, ` +
+          `midday ${noon ? noon.brightness.toFixed(2) : '?'} vs midnight ` +
+          `${night ? night.brightness.toFixed(2) : '?'} mean channel, ` +
           `${third.colony.embodied} gnomes embodied.`
       );
     }

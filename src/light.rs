@@ -50,11 +50,12 @@ use crate::world::World;
 pub fn illuminate(world: &mut World) {
     let (w, h) = (world.width(), world.height());
     let sky = world.sky.clamp(0.0, 1.0);
+    let ambient = world.ambient.clamp(0.0, 1.0);
     for i in 0..w {
         let mut carry = sky;
         for j in (0..h).rev() {
             let p = j * w + i;
-            world.light[p] = carry;
+            world.light[p] = carry.max(ambient);
             carry *= 1.0 - absorption(world, p);
         }
     }
