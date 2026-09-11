@@ -610,6 +610,22 @@ impl World {
         &self.temperature
     }
 
+    /// Grams in the cell at `index`, without building the whole [`Cell`].
+    ///
+    /// A `Cell` carries its gas mixture by value, so reading one to ask a
+    /// single scalar question about it copies a good deal more than the
+    /// answer. That is fine for physics, which wants the whole cell anyway,
+    /// and not fine for [`crate::path`], which asks "how full is this?"
+    /// about every cell in the world several times a step.
+    pub fn mass_at(&self, index: GridIndex) -> Scalar {
+        self.mass[self.linear_index(index)]
+    }
+
+    /// Temperature of the cell at `index`, the same way.
+    pub fn temperature_at(&self, index: GridIndex) -> Scalar {
+        self.temperature[self.linear_index(index)]
+    }
+
     /// The material data for the cell at flat position `p`.
     pub(crate) fn material_of(&self, p: usize) -> &Material {
         self.materials.get(self.material[p])

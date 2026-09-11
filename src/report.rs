@@ -31,7 +31,7 @@ use crate::world::World;
 ///            "carried_g":F,"respired_g":F,"min_breath":N,
 ///            "who":[{"i":N,"j":N,"gin":F,"belly_g":F,"breath":N,
 ///                    "embodied":B,"act":S},...]},
-///  "orders":{"open":N,"completed":N,"cancelled":N}}
+///  "orders":{"open":N,"unreachable":N,"completed":N,"cancelled":N}}
 /// ```
 ///
 /// `carried_g` and the `orders` block are the player's half of the glass
@@ -60,7 +60,7 @@ pub fn snapshot_json(world: &World, colony: &Colony, step: u64) -> String {
          \"materials\":[{}],\
          \"colony\":{{\"gnomes\":{},\"embodied\":{},\"ethereal\":{},\"total_gin\":{:.3},\
          \"carried_g\":{:.6},\"respired_g\":{:.6},\"min_breath\":{},\"who\":[{}]}},\
-         \"orders\":{{\"open\":{},\"completed\":{},\"cancelled\":{}}}}}",
+         \"orders\":{{\"open\":{},\"unreachable\":{},\"completed\":{},\"cancelled\":{}}}}}",
         world.mean_temperature(),
         world.total_mass(),
         world.total_energy(),
@@ -104,6 +104,11 @@ pub fn snapshot_json(world: &World, colony: &Colony, step: u64) -> String {
         colony.min_breath(),
         gnomes_json(colony),
         colony.orders.len(),
+        // Orders nobody could walk to when the colony last looked — the
+        // headless half of the dashed marker the renderer draws. A queue
+        // that is not going down reads very differently once you can see
+        // whether anyone can get there.
+        colony.orders.iter().filter(|o| !o.reachable).count(),
         colony.orders.completed(),
         colony.orders.cancelled(),
     )

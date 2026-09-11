@@ -167,6 +167,20 @@ pub struct Material {
     /// to turn over: with the surface left cool, the vapour over it
     /// condenses straight back onto it. See [`Material::buoyant_density`].
     pub thermal_expansion: Scalar,
+    /// Gin a gnome gets out of a gram of this in its belly; `0.0` for
+    /// anything that is not food.
+    ///
+    /// The game layer used to name its two foods directly — a berry off a
+    /// juniper bush and a mouthful out of the still's receiver were two
+    /// hard-coded [`MaterialId`]s in `src/gnome.rs`, which is exactly the
+    /// per-material special case this table exists to prevent. With the
+    /// number here instead, "what is worth eating" is a column, a gnome
+    /// looks for *food* rather than for juniper, and a new crop is a row.
+    ///
+    /// How it is taken depends on phase and on nothing else: a liquid is
+    /// drunk by the cellful, a solid is picked a berry at a time and never
+    /// stripped bare — see `src/gnome.rs`.
+    pub nutrition: Scalar,
 }
 
 /// The temperature the material table's densities are quoted at — room
@@ -210,7 +224,19 @@ impl Material {
             },
             gas_constant: 0.0,
             thermal_expansion: 0.0,
+            nutrition: 0.0,
         }
+    }
+
+    /// Sets [`Material::nutrition`], builder-style — Gin per gram eaten.
+    pub fn nourishing(mut self, gin_per_gram: Scalar) -> Self {
+        self.nutrition = gin_per_gram;
+        self
+    }
+
+    /// Whether a gnome would eat this.
+    pub fn is_food(&self) -> bool {
+        self.nutrition > 0.0
     }
 
     /// Sets [`Material::opacity`], builder-style.
@@ -660,6 +686,38 @@ impl MaterialTable {
     /// This table's living processes — see [`Metabolism`].
     pub fn metabolisms(&self) -> &[Metabolism] {
         &self.metabolisms
+    }
+
+    /// Whether anything in this table makes more of `id` — i.e. whether
+    /// `id` is a thing that grows. A gnome uses this to tell a crop from a
+    /// wall: a hedge across the path is something you harvest, a rock is
+    /// something you need an order and a shovel for.
+    pub fn grows(&self, id: MaterialId) -> bool {
+        self.metabolisms
+            .iter()
+            .any(|m| m.host == id && m.host_gain() > 0.0)
+    }
+
+    /// What a cell of `id` leaves behind when it is cut down, or `None` if
+    /// nothing in the table says.
+    ///
+    /// Derived, not declared: it is the product of `id`'s own *shedding* —
+    /// a process it hosts that consumes nothing but itself and puts back a
+    /// single condensed material that is not itself. In this table that is
+    /// leaf fall, so a harvested bush leaves leaf litter, and the compost
+    /// heap and the rot chain that already eat litter get the prunings for
+    /// free. Nothing in `src/gnome.rs` knows the word "litter".
+    pub fn shed_form(&self, id: MaterialId) -> Option<MaterialId> {
+        self.metabolisms.iter().find_map(|m| {
+            let sheds_only_itself =
+                m.host == id && m.intake.len() == 1 && m.intake[0].material == id;
+            if !sheds_only_itself || m.output.len() != 1 {
+                return None;
+            }
+            let product = m.output[0].material;
+            let left = self.get(product);
+            (product != id && left.phase != Phase::Gas).then_some(product)
+        })
     }
 
     /// Per-slot species properties — see [`SlotProps`].
@@ -1307,8 +1365,13 @@ impl MaterialTable {
         // A bush shades what is under it — nearly, but not quite, wholly:
         // enough that a second bush directly beneath a first one grows
         // slowly, which is the whole of why plants have a shape.
+        // ...and it is the colony's larder. 600 Gin to the gram means the
+        // berry a gnome actually picks (`gnome::BERRY_MASS`, 0.05 g) is
+        // worth 30, which is what a berry has been worth since night 1.
         materials[t::JUNIPER.0 as usize] =
-            Material::new(0.5, 0.0, 2.0, 0.2, Phase::Solid, (70, 130, 90)).with_opacity(0.8);
+            Material::new(0.5, 0.0, 2.0, 0.2, Phase::Solid, (70, 130, 90))
+                .with_opacity(0.8)
+                .nourishing(600.0);
         // The brewing chain. `wash` is what a warm tun makes of juniper and
         // water; it boils into `spirit` 22 K below water's boiling point,
         // and `spirit` condenses back into `gin`. Nothing in that chain is
@@ -1335,10 +1398,14 @@ impl MaterialTable {
             (196, 226, 200),
         )
         .with_gas_constant(R_SPIRIT);
+        // The point of the whole brewing chain: a mouthful of the still's
+        // output is worth ten berries, because a gnome drinks a whole cell
+        // of it and only ever picks a berry off a bush.
         materials[t::GIN.0 as usize] =
             Material::new(0.94, 0.35, 2.44, 0.6, Phase::Liquid, (196, 224, 236))
                 .with_thermal_expansion(1.1e-3)
-                .with_opacity(0.12);
+                .with_opacity(0.12)
+                .nourishing(60.0);
         // Glass: stone that light goes through. Every number here is
         // stone's except `opacity`, deliberately — a lid that behaved
         // differently in any other way would be a second mechanism where one
@@ -1362,8 +1429,17 @@ impl MaterialTable {
             Material::new(0.03, 0.0, 2.0, 0.15, Phase::Solid, (124, 84, 48))
                 .with_mobility(Mobility::Granular)
                 .with_opacity(0.6);
+        // Mould is loose, like the leaves it eats. That is one field, and it
+        // decides whether a colony can walk across its own compost heap: a
+        // static solid blocks a gnome whatever it weighs, so two milligrams
+        // of mould growing over a doorway was a locked door, and four
+        // gnomes starved on the wrong side of one for forty thousand steps.
+        // A crust of mould is a crumbly deposit and a gnome walks through
+        // it; a *bush* is not, which is why juniper stays static.
         materials[t::FUNGUS.0 as usize] =
-            Material::new(0.03, 0.0, 2.0, 0.18, Phase::Solid, (200, 170, 235)).with_opacity(0.5);
+            Material::new(0.03, 0.0, 2.0, 0.18, Phase::Solid, (200, 170, 235))
+                .with_mobility(Mobility::Granular)
+                .with_opacity(0.5);
 
         let heating = |from, to, threshold_k, latent_heat| Transition {
             from,

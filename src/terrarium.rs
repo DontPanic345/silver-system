@@ -509,7 +509,19 @@ mod tests {
         let mut terra = default_terrarium();
         let before = terra.world.mass_of(t::JUNIPER);
         let cells_before = terra.world.count_of(t::JUNIPER);
-        for _ in 0..6000 {
+        let organic_before = before + terra.world.mass_of(t::LITTER);
+        // Twelve thousand rather than the six this used to run for, and the
+        // reason is the whole of night 8. Once the gnomes could reach the
+        // garden they started eating it, and a colony of four eats within a
+        // few per cent of what this jar's carbon budget can grow: the
+        // standing crop dips while they graze it and is back above where it
+        // started a few thousand steps later. Six thousand steps landed in
+        // the dip. What holds at every horizon is the pair below it — the
+        // garden spreads, and the organic matter in the jar as a whole
+        // (crop plus the litter the prunings and the leaf fall become) goes
+        // up, which is what "this is a garden and not a larder" means when
+        // something is living off it.
+        for _ in 0..12000 {
             terra.step(0.05);
         }
         // What a bush builds by day has to beat what it spends at night
@@ -532,6 +544,13 @@ mod tests {
         assert!(
             terra.world.count_of(t::JUNIPER) > cells_before,
             "and it should have spread as well as fattened"
+        );
+        let organic = terra.world.mass_of(t::JUNIPER)
+            + terra.world.mass_of(t::LITTER)
+            + terra.world.mass_of(t::FUNGUS);
+        assert!(
+            organic > organic_before,
+            "the jar's standing organic matter fell: {organic_before} -> {organic} g"
         );
     }
 

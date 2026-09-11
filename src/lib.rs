@@ -96,6 +96,9 @@ pub mod light;
 /// Life: data-driven metabolisms — growth, respiration, and the carbon cycle.
 pub mod life;
 
+/// Where a gnome can get to: the mobility graph and the routes over it.
+pub mod path;
+
 /// The gnomes: the game layer, Gin economy, and ethereal mechanics.
 pub mod gnome;
 

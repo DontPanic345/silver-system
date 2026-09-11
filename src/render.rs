@@ -168,7 +168,17 @@ pub fn render_world_to_rgb8(
         if !world.in_bounds(order.at) {
             continue;
         }
+        // An order nobody can walk to is drawn as a broken, dimmed outline.
+        // The colony will not claim one it has no route to (see
+        // `src/path.rs`), so without this the marker for "on its way" and
+        // the marker for "you have walled this off from us" were the same
+        // picture, and the only way to tell them apart was to wait.
         let colour = order.job.marker_colour();
+        let colour = if order.reachable {
+            colour
+        } else {
+            (colour.0 / 3, colour.1 / 3, colour.2 / 3)
+        };
         let image_row = world.height() - 1 - order.at.j as usize;
         let (x0, y0) = (order.at.i as u32 * cell_px, image_row as u32 * cell_px);
         let thickness = (cell_px / 6).max(1);
@@ -178,7 +188,8 @@ pub fn render_world_to_rgb8(
                     || dy < thickness
                     || dx >= cell_px - thickness
                     || dy >= cell_px - thickness;
-                if edge {
+                let drawn = edge && (order.reachable || ((dx + dy) / thickness).is_multiple_of(2));
+                if drawn {
                     put(&mut buf, x0 + dx, y0 + dy, colour);
                 }
             }

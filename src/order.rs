@@ -109,6 +109,19 @@ pub struct Order {
     pub waited: u32,
     /// How many gnomes have given up on it — see [`ATTEMPTS`].
     pub attempts: u8,
+    /// Whether anybody could get to it when the colony last looked.
+    ///
+    /// Since night 8 a gnome will not claim a job it has no route to, which
+    /// is right — it stops three gnomes walking into the same wall — and
+    /// which quietly removed the mechanism that used to retire an
+    /// impossible order, because an order nobody claims is an order nobody
+    /// can give up on. So the colony now says, once a step, which orders
+    /// anybody could reach, and [`Orders::end_survey`] ages the rest out.
+    /// It is also worth drawing: an order the colony cannot get to is the
+    /// player's problem to solve, not the colony's.
+    pub reachable: bool,
+    /// Steps this order has spent with nobody able to reach it.
+    unreached: u32,
 }
 
 /// What a gnome is carrying: real grams of a real material, at the
@@ -266,6 +279,9 @@ pub struct Orders {
     next_id: u64,
     completed: u64,
     cancelled: u64,
+    /// Gnomes that reported in during the current survey — see
+    /// [`Orders::begin_survey`].
+    surveyors: u32,
 }
 
 impl Orders {
@@ -287,6 +303,8 @@ impl Orders {
             claimed_by: None,
             waited: 0,
             attempts: 0,
+            reachable: true,
+            unreached: 0,
         });
         self.next_id
     }
@@ -338,19 +356,74 @@ impl Orders {
         self.queue.iter().find(|o| o.id == id).copied()
     }
 
-    /// The closest order `worker` could usefully take on, claimed for it.
+    /// Starts a round of "who can get where" — call once per colony
+    /// update, before any gnome surveys.
+    pub(crate) fn begin_survey(&mut self) {
+        for o in self.queue.iter_mut() {
+            o.reachable = false;
+        }
+        self.surveyors = 0;
+    }
+
+    /// One gnome's contribution to that round: every order it can reach is
+    /// marked reachable.
+    pub(crate) fn survey(&mut self, steps: impl Fn(GridIndex) -> Option<u32>) {
+        self.surveyors += 1;
+        for o in self.queue.iter_mut() {
+            if !o.reachable && steps(o.at).is_some() {
+                o.reachable = true;
+            }
+        }
+    }
+
+    /// Closes the round, and retires anything the whole colony has been
+    /// unable to reach for [`PATIENCE`] × [`ATTEMPTS`] steps.
+    ///
+    /// Nothing is retired in a round nobody surveyed — a colony entirely in
+    /// the ethereal layer has not decided an order is impossible, it has
+    /// merely stopped looking.
+    pub(crate) fn end_survey(&mut self) {
+        if self.surveyors == 0 {
+            return;
+        }
+        let limit = PATIENCE * ATTEMPTS as u32;
+        let doomed: Vec<u64> = self
+            .queue
+            .iter_mut()
+            .filter_map(|o| {
+                if o.reachable {
+                    o.unreached = 0;
+                    return None;
+                }
+                o.unreached += 1;
+                (o.unreached >= limit).then_some(o.id)
+            })
+            .collect();
+        for id in doomed {
+            self.cancel(id);
+        }
+    }
+
+    /// The order `worker` could usefully take on soonest, claimed for it.
+    ///
+    /// "Soonest" is `steps` — how many paces away a job is by a route the
+    /// gnome could actually walk, `None` for one it cannot get to at all.
+    /// It used to be straight-line distance, which is how a colony ends up
+    /// with every gnome claiming the job on the far side of a wall and
+    /// nobody claiming the one behind them.
     pub(crate) fn claim_for(
         &mut self,
         worker: usize,
-        from: GridIndex,
         load: Option<&Load>,
+        steps: impl Fn(GridIndex) -> Option<u32>,
     ) -> Option<u64> {
         let pick = self
             .queue
             .iter()
             .filter(|o| o.claimed_by.is_none() && o.job.suits(load))
-            .min_by_key(|o| (o.at.i - from.i).abs() + (o.at.j - from.j).abs())
-            .map(|o| o.id)?;
+            .filter_map(|o| steps(o.at).map(|d| (d, o.id)))
+            .min()
+            .map(|(_, id)| id)?;
         if let Some(o) = self.queue.iter_mut().find(|o| o.id == pick) {
             o.claimed_by = Some(worker);
             o.waited = 0;
@@ -447,6 +520,8 @@ mod tests {
             claimed_by: None,
             waited: 0,
             attempts: 0,
+            reachable: true,
+            unreached: 0,
         };
         let a = perform(&mut w, &dig, &mut load, 0.0);
         assert_eq!(a.outcome, Outcome::Dug);
@@ -467,6 +542,8 @@ mod tests {
             claimed_by: None,
             waited: 0,
             attempts: 0,
+            reachable: true,
+            unreached: 0,
         };
         let b = perform(&mut w, &build, &mut load, 0.0);
         assert_eq!(b.outcome, Outcome::Built);
@@ -504,6 +581,8 @@ mod tests {
                 claimed_by: None,
                 waited: 0,
                 attempts: 0,
+                reachable: true,
+                unreached: 0,
             };
             assert_eq!(
                 perform(&mut w, &order, &mut load, 0.0).outcome,
@@ -528,6 +607,8 @@ mod tests {
             claimed_by: None,
             waited: 0,
             attempts: 0,
+            reachable: true,
+            unreached: 0,
         };
         let mut load = None;
         let before = w.cell(at).temperature;
@@ -557,6 +638,8 @@ mod tests {
             claimed_by: None,
             waited: 0,
             attempts: 0,
+            reachable: true,
+            unreached: 0,
         };
         let mut load = None;
         assert_eq!(
@@ -586,7 +669,7 @@ mod tests {
         let at = GridIndex::new(3, 3);
         let id = orders.issue(at, Job::Dig);
         for _ in 0..ATTEMPTS {
-            assert!(orders.claim_for(0, GridIndex::new(0, 0), None).is_some());
+            assert!(orders.claim_for(0, None, |_| Some(4)).is_some());
             orders.release(id);
         }
         assert!(orders.is_empty(), "three refusals should retire it");
