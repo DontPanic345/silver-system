@@ -86,7 +86,20 @@ pub fn wet(world: &World, at: GridIndex) -> bool {
 /// in, and a rising pool can still close over it — what it will no longer do
 /// is walk in on purpose.
 pub fn steppable(world: &World, at: GridIndex) -> bool {
-    passable(world, at) && !wet(world, at) && !wet(world, GridIndex::new(at.i, at.j - 1))
+    steppable_from(world, at, GridIndex::new(i32::MIN, i32::MIN))
+}
+
+/// [`steppable`], for a gnome that is standing at `from`.
+///
+/// The one difference is the lookahead: the cell directly over the pool is
+/// not a place to stand *unless the gnome is in the pool underneath it*, in
+/// which case it is the way out. Without that exception a gnome that fell
+/// into water could not climb out of it by any route — the rule written to
+/// keep gnomes out of the pool was keeping one in — and a colony that fell
+/// into the garden's water bed cut the bushes over its head instead.
+pub fn steppable_from(world: &World, at: GridIndex, from: GridIndex) -> bool {
+    let below = GridIndex::new(at.i, at.j - 1);
+    passable(world, at) && !wet(world, at) && (below == from || !wet(world, below))
 }
 
 /// Whether the cell at `at` is a crop a gnome could cut down: something the
@@ -113,8 +126,8 @@ pub fn harvestable(world: &World, at: GridIndex) -> bool {
 }
 
 /// Whether a route of this kind may enter `at`.
-fn open(world: &World, at: GridIndex, through: Through) -> bool {
-    steppable(world, at) || (through == Through::Crops && harvestable(world, at))
+fn open(world: &World, at: GridIndex, from: GridIndex, through: Through) -> bool {
+    steppable_from(world, at, from) || (through == Through::Crops && harvestable(world, at))
 }
 
 /// The cells a gnome standing at `from` can be in one step later, in the
@@ -136,13 +149,13 @@ pub fn moves(world: &World, from: GridIndex, through: Through, out: &mut Vec<Gri
         let up = GridIndex::new(from.i + dir, from.j + 1);
         // Steppable first in both cases, so that a relaxed route climbs
         // over a hedge it could climb over and only cuts one it cannot.
-        if steppable(world, ahead) {
+        if steppable_from(world, ahead, from) {
             out.push(ahead);
-        } else if steppable(world, up) {
+        } else if steppable_from(world, up, from) {
             out.push(up);
-        } else if open(world, ahead, through) {
+        } else if open(world, ahead, from, through) {
             out.push(ahead);
-        } else if open(world, up, through) {
+        } else if open(world, up, from, through) {
             out.push(up);
         }
     }
@@ -157,7 +170,7 @@ pub fn moves(world: &World, from: GridIndex, through: Through, out: &mut Vec<Gri
     // this move never appears there.
     if out.is_empty() {
         let above = GridIndex::new(from.i, from.j + 1);
-        if steppable(world, above) {
+        if steppable_from(world, above, from) {
             out.push(above);
         }
     }

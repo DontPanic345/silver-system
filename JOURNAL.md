@@ -721,3 +721,88 @@ journal as a whole and moved sideways on purpose; tonight ran the jar four
 times longer than anyone had and let the number pick. A run of nights like
 this one might be better briefed to spend its first twenty minutes measuring
 the state it inherited rather than reading about it._
+
+**Night 8 (bonus round) — 2026-09-12 — Opus 5/high — Gnomes that can find
+their way.** Measured before choosing, which is what night 7's closing note
+asked for. The first thing I did was run the jar the way night 7 left it,
+and the number chose the night: **from step 10000 to step 80000 all four
+gnomes stand in one cell**, idle, bellies flat, and by 70000 the colony's
+Gin is spent to 1 of 400. Night 7 named the cause in its own last paragraph
+— "the cause is pathing rather than physics" — and left it. The alternatives
+were the knowledge economy (still the largest untouched piece of
+`NORTH_STARS.md` #4), a soil nutrient to make rot load-bearing for farming,
+and buildings that are machines rather than blocks. Each of them adds to a
+world whose people have stopped moving, which is the same mistake night 7
+declined to make.
+
+Built: [`src/path.rs`](src/path.rs), the gnome mobility graph and a
+breadth-first flow field over it, recomputed every step rather than planned.
+Steering is now a route: goals are filtered by whether a gnome can actually
+get to them, orders are claimed by how far away they are *by route* and
+surveyed once a step so one nobody can reach is drawn dashed, counted on the
+page and eventually retired. A gnome will not walk onto the pool or into
+anything near lethal, and it can chimney straight up out of a pit.
+Food became a column in the material table (`Material::nutrition`) instead
+of two hard-coded materials in the game layer, and "crop" is now *anything
+the table grows*, with `MaterialTable::shed_form` saying what a cut one
+leaves. A colony shut in by its own garden lifts the hedge up a course and
+walks out underneath.
+
+Findings worth keeping, each written up where it bites:
+
+1. *A route is a promise about what the walker will do.* `path::moves` is
+   the walker's own move set — fall before walk, one course of climb — so a
+   route cannot offer a step the gnome will refuse. Everything else in the
+   module is downstream of that one rule.
+2. *A gnome could step down anywhere and only climb back diagonally.* Any
+   pit one cell wide was therefore a permanent trap, and the colony ate its
+   way out of the one a dig order opened. Falling is generous and climbing
+   was not; they have to match.
+3. *"Mostly empty is passable" applied only to granular materials, and mould
+   was not one.* Two milligrams of it across a doorway was a locked door.
+   Fungus is granular now — it also slides and piles, and fills holes.
+4. *Every last resort needs a clock and a direction, and getting either
+   wrong is a lawnmower.* Cutting a crop went through four versions: cut to
+   reach food (2.5 g of garden into 1.9 g of litter in 1500 steps); cut only
+   when penned, by cell count (four gnomes then paced a five-cell pocket for
+   40000 steps with the garden two cells away, because five was one more
+   than the threshold); cut toward the way out, after 2000 steps of getting
+   nowhere; and finally **do not cut at all if you can lift**.
+5. *A cut cell keeps its mass, and that is why cutting did not even work.*
+   Half a gram of bush becomes half a gram of leaf litter in a cell that
+   holds a fiftieth of that, so the way stays blocked and the gnome cuts the
+   next one. Lifting the column is a swap: the bush keeps every gram and
+   every joule, the ledger has nothing to say, and the path opens.
+6. *Reachability is the missing half of the glass pane.* Before tonight an
+   order being walked to and an order walled off from the whole colony were
+   the same picture on screen.
+
+Verified: 193 lib tests, clippy and rustfmt clean, and all eight e2e checks
+including a new `terrarium_routing.test.mjs` that clicks a cell at the far
+end of the jar with a real mouse, watches a gnome route there and dig it,
+and reads the dashed marker of an unreachable order against a solid one in
+the same frame. I read the act histogram and the per-gnome trace of long
+runs rather than trusting the summary — `--trace` exists because of that and
+every diagnosis above came out of it — and I looked at rendered frames of
+the live jar, with gnomes spread along the walkway rather than stacked, and
+of a dashed marker on the far wall. What I did **not** verify: any
+non-default grid size; `gases.html` or `still.html` by eye (their e2e checks
+pass); and whether the dashed marker is legible to a human at normal zoom —
+it is deliberately dim, and at 12 px a cell it is faint.
+
+Left undone, and the honest part. Over 80000 steps the colony now walks
+throughout, all four stay embodied with full breath, and the garden ends
+*bigger* than it started (2.50 → 2.61 g, 5 → 16 cells, litter 0.06 → 0.16 g,
+residuals 6e-14 and 1.5e-12) — but **the colony ends the run broke and
+hungry**: Gin 400 → 0, bellies empty in every late sample. The jar's own
+ethereal pipe spends 8.3 Gin per 1000 steps for ever, which is more than
+four gnomes forage, so the Gin economy is the obvious next piece and it is
+an economy question rather than a pathing one. The other known-bad
+interaction: **a dig order into the garden's water bed still costs most of
+the garden** — gnomes fall into the hole, banish water to breathe (17 g
+through the ledger in 6000 steps), and 3 g of the garden mashes into wash
+where warm water now touches it; juniper ends at 0.5 g instead of 2.5. I
+made it four times less bad tonight and did not finish it. Still untouched:
+the book-copying knowledge economy, the Gnome Grandmother, a soil nutrient,
+nitrogen, dissolved gases, wash as a real solution, and pressure-dependent
+boiling.

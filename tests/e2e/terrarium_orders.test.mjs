@@ -248,24 +248,29 @@ async function main() {
       fail(`FAIL terrarium_orders: mass residual ${dug.residual_mass_relative} after digging.`);
     }
 
-    // Wait for a frame with nobody standing in the hole. Since night 8 the
-    // gnomes walk the whole jar rather than shuffling where they were put,
-    // so the gnome that dug this cell is quite likely to be *in* it — and a
-    // gnome is drawn over the cell it is in, which makes the hole read
-    // bright rather than dark for reasons that have nothing to do with
-    // digging.
-    await page
-      .waitForFunction(() => window.__cell(13, 3).gnomes === 0, { timeout: 20000 })
-      .catch(() => {});
-    await page.click('#pause');
-    await page.evaluate(() => window.__repaint());
-    const standing = await page.evaluate(() => window.__cell(13, 3));
+    // Find a *paused* frame with nobody standing in the hole. Since night 8
+    // the gnomes walk the whole jar rather than shuffling where they were
+    // put, and they fall through this hole and climb out of it constantly —
+    // and a gnome is drawn over the cell it is in, which would make the hole
+    // read bright rather than dark for reasons that have nothing to do with
+    // digging. Pausing first and looking second is the whole trick: checking
+    // while it runs and pausing afterwards lets somebody walk back in
+    // between the two.
+    let standing = null;
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      await page.click('#pause');
+      await page.evaluate(() => window.__repaint());
+      standing = await page.evaluate(() => window.__cell(13, 3));
+      if (standing.gnomes === 0) break;
+      await page.click('#pause');
+      await page.waitForTimeout(120);
+    }
+    if (standing.gnomes > 0) {
+      fail(`FAIL terrarium_orders: somebody stood in the hole every time (${JSON.stringify(standing)}).`);
+    }
     const after = await cellPixel(page, ...HOLE, GROUND);
     const controlAfter = await cellPixel(page, ...CONTROL, GROUND);
     await page.click('#pause');
-    if (standing.gnomes > 0) {
-      fail(`FAIL terrarium_orders: somebody stood in the hole for 20 s (${JSON.stringify(standing)}).`);
-    }
     // Compared against the undug meadow beside it *in the same frame*, so
     // this survives the whole jar dimming at night.
     if (!(after.mean < 0.6 * controlAfter.mean)) {

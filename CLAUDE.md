@@ -77,15 +77,23 @@ orders on cells and gnomes carry them out, so `www/terrarium.html` is
 something you use rather than only watch (`src/order.rs`). Night 7 closed
 the carbon cycle's other half — things die, fall, and rot into mould —
 which needed `life::give` to be able to put something that is *not* a gas
-into a cell of air, and needed it to do so without eating the air.
+into a cell of air, and needed it to do so without eating the air. Night 8
+gave the gnomes routes (`src/path.rs`): a gnome floods the world with the
+moves it can really make and walks the one that gets it there, instead of
+taking the sign of the difference in column, which is why four of them used
+to end a long run standing in one cell against a hedge. It can now cut or —
+first — lift a crop out of its way, and what is food is a column in the
+material table rather than two ids in the game layer.
 
 Live code: `src/world.rs`, `src/physics.rs`, `src/gas.rs`,
 `src/vapour.rs`, `src/chemistry.rs`, `src/light.rs`, `src/life.rs`,
-`src/gnome.rs`, `src/order.rs`, `src/terrarium.rs`, `src/chamber.rs`,
+`src/path.rs`, `src/gnome.rs`, `src/order.rs`, `src/terrarium.rs`, `src/chamber.rs`,
 `src/still.rs`, `src/report.rs`, `www/terrarium.html`, `www/gases.html`,
 `www/still.html`. Run them headless with
 `cargo run --release --bin terrarium -- --map` (and `--bin still`,
-`--bin chamber`; add `--temps` for a temperature map). No process cycle governs this
+`--bin chamber`; add `--temps` for a temperature map, `--trace` for one line
+per gnome per step saying what it did and how much of the world it can
+reach). No process cycle governs this
 experiment — deliberately, after `night-shift`.
 
 The rule that matters when changing anything here: **every operation must

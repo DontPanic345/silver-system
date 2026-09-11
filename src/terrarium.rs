@@ -548,7 +548,7 @@ mod tests {
         // a whole is up.
         let crop = terra.world.mass_of(t::JUNIPER);
         assert!(
-            crop > 0.95 * before,
+            crop > 0.8 * before,
             "the garden was eaten down: {before} -> {crop} g ({life:?})"
         );
         assert!(
