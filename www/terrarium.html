@@ -124,6 +124,7 @@
       <h2>Your orders</h2>
       <table>
         <tr><th>Outstanding</th><td class="num" id="oopen">—</td></tr>
+        <tr><th>Nobody can reach</th><td class="num" id="ostuck">—</td></tr>
         <tr><th>Done</th><td class="num" id="odone">—</td></tr>
         <tr><th>Given up on</th><td class="num" id="ogone">—</td></tr>
       </table>
@@ -131,6 +132,14 @@
         <span class="dot" style="background:#f0aa3c"></span>dig &nbsp;
         <span class="dot" style="background:#78c8ff"></span>build &nbsp;
         <span class="dot" style="background:#eb649b"></span>warm or chill
+      </p>
+      <p class="lede">
+        A marker drawn <strong>dashed and dim</strong> is one no gnome can
+        walk to. They find their own way — round a wall, up a course, over
+        the hedge — and they will cut a bush that has shut them in, but they
+        will not wade into the pool, walk into the fire, or climb two courses
+        at once. If a marker stays dashed, the route is your problem to
+        solve; the colony gives up on it eventually.
       </p>
       <p class="lede">
         You do not touch this world. You write on a cell and a gnome walks
@@ -230,6 +239,7 @@
       set('carried', report.colony.carried_g.toFixed(3) + ' g');
 
       set('oopen', String(report.orders.open));
+      set('ostuck', String(report.orders.unreachable));
       set('odone', String(report.orders.completed));
       set('ogone', String(report.orders.cancelled));
     }

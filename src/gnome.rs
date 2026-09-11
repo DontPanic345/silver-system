@@ -131,6 +131,27 @@ pub fn dangerous(world: &World, at: GridIndex) -> bool {
     t > LETHAL_MAX - SHUN_MARGIN_K || t < LETHAL_MIN + SHUN_MARGIN_K
 }
 
+/// Cells a gnome can reach and still count as penned in — see
+/// [`Colony::travel`].
+///
+/// Low on purpose. The walkable world of the default jar is about
+/// seventeen cells, because a gnome walks a floor rather than swimming
+/// about in a room, so "walled in" has to mean *very* few places to stand
+/// or it means "in the terrarium".
+pub const PENNED_IN: usize = 4;
+
+/// Steps a gnome spends penned in and with nothing it can reach before it
+/// will cut a crop to get out.
+///
+/// Cutting is a last resort and this is what makes it one. Without a wait,
+/// a gnome that dropped into a gap for a moment started hacking, and a
+/// colony that fell into the garden's water bed took the garden apart
+/// getting out of it — 2.5 g of bushes into 1.9 g of leaf litter inside
+/// fifteen hundred steps. A gnome that is walking, eating or working resets
+/// this to nothing, so the only thing that reaches the far end of it is a
+/// gnome that has genuinely been stuck for a while.
+pub const TRAPPED_STEPS: u32 = 120;
+
 /// Steps a gnome can hold its breath in something unbreathable.
 pub const BREATH_STEPS: u32 = 40;
 
@@ -267,6 +288,9 @@ pub struct Gnome {
     pub hands: Option<Load>,
     /// The order this gnome has claimed, by id — see [`Orders`].
     pub job: Option<u64>,
+    /// Consecutive steps spent penned in with nowhere to go — see
+    /// [`TRAPPED_STEPS`].
+    pub stuck: u32,
 }
 
 impl Gnome {
@@ -287,6 +311,7 @@ impl Gnome {
             belly: BELLY_FULL,
             hands: None,
             job: None,
+            stuck: 0,
         }
     }
 
@@ -364,8 +389,11 @@ pub struct Colony {
     /// — see [`PLANT_PERIOD`].
     last_plant: Option<u64>,
     /// Reusable route buffers — see [`crate::path`]. Held here so that
-    /// flooding the world once per gnome per step costs no allocation.
+    /// flooding the world once or twice per gnome per step costs no
+    /// allocation: `routes` is what is open, `crops` is what would be open
+    /// to a gnome willing to cut its way out.
     routes: Routes,
+    crops: Routes,
     /// Grams of food the colony has burned since it started — the other
     /// half of the jar's carbon books, beside [`crate::life::Tally`]. What
     /// a gnome breathes out is water and carbon dioxide in the same declared
@@ -383,6 +411,7 @@ impl Colony {
             tick: 0,
             last_plant: None,
             routes: Routes::default(),
+            crops: Routes::default(),
             respired_g: 0.0,
         }
     }
@@ -466,15 +495,17 @@ impl Colony {
         // buffers survive the round trip, which is the point of holding
         // them on the colony at all.
         let mut routes = std::mem::take(&mut self.routes);
+        let mut crops = std::mem::take(&mut self.crops);
         self.orders.begin_survey();
         for idx in 0..self.gnomes.len() {
             match self.gnomes[idx].body {
-                Body::Embodied => self.update_embodied(world, &mut routes, idx),
+                Body::Embodied => self.update_embodied(world, &mut routes, &mut crops, idx),
                 Body::Ethereal { .. } => self.update_ethereal(idx),
             }
         }
         self.orders.end_survey();
         self.routes = routes;
+        self.crops = crops;
     }
 
     /// Ethereal pipes move one cell of matter per step, paid for out of the
@@ -553,7 +584,13 @@ impl Colony {
         }
     }
 
-    fn update_embodied(&mut self, world: &mut World, routes: &mut Routes, idx: usize) {
+    fn update_embodied(
+        &mut self,
+        world: &mut World,
+        routes: &mut Routes,
+        crops: &mut Routes,
+        idx: usize,
+    ) {
         let pos = self.gnomes[idx].pos;
         if !world.in_bounds(pos) {
             return;
@@ -637,6 +674,20 @@ impl Colony {
                 self.gnomes[idx].last_act = Act::Walked;
                 return;
             }
+            // Still stuck. If what is holding it down is something that
+            // grows, cut that: a bush costs nothing to cut and a gasp costs
+            // Gin, and magic is meant to be the last resort rather than the
+            // second.
+            if let Some(crop) = self
+                .reachable_cells(pos)
+                .into_iter()
+                .skip(1)
+                .find(|&n| path::harvestable(world, n))
+            {
+                if self.harvest(world, idx, crop) {
+                    return;
+                }
+            }
             // A cheap Gin-powered gasp: replace the cell you are stuck in
             // with breathable air. Costs matter, so it is not free.
             // Priced by what it actually displaces, not by what it makes.
@@ -699,7 +750,7 @@ impl Colony {
             return;
         }
 
-        self.travel(world, routes, idx, pos);
+        self.travel(world, routes, crops, idx, pos);
     }
 
     /// Takes this gnome one step toward whatever it is currently for.
@@ -717,35 +768,67 @@ impl Colony {
     /// is not chosen at all, so a gnome walled in by the hedge it planted
     /// goes and does the next thing on its list instead of starving in
     /// front of a wall.
-    fn travel(&mut self, world: &mut World, routes: &mut Routes, idx: usize, pos: GridIndex) {
+    fn travel(
+        &mut self,
+        world: &mut World,
+        routes: &mut Routes,
+        crops: &mut Routes,
+        idx: usize,
+        pos: GridIndex,
+    ) {
         if let Some(goal) = self.goal(world, routes, idx) {
             if let Some(next) = routes.next_step(goal) {
+                self.gnomes[idx].stuck = 0;
                 self.step_to(idx, next, pos);
                 return;
             }
         }
 
-        // Nothing open. A gnome that cannot get anywhere it needs to be may
-        // cut a mature crop out of its way — and only then, so the garden
-        // is pruned by the colony's need to get through it rather than by
-        // anybody's policy about hedges.
-        routes.explore_avoiding(world, pos, Through::Crops, |c| dangerous(world, c));
-        if let Some(goal) = self.goal(world, routes, idx) {
-            if let Some(next) = routes.next_step(goal) {
-                if path::harvestable(world, next) && !path::steppable(world, next) {
-                    if self.harvest(world, idx, next) {
-                        return;
-                    }
-                } else {
-                    self.step_to(idx, next, pos);
+        // Nothing open. A gnome that is *penned in* may cut a crop out of
+        // its way — and only to get *out*, and only when penned.
+        //
+        // Both halves of that were learned the same way, from one dig order
+        // in the garden. Letting any gnome that could not reach food cut
+        // made a lawnmower rather than a hedge-trimmer: every bush nearby
+        // had been picked below a berry, so each gnome cut its way toward
+        // the next bush that had one. Restricting it to penned gnomes was
+        // not enough on its own, because the pen a gnome actually ends up
+        // in is the hole the player dug into the garden, and cutting
+        // *toward lunch* from in there still chews through the whole plot.
+        // Cutting toward the nearest cell outside the pen costs one bush,
+        // or two. 2.5 g of garden became 1.9 g of leaf litter in fifteen
+        // hundred steps before this rule; it now survives the same dig.
+        if routes.reach() > PENNED_IN {
+            self.gnomes[idx].stuck = 0;
+            self.pace(world, idx, pos);
+            return;
+        }
+        self.gnomes[idx].stuck += 1;
+        if self.gnomes[idx].stuck < TRAPPED_STEPS {
+            self.pace(world, idx, pos);
+            return;
+        }
+        crops.explore_avoiding(world, pos, Through::Crops, |c| dangerous(world, c));
+        let out = crops.nearest(|c| routes.steps_to(c).is_none());
+        if let Some(next) = out.and_then(|o| crops.next_step(o)) {
+            if path::harvestable(world, next) && !path::steppable(world, next) {
+                if self.harvest(world, idx, next) {
+                    self.gnomes[idx].stuck = 0;
                     return;
                 }
+            } else {
+                self.step_to(idx, next, pos);
+                return;
             }
         }
 
-        // Nowhere to be: pace. Keeps a colony with a full belly and a full
-        // flask from standing in one place, which is also what spreads them
-        // out enough to find each other's anchors.
+        self.pace(world, idx, pos);
+    }
+
+    /// Nowhere to be: pace. Keeps a colony with a full belly and a full
+    /// flask from standing in one place, which is also what spreads them out
+    /// enough to find each other's anchors.
+    fn pace(&mut self, world: &World, idx: usize, pos: GridIndex) {
         let dir = self.gnomes[idx].facing;
         for way in [dir, -dir] {
             for to in [
@@ -1336,6 +1419,180 @@ mod tests {
         }
         w.rebaseline();
         w
+    }
+
+    /// Scenario: the larder is to the west, and the only way to it is east,
+    /// up a step and back along a shelf. The old steering could not do this
+    /// in principle — it took the sign of the difference in column and
+    /// walked that way — and it is the shape of the jam that froze a colony
+    /// for seventy thousand steps.
+    #[test]
+    fn a_gnome_walks_away_from_the_larder_to_get_to_it() {
+        let mut w = cavern();
+        // A shelf over the corridor, and a wall under its western end.
+        for i in 6..=10 {
+            w.fill(GridIndex::new(i, 2), t::STONE, 293.0);
+        }
+        w.fill(GridIndex::new(6, 1), t::STONE, 293.0);
+        // The one step up onto it, at the far end of the corridor.
+        w.fill(GridIndex::new(11, 1), t::STONE, 293.0);
+        w.fill(GridIndex::new(3, 1), t::JUNIPER, 293.0);
+        w.rebaseline();
+
+        let mut gnome = Gnome::new(GridIndex::new(7, 1));
+        gnome.belly = 0.0;
+        let mut colony = Colony::new(vec![gnome]);
+        let mut fed = false;
+        let mut went_east = false;
+        for _ in 0..120 {
+            colony.update(&mut w);
+            went_east |= colony.gnomes[0].pos.i > 7;
+            if colony.gnomes[0].last_act == Act::Foraged {
+                fed = true;
+                break;
+            }
+        }
+        assert!(went_east, "it never tried the way round");
+        assert!(
+            fed,
+            "it never reached the bush: ended at {:?}",
+            colony.gnomes[0].pos
+        );
+    }
+
+    /// Scenario: a gnome shut in by a garden that has been picked bare. No
+    /// open route to anything it needs and nothing left to eat where it is,
+    /// so it cuts the crop in its way — and what it leaves behind is what
+    /// the table says a cut bush leaves, gram for gram and joule for joule.
+    #[test]
+    fn a_walled_in_gnome_cuts_its_way_out_and_the_prunings_are_litter() {
+        let mut w = cavern();
+        // A pen of bushes already picked down below a berry: in the way,
+        // and no use as lunch.
+        for i in [4, 8] {
+            for j in 1..=3 {
+                let at = GridIndex::new(i, j);
+                w.fill(at, t::JUNIPER, 293.0);
+                let mut bare = w.cell(at);
+                bare.mass = 0.1;
+                w.set_cell(at, bare);
+            }
+        }
+        // A bush worth walking to, outside the pen.
+        w.fill(GridIndex::new(12, 1), t::JUNIPER, 293.0);
+        w.rebaseline();
+        let mass_before = w.total_mass();
+
+        let mut gnome = Gnome::new(GridIndex::new(6, 1));
+        gnome.belly = 0.0;
+        let mut colony = Colony::new(vec![gnome]);
+        let mut cut = false;
+        // Long enough for it to give up on getting out any other way — see
+        // `TRAPPED_STEPS`. A gnome does not start cutting the moment it is
+        // inconvenienced.
+        for _ in 0..(TRAPPED_STEPS as usize + 200) {
+            colony.update(&mut w);
+            cut |= colony.gnomes[0].last_act == Act::Harvested;
+        }
+        assert!(cut, "it never cut its way out");
+        assert!(
+            w.mass_of(t::LITTER) > 0.0,
+            "a cut bush should leave what the table says leaf fall leaves"
+        );
+        // Cutting moves nothing in or out of the world, so both books stay
+        // exact and the only ledger entry is the berry it ate on the way.
+        let r = w.conservation_residuals();
+        assert!(r.mass_relative.abs() < 1e-12, "mass residual {r:?}");
+        assert!(r.energy_relative.abs() < 1e-12, "energy residual {r:?}");
+        assert!(
+            (w.total_mass() - mass_before + w.ledger().mass_conjured).abs() < 1e-9,
+            "mass moved further than the ledger says"
+        );
+    }
+
+    /// Scenario: the player designates a cell at the far end of a room,
+    /// with a step in the middle of it. Nobody is standing anywhere near it,
+    /// and it still gets done — the order is claimed by how far away it is
+    /// *by route*, and the gnome walks the route.
+    #[test]
+    fn an_order_across_the_room_is_claimed_and_walked_to() {
+        let mut w = cavern();
+        w.fill(GridIndex::new(10, 1), t::STONE, 293.0);
+        w.rebaseline();
+        let far = GridIndex::new(17, 1);
+        w.fill(far, t::SAND, 293.0);
+        w.rebaseline();
+
+        let mut colony = Colony::new(vec![Gnome::new(GridIndex::new(3, 1))]);
+        colony.order(far, Job::Dig);
+        let mut done = false;
+        for _ in 0..200 {
+            colony.update(&mut w);
+            if colony.orders.completed() == 1 {
+                done = true;
+                break;
+            }
+        }
+        assert!(
+            done,
+            "the order was never carried out; the gnome got to {:?}",
+            colony.gnomes[0].pos
+        );
+        assert!(colony.carried_g() > 0.0, "it should be holding the spoil");
+    }
+
+    /// Scenario: an order behind a wall nobody can climb is not claimed, is
+    /// visibly unreachable, and is eventually given up on rather than
+    /// jamming the queue.
+    #[test]
+    fn an_order_nobody_can_route_to_is_marked_and_retired() {
+        let mut w = cavern();
+        for j in 1..=6 {
+            w.fill(GridIndex::new(10, j), t::STONE, 293.0);
+        }
+        let far = GridIndex::new(15, 1);
+        w.fill(far, t::SAND, 293.0);
+        w.rebaseline();
+
+        let mut colony = Colony::new(vec![Gnome::new(GridIndex::new(3, 1))]);
+        colony.order(far, Job::Dig);
+        colony.update(&mut w);
+        assert!(
+            colony.orders.iter().all(|o| !o.reachable),
+            "an order behind a wall should read as unreachable"
+        );
+        assert!(
+            colony.gnomes[0].job.is_none(),
+            "and nobody should have claimed it"
+        );
+        let budget = crate::order::PATIENCE as usize * crate::order::ATTEMPTS as usize + 10;
+        for _ in 0..budget {
+            colony.update(&mut w);
+        }
+        assert!(colony.orders.is_empty(), "it should have been retired");
+        assert_eq!(colony.orders.cancelled(), 1);
+    }
+
+    /// Scenario: a gnome will walk to a puddle but not into the pool.
+    #[test]
+    fn a_gnome_does_not_route_along_the_water() {
+        let mut w = cavern();
+        for i in 8..14 {
+            w.fill(GridIndex::new(i, 1), t::WATER, 293.0);
+        }
+        w.fill(GridIndex::new(16, 1), t::JUNIPER, 293.0);
+        w.rebaseline();
+        let mut gnome = Gnome::new(GridIndex::new(5, 1));
+        gnome.belly = 0.0;
+        let mut colony = Colony::new(vec![gnome]);
+        for _ in 0..80 {
+            colony.update(&mut w);
+            let here = colony.gnomes[0].pos;
+            assert!(
+                !(8..14).contains(&here.i) || here.j != 1,
+                "a gnome walked into the pool at {here:?}"
+            );
+        }
     }
 
     #[test]

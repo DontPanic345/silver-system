@@ -851,14 +851,20 @@ mod tests {
         terra.colony.order(unreachable, Job::Dig);
         let budget = crate::order::PATIENCE as usize * crate::order::ATTEMPTS as usize + 200;
         let mut gave_up = false;
+        let mut saw_unreachable = false;
         for _ in 0..budget {
             terra.step(0.05);
+            saw_unreachable |= terra.colony.orders.iter().any(|o| !o.reachable);
             if terra.colony.orders.is_empty() {
                 gave_up = true;
                 break;
             }
         }
         assert!(gave_up, "the queue jammed on an unreachable order");
+        assert!(
+            saw_unreachable,
+            "and it should have been visibly unreachable while it lasted"
+        );
         assert_eq!(terra.colony.orders.completed(), 0);
         assert!(terra.colony.orders.cancelled() >= 1);
     }

@@ -146,6 +146,21 @@ pub fn moves(world: &World, from: GridIndex, through: Through, out: &mut Vec<Gri
             out.push(up);
         }
     }
+    // Chimneying: with both ways along blocked, a gnome can get straight up
+    // one course.
+    //
+    // Without this a gnome can step *down* into a hole anywhere and can only
+    // climb back up diagonally, so a pit one cell wide is a trap it cannot
+    // leave by any route — which is how a colony ended up living in the
+    // garden's water bed, cutting the bushes over its head to get out. It is
+    // not free wall-climbing: in open ground there is always a way along, so
+    // this move never appears there.
+    if out.is_empty() {
+        let above = GridIndex::new(from.i, from.j + 1);
+        if steppable(world, above) {
+            out.push(above);
+        }
+    }
 }
 
 /// Not reached by the search.
@@ -249,6 +264,17 @@ impl Routes {
     fn inside(&self, at: GridIndex) -> Option<usize> {
         (at.i >= 0 && at.j >= 0 && (at.i as usize) < self.width && (at.j as usize) < self.height)
             .then(|| at.j as usize * self.width + at.i as usize)
+    }
+
+    /// How many cells this gnome can get to at all, itself included — the
+    /// size of the world as far as it is concerned.
+    ///
+    /// What it is for is telling "walled in" from "hungry". A gnome with
+    /// the run of the jar and nothing to eat is not trapped and must not
+    /// start cutting its way through the garden; a gnome that can reach
+    /// eight cells is in a pen, whatever else is true.
+    pub fn reach(&self) -> usize {
+        self.dist.iter().filter(|&&d| d != UNREACHED).count()
     }
 
     /// Steps from the start to `at`, or `None` if a gnome cannot get there.
