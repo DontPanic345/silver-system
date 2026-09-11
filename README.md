@@ -104,7 +104,7 @@ Gas cells are the exception to "one material per cell": a gas cell holds a
 and mix, and every transfer between two gas cells moves mass with its own
 energy and re-solves the receiving cell's temperature from its books. A
 partly-empty liquid cell pours into its neighbours (`physics::
-coalesce_liquids`) and hands the space back to the atmosphere. All of it is
+coalesce_loose`) and hands the space back to the atmosphere. All of it is
 built from transfers that already conserve.
 
 A living cell is the same story with unequal masses: a `Metabolism` declares

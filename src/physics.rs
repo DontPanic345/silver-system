@@ -57,7 +57,7 @@ use std::collections::HashMap;
 pub fn step(world: &mut World, dt: Scalar) {
     apply_gravity(world);
     equalise_liquid_levels(world);
-    coalesce_liquids(world);
+    coalesce_loose(world);
     crate::gas::step(world, dt);
     conduct_heat(world, dt);
     apply_phase_changes(world);
@@ -462,14 +462,22 @@ const LIQUID_FULL: Scalar = 0.999;
 /// Requiring an adjacent gas cell is what keeps this honest: only a free
 /// surface can collapse, so the rule can never punch a void into the middle
 /// of a body of liquid, and it can never move a cell it has nowhere to put.
-pub fn coalesce_liquids(world: &mut World) {
+pub fn coalesce_loose(world: &mut World) {
     let (w, h) = (world.width() as i32, world.height() as i32);
     for j in 0..h {
         for i in 0..w {
             let here = GridIndex::new(i, j);
             let p = world.linear_index(here);
             let material = world.material_of(p);
-            if material.phase != crate::material::Phase::Liquid
+            // Anything loose: a liquid, or something granular. It was
+            // liquids only for as long as a liquid was the only thing that
+            // could be in a cell by the fraction — condensation was the only
+            // rule that made partial cells. A living process that puts out a
+            // grain of dead matter at a time makes them too, and a garden
+            // scattered with hundredth-full crumbs of litter is the same
+            // wrong picture a dune of half-empty water cells was: mass
+            // conserved, volume nonsense. Piles of leaves settle together.
+            if material.phase == crate::material::Phase::Gas
                 || material.mobility == Mobility::Static
             {
                 continue;
@@ -1120,7 +1128,7 @@ mod tests {
 
     // --- Coalescence ---
 
-    /// The rule `coalesce_liquids` exists for: condensing a jar's worth of
+    /// The rule `coalesce_loose` exists for: condensing a jar's worth of
     /// vapour used to produce hundreds of nearly-empty water cells, which
     /// behaved like water because nothing looked at how full they were, and
     /// piled into a dune. They must collapse into a handful of full cells
@@ -1177,7 +1185,7 @@ mod tests {
         w.rebaseline();
         let before = w.count_of(t::WATER);
         for _ in 0..50 {
-            coalesce_liquids(&mut w);
+            coalesce_loose(&mut w);
         }
         assert_eq!(w.count_of(t::WATER), before, "a full pool lost cells");
     }

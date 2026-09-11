@@ -498,6 +498,26 @@ pub(crate) fn move_species(world: &mut World, from: usize, to: usize, slot: usiz
 /// invariant that is otherwise exact to a part in a billion.
 ///
 /// [`World::conjure_mass`]: crate::world::World::conjure_mass
+/// Whether [`displace`] would succeed on the cell at `p` — it is a gas cell
+/// and there is somewhere for its contents to go.
+///
+/// Exists so a caller can find out *before* moving any mass whether it will
+/// have room, which is what `life::placeable` needs: a living process has to
+/// know it can place what it is about to produce before it consumes anything
+/// to produce it.
+pub(crate) fn displaceable(world: &World, p: usize) -> bool {
+    if !world.is_gas_at(p) {
+        return false;
+    }
+    let w = world.width() as i32;
+    let (i, j) = ((p as i32) % w, (p as i32) / w);
+    [(0, 1), (-1, 0), (1, 0), (0, -1)]
+        .into_iter()
+        .map(|(di, dj)| GridIndex::new(i + di, j + dj))
+        .filter(|&n| world.in_bounds(n))
+        .any(|n| world.is_gas_at(world.linear_index(n)))
+}
+
 pub(crate) fn displace(world: &mut World, p: usize) -> bool {
     if !world.is_gas_at(p) {
         return false;

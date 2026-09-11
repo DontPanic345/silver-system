@@ -74,6 +74,10 @@ const MAX_HOST_SWING_K: Scalar = 0.5;
 /// Fraction of a cell a plant must fill before it can seed a neighbour.
 const SPREAD_AT: Scalar = 0.98;
 
+/// Fraction of a cell below which what is left of it is a crumb, and may be
+/// taken whole rather than halved — see [`takeable`].
+const CRUMB: Scalar = 0.1;
+
 /// A running tally of what life has done — a diary, not a ledger, in exactly
 /// the sense [`crate::vapour::Tally`] is one: nothing here is a hole in the
 /// books, it is just what moved.
@@ -92,6 +96,16 @@ pub struct Tally {
     pub grown_g: f64,
     /// Grams of living matter spent by metabolisms that consume their host.
     pub respired_g: f64,
+    /// Net grams of each mixture species life has put into the world, by
+    /// slot: positive for produced, negative for consumed.
+    ///
+    /// This is the exact version of what `grown_g`/`respired_g` were being
+    /// used as a proxy for. Those two work as a water balance only while
+    /// every living process moves the same amount of water per gram of host,
+    /// and the moment a bush could shed a dead leaf — mass leaving the host
+    /// with no water in it at all — the proxy was wrong by whatever had been
+    /// shed. This is not a proxy: it is the grams.
+    pub moved: [f64; crate::material::MIX_SLOTS],
 }
 
 /// One pass of every living process in the world's table, followed by
@@ -105,15 +119,20 @@ pub fn step(world: &mut World, dt: Scalar) {
         return;
     }
     let n = world.width() * world.height();
-    let mut busy = vec![false; n];
+    // Every process gets its own look at every cell, including cells another
+    // one has already worked on this step. A cell used to be marked busy the
+    // moment anything ran in it, and that quietly made "leaf fall" dead
+    // letter: a lit bush photosynthesises every step, so it would never have
+    // reached the row that sheds. Nothing is lost by allowing both, because
+    // each process re-reads the cell and re-caps against what is actually
+    // there — the caps below are computed from the cell as it stands, not
+    // from the cell as it stood at the top of the step.
     for m in &metabolisms {
         for p in 0..n {
-            if *busy.get(p).unwrap_or(&true) || world.material_cells()[p] != m.host {
+            if world.material_cells()[p] != m.host {
                 continue;
             }
-            if metabolise(world, p, m, dt) {
-                busy[p] = true;
-            }
+            metabolise(world, p, m, dt);
         }
     }
     spread(world, &metabolisms);
@@ -127,22 +146,16 @@ fn metabolise(world: &mut World, p: usize, m: &Metabolism, dt: Scalar) -> bool {
         return false;
     }
     let light = world.light_at(p);
-    if light < m.light_min || light > m.light_max {
+    if !m.lit(light) {
         return false;
     }
     if host.temperature < m.min_k || host.temperature > m.max_k {
         return false;
     }
 
-    // How much turnover this step wants, before anything says no. Brighter
-    // is faster, within the band the metabolism declared — a plant at the
-    // bottom of its light band creeps, and one in full sun does not.
-    let drive = if m.light_max > m.light_min {
-        ((light - m.light_min) / (m.light_max - m.light_min)).clamp(0.0, 1.0)
-    } else {
-        1.0
-    };
-    let mut units = m.rate * drive.max(0.05) * dt;
+    // How much turnover this step wants, before anything says no — see
+    // [`Metabolism::light_drive`].
+    let mut units = m.rate * m.light_drive(light) * dt;
     if units <= 0.0 {
         return false;
     }
@@ -204,6 +217,51 @@ fn metabolise(world: &mut World, p: usize, m: &Metabolism, dt: Scalar) -> bool {
         return false;
     }
 
+    // --- Cap 4: somewhere to put a product that is not a gas ---
+    //
+    // A gas product always has somewhere to go: any neighbouring gas cell
+    // takes it into its mixture. A solid one needs either a cell already made
+    // of it with room left, or an empty cell it can push the air out of — and
+    // if it has neither, the process does not run at all, which is why a bush
+    // walled in by its own hedge stops shedding. Checked *before* anything is
+    // taken, because a metabolism that has already moved mass and then finds
+    // it cannot place a product has no honest way to put it back.
+    for r in &m.output {
+        if r.material == m.host || r.grams <= 0.0 {
+            continue;
+        }
+        if world.materials().slot(r.material).is_some() {
+            // A gas or a mist, and any neighbouring gas cell will take any
+            // amount of it — but there has to *be* one. A cell walled in by
+            // solids that ran anyway used to hand its carbon dioxide back to
+            // its host as more host, which conserves grams and quietly
+            // rewrites what the grams are made of: the jar's mass held and
+            // its carbon did not.
+            if !neighbours.iter().any(|&q| world.is_gas_at(q)) {
+                return false;
+            }
+            continue;
+        }
+        let room: Scalar = neighbours
+            .iter()
+            .map(|&q| placeable(world, q, r.material))
+            .sum();
+        units = units.min(room / r.grams);
+    }
+    if units <= 1e-15 {
+        return false;
+    }
+
+    // What this turnover moves, species by species. Not a proxy and not a
+    // ledger — see [`Tally`].
+    for (sign, reagents) in [(-1.0, &m.intake), (1.0, &m.output)] {
+        for r in reagents {
+            if let Some(s) = world.materials().slot(r.material) {
+                world.life.moved[s] += sign * r.grams * units;
+            }
+        }
+    }
+
     // --- Take ---
     //
     // Every gram leaves its donor at that donor's own temperature, carrying
@@ -259,6 +317,16 @@ fn metabolise(world: &mut World, p: usize, m: &Metabolism, dt: Scalar) -> bool {
         }
         produced.push((r.material, r.grams * units));
     }
+    // Gases and mists first, then anything solid — and the order is not
+    // cosmetic, it is the difference between the jar's carbon balancing and
+    // not. A gas joins a neighbouring gas cell and leaves it a gas cell; a
+    // solid *consumes* one, by pushing its contents out and taking its place.
+    // Run the other way round, a rot with one cell of air beside it put its
+    // mould there first and then had nowhere to breathe out, and the carbon
+    // dioxide it could not place was handed back to the host — as more host.
+    // Mass held; six micrograms of dead leaf a step turned into six
+    // micrograms of dead leaf that had been carbon dioxide a moment earlier.
+    produced.sort_by_key(|&(material, _)| world.materials().slot(material).is_none());
     host.mass += host_output - host_intake;
     let net = host_output - host_intake;
     if net > 0.0 {
@@ -277,11 +345,20 @@ fn metabolise(world: &mut World, p: usize, m: &Metabolism, dt: Scalar) -> bool {
     let host_t = out_t;
     for (material, grams) in produced {
         let mut left = grams;
-        for &q in &neighbours {
-            if left <= 0.0 {
-                break;
+        // Cells already made of the stuff first, and only then empty ones, so
+        // what a process puts out builds a heap rather than a scatter of
+        // specks — a shed leaf joins the litter beside it if there is any.
+        for existing in [true, false] {
+            for &q in &neighbours {
+                if left <= 0.0 {
+                    break;
+                }
+                let holds = !world.is_gas_at(q) && world.cell_at(q).material == material;
+                if holds != existing {
+                    continue;
+                }
+                left -= give(world, q, material, left, host_t);
             }
-            left -= give(world, q, material, left, host_t);
         }
         if left > 1e-12 {
             // Nowhere to put it — hand it back to the host rather than lose
@@ -328,7 +405,42 @@ fn takeable(world: &World, q: usize, material: MaterialId) -> Scalar {
     if held <= 0.0 {
         return 0.0;
     }
+    // Half of it, so nothing is stripped bare in one go — except a crumb,
+    // which may go entirely. Without that exception a heap of litter being
+    // eaten by mould halves for ever and never disappears, and what is left
+    // behind is a hundredth of a cell of dead matter that still blocks the
+    // way and still shades what is under it. A cell emptied this way costs
+    // nothing to empty: everything it was holding leaves with the mass, at
+    // the temperature it was already at.
+    if !world.is_gas_at(q) && world.cell_at(q).material == material {
+        let density = world.materials().get(material).density;
+        if held <= CRUMB * density {
+            return held;
+        }
+    }
     (held * 0.5).max(0.0)
+}
+
+/// How many grams of `material` — something that is not a gas — the cell at
+/// `q` could take: the room left in a cell already made of it, or a whole
+/// cell's worth of an empty one that has somewhere to push its air.
+fn placeable(world: &World, q: usize, material: MaterialId) -> Scalar {
+    let density = world.materials().get(material).density;
+    if density <= 0.0 {
+        return 0.0;
+    }
+    let cell = world.cell_at(q);
+    if !world.is_gas_at(q) {
+        if cell.material == material && cell.pending == NO_PENDING {
+            return (density - cell.mass).max(0.0);
+        }
+        return 0.0;
+    }
+    if crate::gas::displaceable(world, q) {
+        density
+    } else {
+        0.0
+    }
 }
 
 /// Takes up to `grams` of `material` out of the cell at `q`, returning what
@@ -352,14 +464,34 @@ fn take(world: &mut World, q: usize, material: MaterialId, grams: Scalar) -> (Sc
         cell.refresh(world.materials());
     } else {
         cell.mass -= taken;
+        if cell.mass <= 0.0 {
+            // Eaten out of existence. A cell with no mass holds no energy
+            // either, so there is nothing to place and nothing to book: it
+            // becomes an empty gas cell and the room's own air flows into it,
+            // exactly as `World::conjure_mass` already does when a gnome eats
+            // the last of something.
+            cell.material = world.materials().vacuum_label();
+            cell.mass = 0.0;
+            cell.progress = 0.0;
+            cell.pending = NO_PENDING;
+            cell.flow_dir = 0;
+            cell.mix = NO_MIX;
+        }
     }
     world.set_cell_at(q, cell);
     (taken, joules)
 }
 
 /// Puts up to `grams` of `material` into the cell at `q`, at `temperature`,
-/// and returns how much it accepted. A gas goes into a gas cell's mixture; a
-/// liquid joins a cell of itself that has room.
+/// and returns how much it accepted.
+///
+/// Three ways that can happen: a gas (or a mist) joins a gas cell's mixture;
+/// anything joins a cell already made of it that has room; and something
+/// solid may be put into an *empty* cell, pushing the air in the way into a
+/// neighbour rather than overwriting it. That third case is what lets a
+/// living process put out something that is not a gas at all — a bush shedding
+/// a dead leaf, a rot growing mould beside it — which nothing in this file
+/// could express before.
 fn give(
     world: &mut World,
     q: usize,
@@ -367,12 +499,34 @@ fn give(
     grams: Scalar,
     temperature: Scalar,
 ) -> Scalar {
+    let is_gas_cell = world.is_gas_at(q);
+    let density = world.materials().get(material).density;
+    let mixes = world.materials().slot(material).is_some();
+    if is_gas_cell && !mixes {
+        let room = grams.min(density);
+        if room <= 0.0 || !crate::gas::displace(world, q) {
+            return 0.0;
+        }
+        world.set_cell_at(
+            q,
+            Cell {
+                material,
+                mass: room,
+                temperature,
+                progress: 0.0,
+                pending: NO_PENDING,
+                flow_dir: 0,
+                mix: NO_MIX,
+            },
+        );
+        return room;
+    }
     let mut cell = world.cell_at(q);
     let table = world.materials();
-    let accepted = if cell.is_gas(table) && table.slot(material).is_some() {
+    let accepted = if is_gas_cell {
         grams
     } else if cell.material == material && cell.pending == NO_PENDING {
-        grams.min((table.get(material).density - cell.mass).max(0.0))
+        grams.min((density - cell.mass).max(0.0))
     } else {
         0.0
     };
@@ -404,30 +558,27 @@ fn give(
 /// something solid or granular under it, or another plant — so a bush
 /// creeps along the ground and up a wall rather than growing into thin air.
 pub fn spread(world: &mut World, metabolisms: &[Metabolism]) {
-    let hosts: Vec<MaterialId> = {
-        let mut v: Vec<MaterialId> = metabolisms
-            .iter()
-            .filter(|m| m.host_gain() > 0.0)
-            .map(|m| m.host)
-            .collect();
-        v.sort_by_key(|id| id.0);
-        v.dedup();
-        v
-    };
-    if hosts.is_empty() {
+    let growers: Vec<&Metabolism> = metabolisms.iter().filter(|m| m.host_gain() > 0.0).collect();
+    if growers.is_empty() {
         return;
     }
     let n = world.width() * world.height();
     for p in 0..n {
         let host = world.cell_at(p);
-        if !hosts.contains(&host.material) {
-            continue;
-        }
         let density = world.materials().get(host.material).density;
         if host.mass < SPREAD_AT * density || host.pending != NO_PENDING {
             continue;
         }
-        if world.light_at(p) <= 0.0 {
+        // Seeding is growth in space, so it takes the same conditions
+        // growing does: a process on this host that is actually running in
+        // this cell's light. It used to be "any light at all", which was
+        // right for the only thing that grew at the time and wrong the
+        // moment something grew in the dark — a mould in a compost heap
+        // would have had to wait for sunrise to spread.
+        if !growers
+            .iter()
+            .any(|m| m.host == host.material && m.lit(world.light_at(p)))
+        {
             continue;
         }
         let Some(q) = seed_target(world, p) else {
@@ -544,6 +695,73 @@ mod tests {
             .clone()
     }
 
+    /// A box with a floor, one cell of dead matter on it, and air.
+    fn compost(litter_g: Scalar) -> World {
+        let mut w = World::new_open(7, 7, MaterialTable::terrarium(), 295.0);
+        for i in 0..7 {
+            w.fill(GridIndex::new(i, 0), t::STONE, 295.0);
+        }
+        let p = w.linear_index(GridIndex::new(3, 1));
+        let mut cell = w.cell_at(p);
+        cell.material = t::LITTER;
+        cell.mass = litter_g;
+        cell.temperature = 295.0;
+        cell.mix = NO_MIX;
+        w.set_cell_at(p, cell);
+        w.sky = 1.0;
+        crate::light::illuminate(&mut w);
+        w.rebaseline();
+        w
+    }
+
+    #[test]
+    fn dead_matter_rots_into_mould_and_gas() {
+        let mut w = compost(0.05);
+        let before = w.mass_of(t::LITTER);
+        for _ in 0..400 {
+            crate::light::illuminate(&mut w);
+            step(&mut w, 0.05);
+        }
+        let after = w.mass_of(t::LITTER);
+        assert!(
+            after < before - 1e-9,
+            "the litter did not rot: {before} -> {after}\n{}",
+            crate::report::ascii_map(&w)
+        );
+        assert!(
+            w.mass_of(t::FUNGUS) > 0.0,
+            "nothing grew on it:\n{}",
+            crate::report::ascii_map(&w)
+        );
+        assert!(w.mass_of(t::CO2) > 0.0, "and nothing came back as gas");
+    }
+
+    /// Rot moves carbon between three materials with three different carbon
+    /// fractions, so "mass is conserved" says nothing about whether the
+    /// carbon is. This is the check that it is: dead matter, mould and
+    /// carbon dioxide, added up, are a constant.
+    #[test]
+    fn rot_conserves_carbon_as_well_as_mass_and_energy() {
+        let mut w = compost(0.05);
+        let carbon = |w: &World| {
+            0.4 * (w.mass_of(t::LITTER) + w.mass_of(t::FUNGUS) + w.mass_of(t::JUNIPER))
+                + (12.0 / 44.0) * w.mass_of(t::CO2)
+        };
+        let (c0, m0) = (carbon(&w), w.total_mass());
+        for _ in 0..600 {
+            crate::physics::step(&mut w, 0.05);
+        }
+        assert!(w.mass_of(t::CO2) > 1e-6, "nothing rotted");
+        assert!(
+            (carbon(&w) - c0).abs() < 1e-9 * c0,
+            "carbon went {c0} -> {} g",
+            carbon(&w)
+        );
+        assert!((w.total_mass() - m0).abs() < 1e-9 * m0);
+        let r = w.conservation_residuals();
+        assert!(r.energy_relative.abs() < 1e-9, "{:e}", r.energy_relative);
+    }
+
     #[test]
     fn a_lit_bush_with_carbon_dioxide_and_water_grows() {
         let mut w = greenhouse(0.02);
@@ -568,7 +786,9 @@ mod tests {
             crate::light::illuminate(&mut w);
             step(&mut w, 0.05);
         }
-        let grown = w.mass_of(t::JUNIPER) - 0.5;
+        // What photosynthesis built, not what is standing: a bush sheds as
+        // well as grows, and the shed part is no longer juniper.
+        let grown = w.life_tally().grown_g;
         let co2_used = co2_before - w.mass_of(t::CO2);
         let o2_made = w.mass_of(t::OXYGEN) - o2_before;
         assert!(grown > 0.0);
@@ -708,10 +928,17 @@ mod tests {
             crate::light::illuminate(&mut w);
             step(&mut w, 0.05);
         }
+        // It may shed — a bush does that whatever the air is like — but it
+        // may not put on any.
         assert!(
-            (w.mass_of(t::JUNIPER) - before).abs() < 1e-12,
+            w.mass_of(t::JUNIPER) <= before + 1e-12,
             "a bush grew out of nothing: {before} -> {}",
             w.mass_of(t::JUNIPER)
+        );
+        assert_eq!(
+            w.life_tally().grown_g,
+            0.0,
+            "nothing should have been built"
         );
     }
 

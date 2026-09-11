@@ -462,6 +462,29 @@ pub struct Metabolism {
 }
 
 impl Metabolism {
+    /// Whether this process runs at all at an incident `light`.
+    pub fn lit(&self, light: Scalar) -> bool {
+        light >= self.light_min && light <= self.light_max
+    }
+
+    /// How hard it runs there, as a fraction of [`Metabolism::rate`].
+    ///
+    /// A process that declares the *whole* range does not care about light
+    /// and runs flat: a decomposer works as well at midnight as at noon, and
+    /// before this said so a mould in the dark crawled at a twentieth of its
+    /// rate for no stated reason. Anything narrower is driven by how far into
+    /// its band the light is, so a plant at the bottom of its band creeps and
+    /// one in full sun does not. The floor is there because a band's own edge
+    /// is not a stop — a process in its conditions is running.
+    pub fn light_drive(&self, light: Scalar) -> Scalar {
+        if (self.light_min <= 0.0 && self.light_max >= 1.0) || self.light_max <= self.light_min {
+            return 1.0;
+        }
+        ((light - self.light_min) / (self.light_max - self.light_min))
+            .clamp(0.0, 1.0)
+            .max(0.05)
+    }
+
     /// Total grams on each side, which the table asserts are equal.
     pub fn intake_grams(&self) -> Scalar {
         self.intake.iter().map(|r| r.grams).sum()
@@ -1158,6 +1181,22 @@ impl MaterialTable {
         const T_MASH: Scalar = 330.0;
         /// Ignition point for a botanical.
         const T_IGNITE: Scalar = 620.0;
+        /// Below this a bush is not dormant, it is dead, and what is left of
+        /// it is litter.
+        const T_FROST_KILL: Scalar = 274.0;
+        /// Heat given up by a bush freezing to death, J/g. A leaf is mostly
+        /// water and it is a little of that water freezing that kills it, so
+        /// this is a few per cent of water's 334.
+        ///
+        /// It has to be non-zero, and the reason is worth knowing:
+        /// `physics::apply_phase_changes` runs a transition by accumulating
+        /// the cell's *departure* from the threshold as latent progress, and
+        /// bails out of any transition whose latent heat is zero. So a
+        /// zero-cost death would never happen at all. Given that, a small
+        /// figure is the useful one — it buys frost-hardiness, because a dip
+        /// below the threshold for a step or two no longer kills a bush,
+        /// while sustained cold does.
+        const L_FROST_KILL: Scalar = 20.0;
         /// Heat released burning a gram of juniper.
         ///
         /// A real dry botanical is nearer 16 000 J/g, and that figure is
@@ -1196,7 +1235,7 @@ impl MaterialTable {
         /// Mole fraction of oxygen in open air.
         const X_O2: Scalar = 0.21;
 
-        let mut materials = vec![Material::new(0.0, 0.0, 0.0, 0.0, Phase::Gas, (0, 0, 0)); 15];
+        let mut materials = vec![Material::new(0.0, 0.0, 0.0, 0.0, Phase::Gas, (0, 0, 0)); 17];
         // "Air" is now the *inert* bulk of the atmosphere — the nitrogen and
         // argon that a gnome breathes in and straight back out, and that a
         // fire leaves alone. What a gnome actually needs is `OXYGEN`, which
@@ -1309,6 +1348,22 @@ impl MaterialTable {
         materials[t::CHARCOAL.0 as usize] =
             Material::new(0.45, 0.0, 0.84, 0.25, Phase::Solid, (38, 34, 32))
                 .with_mobility(Mobility::Granular);
+        // Dead plant matter, and the mould that eats it. Both keep juniper's
+        // heat capacity, and that is not laziness: a gram of dead leaf holds
+        // the same chemical energy as the gram of live leaf it was, so with
+        // `c` equal the enthalpy solver gives them equal offsets too, and a
+        // bush dying releases nothing. Death is not a source of heat.
+        //
+        // Both are far lighter than a bush (0.5) — a cell of leaf litter is
+        // mostly air, and the jar's whole carbon budget is a couple of grams,
+        // so a compost heap you could actually see had to be able to exist
+        // without eating the garden that fed it.
+        materials[t::LITTER.0 as usize] =
+            Material::new(0.03, 0.0, 2.0, 0.15, Phase::Solid, (124, 84, 48))
+                .with_mobility(Mobility::Granular)
+                .with_opacity(0.6);
+        materials[t::FUNGUS.0 as usize] =
+            Material::new(0.03, 0.0, 2.0, 0.18, Phase::Solid, (206, 190, 228)).with_opacity(0.5);
 
         let heating = |from, to, threshold_k, latent_heat| Transition {
             from,
@@ -1338,6 +1393,11 @@ impl MaterialTable {
             heating(t::WASH, t::SPIRIT, T_SPIRIT_BOIL, L_SPIRIT),
             heating(t::GIN, t::SPIRIT, T_SPIRIT_BOIL, L_SPIRIT),
             cooling(t::SPIRIT, t::GIN, T_SPIRIT_BOIL, L_SPIRIT),
+            // Frost kill. A bush below freezing is not a bush any more, and
+            // what is left is litter for something else to eat. One row, and
+            // it is the same machinery ice uses; nothing in code knows that
+            // this particular transition is a death.
+            cooling(t::JUNIPER, t::LITTER, T_FROST_KILL, L_FROST_KILL),
         ];
 
         // Chemistry. Two rows, and between them they cover both things a
@@ -1392,6 +1452,13 @@ impl MaterialTable {
         /// Light, as a fraction of full sun, that divides a plant's day
         /// from its night.
         const DAYLIGHT: Scalar = 0.15;
+        /// Share of a gram of dead matter that a decomposer keeps as its own
+        /// body; the rest it burns. Real fungal growth efficiency on leaf
+        /// litter is 30–50%.
+        const FUNGUS_YIELD: Scalar = 0.4;
+        /// Cold enough to stop rot. A compost heap does not work in a
+        /// freezer, which is the whole reason a freezer works.
+        const T_ROT_MIN: Scalar = 273.0;
 
         let metabolisms = vec![
             // Photosynthesis: the one declared energy figure in the cycle.
@@ -1423,6 +1490,108 @@ impl MaterialTable {
                 light_min: 0.0,
                 light_max: DAYLIGHT,
                 min_k: T_GROW_MIN,
+                max_k: T_IGNITE,
+                heat: None,
+                heat_at_k: T0,
+            },
+            // Leaf fall. A bush spends a little of itself as dead matter,
+            // whatever the weather and whatever the light — which is the
+            // only reason this jar has ever had anything dead in it.
+            //
+            // The rate is the load-bearing number and it is bounded from
+            // both sides: fast enough that a compost layer builds up while
+            // somebody is watching, slow enough to stay well under what the
+            // garden photosynthesises in the same time (about 8e-6 g/step
+            // per lit cell in the terrarium, itself limited by how much
+            // carbon dioxide the jar has). Shed faster than it grows and the
+            // garden composts itself.
+            Metabolism {
+                name: "leaf fall",
+                host: t::JUNIPER,
+                intake: vec![reagent(t::JUNIPER, 1.0)],
+                output: vec![reagent(t::LITTER, 1.0)],
+                rate: 3.0e-6,
+                light_min: 0.0,
+                light_max: 1.0,
+                min_k: T_GROW_MIN,
+                max_k: T_IGNITE,
+                heat: None,
+                heat_at_k: T0,
+            },
+            // Rot, and the mould that is the visible half of it. Both rows
+            // are the same chemistry — `C₆H₁₂O₆ + 6 O₂ → 6 CO₂ + 6 H₂O` at
+            // photosynthesis's own proportions, scaled by the share of the
+            // dead matter that is actually respired — and they differ only
+            // in which cell is the host.
+            //
+            // The first one is what makes this self-starting: litter rots by
+            // itself, so a jar does not have to be seeded with mould for
+            // anything to decompose, and the fungus it puts out lands in a
+            // neighbouring cell, which is the mould you can see. The second
+            // is that mould feeding on the litter *around* it, which is how
+            // it spreads through a heap rather than sitting on one cell of
+            // it.
+            //
+            // Carbon balances across both: a gram of litter is 0.4 g of
+            // carbon, and 0.4 g of fungus plus 0.88 g of CO₂ is 0.16 + 0.24.
+            Metabolism {
+                name: "rot",
+                host: t::LITTER,
+                intake: vec![
+                    reagent(t::LITTER, 1.0),
+                    reagent(t::OXYGEN, (1.0 - FUNGUS_YIELD) * O2_PER_G),
+                ],
+                output: vec![
+                    reagent(t::FUNGUS, FUNGUS_YIELD),
+                    reagent(t::CO2, (1.0 - FUNGUS_YIELD) * CO2_PER_G),
+                    reagent(t::WATER, (1.0 - FUNGUS_YIELD) * H2O_PER_G),
+                ],
+                rate: 1.0e-4,
+                light_min: 0.0,
+                light_max: 1.0,
+                min_k: T_ROT_MIN,
+                max_k: T_GROW_MAX,
+                // The one declared figure in the rot cycle, and it is not a
+                // new one: it is the share of a gram of plant that is
+                // actually being burned, times the energy photosynthesis
+                // banked in it. So a compost heap warms by exactly what the
+                // sun put into the leaves, and cannot warm by more.
+                heat: Some((1.0 - FUNGUS_YIELD) * Q_PHOTO),
+                heat_at_k: T0,
+            },
+            Metabolism {
+                name: "fungal growth",
+                host: t::FUNGUS,
+                intake: vec![
+                    reagent(t::LITTER, 1.0),
+                    reagent(t::OXYGEN, (1.0 - FUNGUS_YIELD) * O2_PER_G),
+                ],
+                output: vec![
+                    reagent(t::FUNGUS, FUNGUS_YIELD),
+                    reagent(t::CO2, (1.0 - FUNGUS_YIELD) * CO2_PER_G),
+                    reagent(t::WATER, (1.0 - FUNGUS_YIELD) * H2O_PER_G),
+                ],
+                rate: 1.0e-4,
+                light_min: 0.0,
+                light_max: 1.0,
+                min_k: T_ROT_MIN,
+                max_k: T_GROW_MAX,
+                heat: None,
+                heat_at_k: T0,
+            },
+            // ...and a fungus with nothing left to eat spends itself, the
+            // same way a bush in the dark does. Without this a heap that has
+            // finished rotting would stay standing as mould for ever, and
+            // the last fifth of the jar's carbon would be locked up in it.
+            Metabolism {
+                name: "fungal respiration",
+                host: t::FUNGUS,
+                intake: vec![reagent(t::FUNGUS, 1.0), reagent(t::OXYGEN, O2_PER_G)],
+                output: vec![reagent(t::CO2, CO2_PER_G), reagent(t::WATER, H2O_PER_G)],
+                rate: 4.0e-5,
+                light_min: 0.0,
+                light_max: 1.0,
+                min_k: T_ROT_MIN,
                 max_k: T_IGNITE,
                 heat: None,
                 heat_at_k: T0,
@@ -1480,12 +1649,21 @@ pub mod terrarium {
     /// distinguishes it from stone except [`Material::opacity`], which is the
     /// point: "transparent" is a number in the table, not a rule anywhere.
     pub const GLASS: MaterialId = MaterialId(14);
+    /// Dead plant matter: what a bush sheds, and what a frozen one becomes.
+    /// Granular, so it falls and piles, and lighter than water, so it floats
+    /// on a garden bed rather than sinking through it.
+    pub const LITTER: MaterialId = MaterialId(15);
+    /// The decomposer. Damp litter goes mouldy (a reaction), and the mould
+    /// then eats the litter around it, growing and breathing out the carbon
+    /// — which is how carbon gets back into the air without going through
+    /// anything's lungs.
+    pub const FUNGUS: MaterialId = MaterialId(16);
 
     /// Every id above, in table order — for tests and reporting that want
     /// to iterate the whole table by name.
-    pub const ALL: [MaterialId; 15] = [
+    pub const ALL: [MaterialId; 17] = [
         AIR, STEAM, WATER, ICE, SAND, STONE, LAVA, JUNIPER, CO2, WASH, SPIRIT, GIN, CHARCOAL,
-        OXYGEN, GLASS,
+        OXYGEN, GLASS, LITTER, FUNGUS,
     ];
 
     /// Human-readable name for a terrarium id, for JSON reports.
@@ -1506,6 +1684,8 @@ pub mod terrarium {
             12 => "charcoal",
             13 => "oxygen",
             14 => "glass",
+            15 => "litter",
+            16 => "fungus",
             _ => "unknown",
         }
     }

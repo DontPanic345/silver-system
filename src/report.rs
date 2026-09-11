@@ -56,7 +56,7 @@ pub fn snapshot_json(world: &World, colony: &Colony, step: u64) -> String {
          \"daylight\":{:.4}}},\
          \"materials\":[{}],\
          \"colony\":{{\"gnomes\":{},\"embodied\":{},\"ethereal\":{},\"total_gin\":{:.3},\
-         \"carried_g\":{:.6}}},\
+         \"carried_g\":{:.6},\"respired_g\":{:.6},\"who\":[{}]}},\
          \"orders\":{{\"open\":{},\"completed\":{},\"cancelled\":{}}}}}",
         world.mean_temperature(),
         world.total_mass(),
@@ -83,6 +83,8 @@ pub fn snapshot_json(world: &World, colony: &Colony, step: u64) -> String {
         colony.ethereal_count(),
         colony.total_gin(),
         colony.carried_g(),
+        colony.respired_g(),
+        gnomes_json(colony),
         colony.orders.len(),
         colony.orders.completed(),
         colony.orders.cancelled(),
@@ -224,6 +226,34 @@ fn breathable_range(world: &World) -> f64 {
 /// The per-material list both snapshots carry: how many cells each
 /// material labels, and how many grams of it the world holds anywhere —
 /// whole cells, its share of every gas mixture, and mist.
+/// Each gnome, one object apiece: where it is, what it is holding in flask
+/// and belly, and what it did on the step just simulated.
+///
+/// A colony total says whether anybody is in trouble; this says which of
+/// them and where, which is the difference between noticing a long run has
+/// gone wrong and being able to say why. The first thing it was ever used
+/// for was finding which gnome was standing in a puddle.
+fn gnomes_json(colony: &Colony) -> String {
+    colony
+        .gnomes
+        .iter()
+        .map(|g| {
+            format!(
+                "{{\"i\":{},\"j\":{},\"gin\":{:.2},\"belly_g\":{:.5},\"breath\":{},\
+                 \"embodied\":{},\"act\":\"{:?}\"}}",
+                g.pos.i,
+                g.pos.j,
+                g.gin,
+                g.belly,
+                g.breath,
+                g.is_embodied(),
+                g.last_act
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 fn materials_json(world: &World) -> String {
     terrarium::ALL
         .iter()
@@ -262,6 +292,8 @@ pub fn ascii_map(world: &World) -> String {
                 "charcoal" => 'x',
                 "oxygen" => 'o',
                 "glass" => '=',
+                "litter" => ',',
+                "fungus" => 'f',
                 _ => '?',
             });
         }

@@ -535,7 +535,15 @@ impl Colony {
         } else {
             1.0
         };
-        let mostly_empty = here.phase == Phase::Liquid && fill < 0.5;
+        // ...and "mostly empty" is about how full the cell is, not about
+        // which phase it is. It used to be liquids only, because until
+        // something living could put a solid into a cell a grain at a time,
+        // a solid cell was always a full one. Now a bush sheds dead leaves
+        // and a mould grows across a floor, and a gnome standing in the first
+        // few grains of either was being treated as buried alive: it gasped,
+        // paid Gin for air it was already standing in, and the colony bled
+        // its whole flask into a drift of leaves.
+        let mostly_empty = here.phase != Phase::Gas && fill < 0.5;
         let air_here = cell.breathable_pressure(world.materials())
             >= MIN_BREATHABLE * world.materials().reference_pressure();
         if air_here || mostly_empty {
@@ -578,6 +586,17 @@ impl Colony {
             // the still could fill it, flask long since full, purely
             // because it happened to be standing in the receiver.
             if world.material_at(pos) == t::GIN && self.drink(world, idx, pos, cell.temperature) {
+                return;
+            }
+            // Then: step out of it. Magic is the *last* resort, not the
+            // first, and a gnome with a breathable cell next to it has no
+            // business paying for one. Buried by a drift of litter, by
+            // spoil falling off a dig, or by a rising pool, the answer is
+            // usually one pace sideways — and a colony that takes it keeps
+            // the Gin it would otherwise have spent gasping.
+            if let Some(out) = self.way_out(world, pos) {
+                self.gnomes[idx].pos = out;
+                self.gnomes[idx].last_act = Act::Walked;
                 return;
             }
             // A cheap Gin-powered gasp: replace the cell you are stuck in
@@ -1025,7 +1044,42 @@ impl Colony {
     /// decide whether a gnome is supported.
     fn is_walkable(&self, world: &World, index: GridIndex) -> bool {
         let m = world.materials().get(world.material_at(index));
-        m.mobility != Mobility::Static && m.phase != Phase::Solid
+        if m.mobility != Mobility::Static && m.phase != Phase::Solid {
+            return true;
+        }
+        // A gnome wades through a drift of loose stuff rather than being
+        // stopped dead by the first grain of it — but only loose stuff.
+        //
+        // "Mostly empty" has to mean granular here, not simply under half
+        // full, and the difference is the whole rule. A cell of litter at a
+        // tenth of its density is a scattering of leaves with air between
+        // them; a cell of *juniper* at a tenth of its density is not a gappy
+        // bush, it is a small one, because a plant cell's mass is its size.
+        // Allowing both let the colony walk straight through the garden and
+        // into the water bed behind it, where they drowned and paid Gin to
+        // banish the pool a gram at a time.
+        let cell = world.cell(index);
+        m.mobility == Mobility::Granular && m.density > 0.0 && cell.mass < 0.5 * m.density
+    }
+
+    /// A cell beside `pos` a gnome could breathe in, for when the one it is
+    /// standing in has filled up around it. Upward first — whatever buried
+    /// it probably came from below or is still arriving — then across, then
+    /// down.
+    fn way_out(&self, world: &World, pos: GridIndex) -> Option<GridIndex> {
+        let threshold = MIN_BREATHABLE * world.materials().reference_pressure();
+        [
+            GridIndex::new(pos.i, pos.j + 1),
+            GridIndex::new(pos.i - 1, pos.j),
+            GridIndex::new(pos.i + 1, pos.j),
+            GridIndex::new(pos.i, pos.j - 1),
+        ]
+        .into_iter()
+        .find(|&n| {
+            world.in_bounds(n)
+                && self.is_steppable(world, n)
+                && world.cell(n).breathable_pressure(world.materials()) >= threshold
+        })
     }
 
     /// A cell a gnome will *choose* to walk into — the same test, minus

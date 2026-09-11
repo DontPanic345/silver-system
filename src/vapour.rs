@@ -30,7 +30,7 @@
 //! - [`precipitate`] — mist touching its own liquid joins it, and a cell
 //!   holding enough mist rains out as a droplet: its gas is pushed into a
 //!   neighbour and what is left is a small cell of liquid, which the
-//!   ordinary gravity rule drops and `physics::coalesce_liquids` pools.
+//!   ordinary gravity rule drops and `physics::coalesce_loose` pools.
 //!
 //! Boiling survives only where it belongs. A liquid cell *touching gas*
 //! never boils by threshold any more — it evaporates, here, and that is the

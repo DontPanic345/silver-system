@@ -471,6 +471,18 @@ impl World {
         self.life
     }
 
+    /// Net grams of `material` that living processes have put into the world
+    /// since the baseline — negative for what they have consumed.
+    ///
+    /// Only meaningful for a species a gas cell can carry (every gas, and
+    /// every liquid that condenses); anything else returns zero, because
+    /// there is no slot to have counted it in. See [`crate::life::Tally`].
+    pub fn life_moved(&self, material: MaterialId) -> f64 {
+        self.materials
+            .slot(material)
+            .map_or(0.0, |s| self.life.moved[s])
+    }
+
     pub fn width(&self) -> usize {
         self.width
     }

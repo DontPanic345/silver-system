@@ -257,6 +257,23 @@ pub fn gnome_terrarium(width: usize, height: usize) -> Terrarium {
     // walkway stays dry and a gnome standing on it is still next to a bush.
     world.fill(GridIndex::new(garden_to, SHELL + 1), t::STONE, 291.0);
 
+    // A compost heap at the garden gate — two cells of leaf litter, the way
+    // anybody planting a terrarium puts a handful of leaf mould in with the
+    // cuttings.
+    //
+    // It is seeded rather than waited for, and the reason is scale, not
+    // impatience. The jar's whole biology moves a few micrograms a step, and
+    // a bush sheds a small fraction of that; left to build up from leaf fall
+    // alone a heap this size would take a hundred thousand steps to appear.
+    // Seeded, the rot cycle is running from the first minute — the heap goes
+    // mouldy, sinks, and puts its carbon back into the air the garden is
+    // breathing — and leaf fall is then what keeps it topped up rather than
+    // what has to create it. The gnomes step over it; see
+    // `Colony::is_walkable`.
+    for i in garden_to..garden_to + 2 {
+        world.fill(GridIndex::new(i, SHELL + 2), t::LITTER, 291.0);
+    }
+
     world.rebaseline();
 
     // Gnomes on the meadow, plus one ethereal pipe — the sanctioned magic
@@ -397,9 +414,17 @@ mod tests {
         // and what the gnomes breathed out. They run on the same declared
         // proportions, which is the point — one number per side, and the
         // jar's water balance closes to a part in a million.
-        let life = terra.world.life_tally();
+        // What living processes actually moved, species by species, plus what
+        // the gnomes breathed out. This used to be inferred from how much
+        // living matter had been built and spent, which worked only while
+        // every process moved the same water per gram of host; a bush
+        // shedding a dead leaf moves none, and the inference broke the day it
+        // could. `World::life_moved` is the grams themselves.
         let h2o_per_g = 108.0 / 180.0;
-        let expected = (life.respired_g - life.grown_g + terra.colony.respired_g()) * h2o_per_g;
+        let expected = terra.world.life_moved(t::WATER)
+            + terra.world.life_moved(t::STEAM)
+            + terra.colony.respired_g() * h2o_per_g;
+        let life = terra.world.life_tally();
         assert!(
             (water - water0 - expected).abs() < 1e-6 * water0,
             "water went {water0} -> {water} g, but life only moved {expected} g of it \
@@ -447,9 +472,16 @@ mod tests {
     fn the_carbon_in_the_jar_goes_round_rather_than_accumulating() {
         let mut terra = default_terrarium();
         let carbon = |terra: &Terrarium| {
-            let plant = terra.world.mass_of(t::JUNIPER) + terra.world.mass_of(t::WASH);
+            // Everything made of what a bush is made of, alive or dead: a
+            // standing bush, a mash, the leaves it has dropped, the mould
+            // eating them, and whatever is in a gnome. All of it is glucose
+            // as far as this jar is concerned, so all of it is 0.4.
+            let organic = terra.world.mass_of(t::JUNIPER)
+                + terra.world.mass_of(t::WASH)
+                + terra.world.mass_of(t::LITTER)
+                + terra.world.mass_of(t::FUNGUS);
             let belly: f64 = terra.colony.gnomes.iter().map(|g| g.belly).sum();
-            0.4 * (plant + belly) + (12.0 / 44.0) * terra.world.mass_of(t::CO2)
+            0.4 * (organic + belly) + (12.0 / 44.0) * terra.world.mass_of(t::CO2)
         };
         let before = carbon(&terra);
         for _ in 0..4000 {
@@ -477,10 +509,17 @@ mod tests {
         for _ in 0..6000 {
             terra.step(0.05);
         }
+        // What a bush builds by day has to beat what it spends at night
+        // *and* what it drops. Measured as carbon dioxide taken out of the
+        // air against carbon dioxide put back by everything living — the two
+        // directions of the same cycle — because "grams of host built and
+        // spent" stopped separating them the moment a bush could shed
+        // something that takes no carbon dioxide with it.
         let life = terra.world.life_tally();
+        let co2_taken = -terra.world.life_moved(t::CO2);
         assert!(
-            life.grown_g > 2.0 * life.respired_g,
-            "a plant's day should beat its night: {life:?}"
+            co2_taken > 0.0,
+            "the garden should be a net sink of carbon dioxide: {co2_taken} g ({life:?})"
         );
         assert!(
             terra.world.mass_of(t::JUNIPER) > before,
