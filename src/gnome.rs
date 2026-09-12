@@ -1642,8 +1642,12 @@ impl Colony {
         self.reachable_cells(pos)
             .into_iter()
             .find(|&n| {
-                let m = world.materials().get(world.material_at(n));
-                world.in_bounds(n) && m.is_food() && m.phase == Phase::Liquid
+                // In bounds *first*: the corners of a gnome's reach can be
+                // off the edge of the world, and `material_at` indexes.
+                world.in_bounds(n) && {
+                    let m = world.materials().get(world.material_at(n));
+                    m.is_food() && m.phase == Phase::Liquid
+                }
             })
             .filter(|&n| world.cell(n).mass > 0.0)
     }
@@ -1657,14 +1661,33 @@ impl Colony {
             .find(|&n| world.in_bounds(n) && self.spare_berry(world, n) > 0.0)
     }
 
-    /// The gnome's own cell and its four neighbours, own cell first.
-    fn reachable_cells(&self, pos: GridIndex) -> [GridIndex; 5] {
+    /// Everything within a gnome's arm's length: its own cell first, then
+    /// the four beside it, then the four corners.
+    ///
+    /// The corners were added on night 9 and they are not a detail. A garden
+    /// grows *upward* — a cutting goes in over a bush, and a bush seeds the
+    /// cell above itself — so the crop that is actually ripe ends up one
+    /// course higher than the row a gnome can stand in front of. With only
+    /// four neighbours a colony could reach the bottom course and nothing
+    /// else: it kept that row picked to the graze floor, starved beside two
+    /// and a half grams of standing garden, and stopped exhaling, at which
+    /// point the carbon dioxide ran out and the garden stopped growing too.
+    /// Measured over 80 000 steps: bellies flat from step 50 000, Gin at
+    /// zero by 70 000, crop untouched.
+    ///
+    /// [`crate::order::REACH`] is the same distance, for the same reason: it
+    /// is how far a gnome can lean.
+    fn reachable_cells(&self, pos: GridIndex) -> [GridIndex; 9] {
         [
             pos,
             GridIndex::new(pos.i + 1, pos.j),
             GridIndex::new(pos.i - 1, pos.j),
             GridIndex::new(pos.i, pos.j + 1),
             GridIndex::new(pos.i, pos.j - 1),
+            GridIndex::new(pos.i + 1, pos.j + 1),
+            GridIndex::new(pos.i - 1, pos.j + 1),
+            GridIndex::new(pos.i + 1, pos.j - 1),
+            GridIndex::new(pos.i - 1, pos.j - 1),
         ]
     }
 

@@ -90,7 +90,7 @@ holding itself up over water — what that leaves is not a gap but a way into
 the drink.
 
 Night 9 also found why the colony had been slowly dying in every long run,
-and it was three separate things, none of them the pathing everyone had
+and it was five separate things, none of them the pathing everyone had
 blamed: the jar's base was the one face of its shell not in contact with the
 room, so the spring was heating the whole stone floor and the meadow settled
 above a gnome's lethal limit; a gnome standing in leaf litter never breathed
@@ -99,7 +99,13 @@ is too hot took no account of *how much heat a cell can actually deliver*.
 A sauna is 370 K and a bath at 370 K would kill you, so a cell's felt
 temperature is now its real one pulled toward body heat by its heat capacity
 (`gnome::felt_temperature`) — which is also what will eventually let a colony
-stand beside its own still.
+stand beside its own still. Then: the garden's water bed was a trough deep
+enough to drown in, so a gnome that fell through a gap in the hedge gasped
+its flask empty and cut its way out through the crop; and foraging reached
+only four neighbours while a garden grows *upward*, so the colony kept the
+bottom row picked bare and could not touch the rest. With all five fixed the
+jar is solvent over 80 000 steps for the first time — Gin between 272 and
+367, every belly fed, and the garden growing faster than it is eaten.
 
 ```sh
 # Headless: JSON snapshots (and ASCII maps on stderr) — no browser needed.

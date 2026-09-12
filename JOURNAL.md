@@ -879,15 +879,44 @@ different order from the amber dig and the pink warm beside it. Over 80 000
 headless steps the colony stays embodied and breathing, residuals 6.6e-14
 and 2.0e-12.
 
-What I did **not** verify, and the honest part: **the Gin economy is still
-not solvent, and it is run-dependent.** Two 80 000-step runs of tonight's
-code ended at 326 Gin and at 1 Gin; the difference is a die-off in the garden
-around step 45 000 in one of them and not the other, and I did not chase it.
-The colony no longer starves in a corner, which was tonight's measured fault,
-but "four gnomes and an ethereal pipe cost more than this garden earns" is
-unfixed and is the next honest target. I also did not verify any non-default
-grid size, `gases.html` or `still.html` by eye (their e2e checks pass), or
-what a fetch order does to a colony over a long run — every long run tonight
-had an empty queue. Still untouched: the book-copying knowledge economy, the
-Gnome Grandmother, a soil nutrient, nitrogen, dissolved gases, and
-pressure-dependent boiling.
+Then, with the tree green, I went after the thing I had just written down as
+the next target — **the colony is insolvent: four gnomes and an ethereal pipe
+cost more Gin than this garden earns** — and it turned out to be two more
+faults of the same kind, both found by tracing the exact step the garden
+died rather than by reasoning about economics:
+
+4. *The garden's water bed was a trough, and gnomes drowned in it.* When a
+   bush over the bed dies and its litter rots down, the cell becomes
+   passable; a gnome walking the top of the hedge falls through into the
+   water, cannot climb out past the bushes on either side, gasps its flask
+   empty, and finally cuts the bush over its head to get out — which opens
+   the next hole. At step 44 436 one such cut took 0.44 g of garden, a fifth
+   of the crop, into leaf litter. The bed is now under half a cell deep,
+   which is the line between a puddle and the pool: it waters the same
+   plants and a gnome can stand up in it.
+5. *A garden grows upward, and a gnome could only reach sideways.* Foraging
+   used a gnome's own cell and its four neighbours, so as the crop seeded
+   itself a course higher the colony kept the bottom row picked to the graze
+   floor and could not touch the rest — starving beside two and a half grams
+   of standing garden, and then not exhaling, at which point the carbon
+   dioxide ran out and the garden stopped growing too. A gnome now forages
+   at the same arm's length it digs and plants at, corners included.
+
+With those two in, the jar is solvent: over 80 000 steps **Gin oscillates
+between 272 and 367 and ends at 324**, every belly stays fed, the standing
+crop holds at 2.3–2.6 g, and the garden grows 1.63 g against night 8's 1.34.
+That is the first run in this project's history that ends with the colony no
+poorer than it started.
+
+Verified after that: 197 lib tests, clippy and rustfmt clean, all nine e2e
+checks, and a rendered daylight frame looked at by eye. What I did **not**
+verify: any non-default grid size; `gases.html` or `still.html` by eye (their
+e2e checks pass); what a fetch order does to a colony over a *long* run —
+every 80 000-step run tonight had an empty queue; and anything past 80 000
+steps. One correction to something I nearly wrote: two runs ending at 326 and
+at 1 Gin were **not** run-to-run variance — this simulation has no randomness
+in it — they were two different builds an hour apart. A jar that ends broke
+and a jar that ends solvent differ by a line of code, every time, which is
+worth remembering before blaming noise. Still untouched: the book-copying
+knowledge economy, the Gnome Grandmother, a soil nutrient, nitrogen,
+dissolved gases, and pressure-dependent boiling.

@@ -50,7 +50,7 @@ use crate::light::Sun;
 use crate::material::{terrarium as t, MaterialTable};
 use crate::math::{GridIndex, Scalar};
 use crate::physics;
-use crate::world::World;
+use crate::world::{Cell, World};
 
 /// A cell held at a fixed temperature, and the accounted-for hole in the
 /// jar's energy budget that holding it there implies.
@@ -259,7 +259,23 @@ pub fn gnome_terrarium(width: usize, height: usize) -> Terrarium {
     // 70 000. A hedge you can eat is a hedge you can stand beside.
     let garden_to = SHELL + 5;
     for i in SHELL..garden_to {
-        world.fill(GridIndex::new(i, SHELL + 1), t::WATER, 291.0);
+        // A damp bed, not a trough — under half a cell of water, which is
+        // the line between a puddle and the pool (`path::wet`).
+        //
+        // It used to be brim full, and that one number was quietly eating
+        // both the garden and the colony's Gin. When a bush over the bed
+        // dies and its litter rots down, the cell it stood in becomes
+        // passable; a gnome walking the top of the hedge falls through it
+        // into the water, cannot climb out past the bushes on either side,
+        // gasps its flask empty, and finally cuts the bush over its head to
+        // escape — which opens the next hole. Traced through an 80 000-step
+        // run: four separate falls, and at step 44 436 one cut took 0.44 g
+        // of garden into leaf litter in a single step, a fifth of the crop.
+        // Half a centimetre of water in the bed waters the same plants and
+        // is something a gnome can stand up in.
+        let mut bed = Cell::full(world.materials(), t::WATER, 291.0);
+        bed.mass *= 0.4;
+        world.set_cell(GridIndex::new(i, SHELL + 1), bed);
         world.fill(GridIndex::new(i, SHELL + 2), t::JUNIPER, 291.0);
     }
     // The bed's far wall, one course proud of the water, so the gnomes'
