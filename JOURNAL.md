@@ -806,3 +806,88 @@ made it four times less bad tonight and did not finish it. Still untouched:
 the book-copying knowledge economy, the Gnome Grandmother, a soil nutrient,
 nitrogen, dissolved gases, wash as a real solution, and pressure-dependent
 boiling.
+
+**Night 9 (bonus round) — 2026-09-12 — Opus 5/high — Three reasons the jar
+was dying, and a colony you can send for things.** Measured before choosing,
+again. The first thing I did was run the jar as night 8 left it, and it ends
+the same way it has ended every night since 7: **Gin 400 → 0 by step 70 000,
+bellies flat from 40 000, all four gnomes pacing a twenty-cell pocket at the
+garden end.** Nights 7 and 8 both read that shape as pathing and fixed
+pathing. It is not pathing. It is three separate faults, and finding them
+took a reachability probe and a NaN hunt rather than any amount of reading:
+
+1. *The jar was too hot to walk on.* The base of the shell was the one face
+   not in contact with the room, the floor is one slab of conducting stone,
+   and the spring was heating all of it — equilibrium put the meadow at
+   340 K, over a gnome's lethal limit, from about step 10 000 onward. The
+   colony was penned by heat, in the coolest cells it could find. A jar
+   stands on a table and a table is part of the room.
+2. *A gnome standing in leaf litter never breathed out.* Respiration needed
+   the gnome's own cell to be a gas cell, and litter is walkable but not gas.
+   So its belly never emptied, so it was never hungry, so it never foraged,
+   so its flask ran dry with a full garden two paces away. Bellies frozen to
+   the milligram for thirty thousand steps and nothing else looking wrong.
+3. *A sauna is not a bath.* A gnome's idea of lethal was a number on a
+   thermometer, so the air beside anything hot was death and a cell of it
+   holds a thousandth of a joule per kelvin. `gnome::felt_temperature` now
+   pulls a cell's temperature toward body heat by its heat capacity: 350 K
+   air is a warm room, 350 K water is fatal, and fire is still fire because
+   the discount stops at a twentieth.
+
+Also found on the way, and worth its own line: **a gas cell sealed into a
+heap of leaf litter underflows to a denormal.** Every transfer moves a
+*fraction* of what is there, so a cell that gives and never receives decays
+geometrically; at step 32 153 of an 80 000-step run its heat capacity divided
+into its stored energy as infinity, and one NaN poisoned 1457 gas cells in a
+single step. Mass floor in `gas::move_fraction`, underflow guard in
+`solve_temperature`.
+
+Then the night's own piece, chosen over the knowledge economy and a soil
+nutrient because a colony that cannot be told to *bring* something cannot run
+anything: **`Job::Supply`** — "keep this cell stocked with that stuff" — with
+the colony sourcing it itself by route, and **standing orders**, which are
+the same order re-armed on a cadence. A gnome will not lift the cell it is
+standing on, nor one holding itself up over water, because what that leaves
+is a way into the drink rather than a gap; and a load nobody wants any more
+goes back on the floor instead of leaving the world in somebody's arms. The
+page has a Fetch tool whose list of cargo is every non-gas row of the
+material table, served from the table.
+
+The rest of the night went into a still in the jar, and I took it back out.
+It ran — hearth, pot, hood, and a worm held at the roof's temperature — and
+then deadlocked on something real: a pot that must empty to be re-charged
+cannot keep standing water beside it, because liquids level into it, and wash
+under water has no surface to evaporate from. What that points at is **liquid
+cells that hold mixtures**, the same change that would make wash a real
+water–ethanol solution; the detail, the measurements and the two ways out are
+in [`BREWING.md`](BREWING.md). What I did keep is the honest half of the
+economy: mashing now turns the *botanical* into wash and leaves the water
+alone (it used to turn both cells into wash, which made a still a machine for
+turning a pool into two thousand Gin), gin is worth 1000 Gin to the gram
+against juniper's 600 because ethanol carries 1.75× the energy of dry plant,
+a gnome drinks a sip rather than a cupful it cannot hold, and heat magic is
+1/30 Gin per joule rather than 1/4000 — which is what its own doc comment had
+claimed all along.
+
+Verified: 197 lib tests, clippy and rustfmt clean, and all nine e2e checks
+including a new `terrarium_fetch.test.mjs` that picks "sand" out of the
+page's own list, clicks an empty cell with a real mouse, and watches a gnome
+it never directed fill it — read in canvas pixels, retrying down the walkway
+because leaf litter and rain land on it too. I looked at a rendered daylight
+frame rather than trusting the numbers: the green fetch marker is clearly a
+different order from the amber dig and the pink warm beside it. Over 80 000
+headless steps the colony stays embodied and breathing, residuals 6.6e-14
+and 2.0e-12.
+
+What I did **not** verify, and the honest part: **the Gin economy is still
+not solvent, and it is run-dependent.** Two 80 000-step runs of tonight's
+code ended at 326 Gin and at 1 Gin; the difference is a die-off in the garden
+around step 45 000 in one of them and not the other, and I did not chase it.
+The colony no longer starves in a corner, which was tonight's measured fault,
+but "four gnomes and an ethereal pipe cost more than this garden earns" is
+unfixed and is the next honest target. I also did not verify any non-default
+grid size, `gases.html` or `still.html` by eye (their e2e checks pass), or
+what a fetch order does to a colony over a long run — every long run tonight
+had an empty queue. Still untouched: the book-copying knowledge economy, the
+Gnome Grandmother, a soil nutrient, nitrogen, dissolved gases, and
+pressure-dependent boiling.

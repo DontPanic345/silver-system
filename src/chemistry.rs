@@ -188,15 +188,19 @@ mod tests {
         World::new_open(w, h, MaterialTable::terrarium(), 291.0)
     }
 
+    /// The bush becomes wash and the water it steeped in stays water: a
+    /// still concentrates what the garden grew rather than making more of
+    /// it. See the mashing row in `src/material.rs` for what turning both
+    /// cells into wash cost.
     #[test]
-    fn warm_juniper_in_water_mashes_into_wash() {
+    fn warm_juniper_in_water_mashes_into_wash_and_leaves_the_water() {
         let mut w = world(4, 4);
         w.fill(GridIndex::new(1, 1), t::JUNIPER, 340.0);
         w.fill(GridIndex::new(2, 1), t::WATER, 340.0);
         w.rebaseline();
         react(&mut w);
         assert_eq!(w.material_at(GridIndex::new(1, 1)), t::WASH);
-        assert_eq!(w.material_at(GridIndex::new(2, 1)), t::WASH);
+        assert_eq!(w.material_at(GridIndex::new(2, 1)), t::WATER);
     }
 
     #[test]
@@ -315,7 +319,8 @@ mod tests {
         }
         w.rebaseline();
         react(&mut w);
-        assert_eq!(w.count_of(t::WASH), 2, "{}", crate::report::ascii_map(&w));
+        assert_eq!(w.count_of(t::WASH), 1, "{}", crate::report::ascii_map(&w));
+        assert_eq!(w.count_of(t::WATER), 4, "{}", crate::report::ascii_map(&w));
     }
 
     /// End to end, in one pot: water and juniper held above mashing

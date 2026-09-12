@@ -1398,14 +1398,24 @@ impl MaterialTable {
             (196, 226, 200),
         )
         .with_gas_constant(R_SPIRIT);
-        // The point of the whole brewing chain: a mouthful of the still's
-        // output is worth ten berries, because a gnome drinks a whole cell
-        // of it and only ever picks a berry off a bush.
+        // The point of the whole brewing chain, and the one number in it
+        // that is *derived* rather than chosen: gin is worth more per gram
+        // than the bush it came from, in the ratio of their energy
+        // densities. Ethanol is 29.7 kJ/g and dry plant matter about 17,
+        // so 600 × 29.7/17 ≈ 1050, called 1000.
+        //
+        // That ratio is the whole economic case for a still, and it is a
+        // modest one on purpose: brewing *concentrates* what the garden
+        // grew, it does not multiply it. A gram of juniper eaten off the
+        // bush is 600 Gin; the same gram mashed, boiled and drunk is 1000,
+        // less whatever the heat cost. A colony with a still is better off
+        // than one without by about three quarters, not by an order of
+        // magnitude — and it has to build, charge and fuel the thing.
         materials[t::GIN.0 as usize] =
             Material::new(0.94, 0.35, 2.44, 0.6, Phase::Liquid, (196, 224, 236))
                 .with_thermal_expansion(1.1e-3)
                 .with_opacity(0.12)
-                .nourishing(60.0);
+                .nourishing(1000.0);
         // Glass: stone that light goes through. Every number here is
         // stone's except `opacity`, deliberately — a lid that behaved
         // differently in any other way would be a second mechanism where one
@@ -1479,15 +1489,35 @@ impl MaterialTable {
         // Chemistry. Two rows, and between them they cover both things a
         // botanical can be turned into.
         let reactions = vec![
-            // Mashing: juniper steeping in warm water makes wash of both.
-            // Declared enthalpy-neutral on the water arm, which is what
-            // ties the water component's arbitrary zero to the brewing
-            // component's — without one declared number joining them, the
-            // heat of mashing would be whatever the solver's seeding
-            // happened to make it.
+            // Mashing: a botanical steeping in warm water becomes wash —
+            // and the water stays water.
+            //
+            // It used to turn *both* cells into wash, and that one line was
+            // alchemy. A still fed from a pool then made gin out of the
+            // pool: measured on the flagship jar, one bush dropped into the
+            // hot end every 600 steps yielded 34 g of gin in 20 000 steps
+            // from 16 g of juniper, the balance being water — and at the
+            // gin's food value that is two thousand Gin conjured out of a
+            // puddle, in a world whose entire premise is that nothing comes
+            // from nowhere. Mass was conserved throughout, which is exactly
+            // why it took a measurement rather than a residual to find.
+            //
+            // Wash is now the *extract*: a gram of bush makes a gram of it,
+            // and the water is the vehicle rather than the stock. So a still
+            // concentrates what the garden grew and cannot make more of it,
+            // which is the honest version of `NORTH_STARS.md` #4's brewing.
+            // What is still missing is wash as a real solution (see
+            // `JOURNAL.md`): a cell of it is pure extract rather than a
+            // weak ethanol/water mixture, so distilling separates nothing —
+            // it simply boils the extract over.
+            //
+            // Declared enthalpy-neutral on the botanical arm, which is what
+            // ties wash's arbitrary zero to juniper's — without one declared
+            // number joining them, the heat of mashing would be whatever the
+            // solver's seeding happened to make it.
             Reaction {
-                subject: Arm::releasing(t::WATER, t::WASH, 0.0),
-                partner: Arm::releasing(t::JUNIPER, t::WASH, 0.0),
+                subject: Arm::releasing(t::JUNIPER, t::WASH, 0.0),
+                partner: Arm::implied(t::WATER, t::WATER),
                 threshold_k: T_MASH,
                 direction: Direction::Heating,
             },
@@ -1764,6 +1794,13 @@ pub mod terrarium {
             16 => "fungus",
             _ => "unknown",
         }
+    }
+
+    /// The id of a material by the name [`name`] gives it, so that a player
+    /// asking for "water" on the glass pane names a row of the table rather
+    /// than a number in a page's JavaScript.
+    pub fn by_name(wanted: &str) -> Option<MaterialId> {
+        ALL.iter().copied().find(|&id| name(id) == wanted)
     }
 }
 

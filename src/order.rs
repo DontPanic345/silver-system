@@ -183,6 +183,9 @@ pub enum Outcome {
     Took,
     /// A supply order delivered.
     Stocked,
+    /// A supply order that had nothing to do: the cell it names is already
+    /// full. Finishes this round without counting as work done.
+    Already,
     /// Moved toward the target temperature but not there yet.
     Tempering,
     /// Reached the target: the order is done.
@@ -198,7 +201,7 @@ impl Outcome {
     pub fn completes(&self) -> bool {
         matches!(
             self,
-            Outcome::Dug | Outcome::Built | Outcome::Stocked | Outcome::Tempered
+            Outcome::Dug | Outcome::Built | Outcome::Stocked | Outcome::Already | Outcome::Tempered
         )
     }
 }
@@ -291,6 +294,13 @@ fn place(world: &mut World, at: GridIndex, load: &mut Option<Load>) -> Attempt {
     Attempt::free(Outcome::Built)
 }
 
+/// Puts a carried load down at `at` — [`place`] without an order behind it,
+/// for a gnome setting down something nobody asked for any more. Returns
+/// whether its hands are now empty.
+pub fn put_down(world: &mut World, at: GridIndex, load: &mut Option<Load>) -> bool {
+    matches!(place(world, at, load).outcome, Outcome::Built)
+}
+
 /// Does one step of work on `order` at `site`, from a gnome holding `load`
 /// and able to afford `gin`.
 ///
@@ -325,6 +335,14 @@ pub fn perform(
         Job::Build => place(world, at, load),
         Job::Supply { material } => {
             if load.is_none() {
+                // Already stocked: there is something in the cell, so there
+                // is nothing to fetch. A standing order then waits out its
+                // cadence and asks again, which is what "keep this cell
+                // stocked" means — and what stops a still's charging order
+                // being retired as impossible every time the pot is full.
+                if !world.cell(at).is_gas(world.materials()) {
+                    return Attempt::free(Outcome::Already);
+                }
                 // Fetching. The site is a source the colony found; check it
                 // is still what it was when the route was laid, because a
                 // pool drains and a bush gets eaten.
@@ -337,7 +355,15 @@ pub fn perform(
                     other => Attempt::free(other),
                 };
             }
-            // Carrying. Put it where it was asked for.
+            // Carrying. Put it where it was asked for — unless somebody
+            // beat us to it, or the pot is still full of the last charge,
+            // in which case this round is over and the load stays in hand
+            // for the next one. (Not `NotYet`: that counts against the
+            // carrier's patience, and three rounds of a pot being busy
+            // would retire the order that keeps the still fed.)
+            if !world.cell(at).is_gas(world.materials()) {
+                return Attempt::free(Outcome::Already);
+            }
             match place(world, at, load).outcome {
                 Outcome::Built => Attempt::free(Outcome::Stocked),
                 other => Attempt::free(other),
@@ -572,10 +598,24 @@ impl Orders {
     /// Marks an order done. A standing one goes back on the queue with its
     /// cadence to wait out; an ordinary one leaves.
     pub(crate) fn complete(&mut self, id: u64, now: u64) {
+        self.finish(id, now, true)
+    }
+
+    /// Finishes a round of a standing order that found nothing to do — see
+    /// [`Outcome::Already`]. Not counted as work: a still whose pot is full
+    /// has not been charged a thousand times, it has been looked at a
+    /// thousand times.
+    pub(crate) fn satisfied(&mut self, id: u64, now: u64) {
+        self.finish(id, now, false)
+    }
+
+    fn finish(&mut self, id: u64, now: u64, worked: bool) {
         let Some(o) = self.queue.iter_mut().find(|o| o.id == id) else {
             return;
         };
-        self.completed += 1;
+        if worked {
+            self.completed += 1;
+        }
         match o.repeat {
             Some(every) => {
                 o.claimed_by = None;

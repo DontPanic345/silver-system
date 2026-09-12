@@ -78,6 +78,29 @@ the table already says a shed bush leaves. None of that names a material:
 "crop" is *anything something in the table grows*, and "food" is a column
 (`Material::nutrition`).
 
+And since night 9 you can ask for a **material** rather than a cell. Pick
+*Fetch*, choose something out of the list — which is every non-gas row of the
+material table, served from the table rather than written into the page —
+mark where you want it, and the colony finds the nearest one it can actually
+walk to and carries it there. Nobody says where it comes from. Tick *keep it
+stocked* and the order does not end when it is done: it waits and asks
+again, which is what running a machine needs (`Job::Supply`, `Orders::repeat`
+in `src/order.rs`). A gnome will not lift the cell it is standing on, or one
+holding itself up over water — what that leaves is not a gap but a way into
+the drink.
+
+Night 9 also found why the colony had been slowly dying in every long run,
+and it was three separate things, none of them the pathing everyone had
+blamed: the jar's base was the one face of its shell not in contact with the
+room, so the spring was heating the whole stone floor and the meadow settled
+above a gnome's lethal limit; a gnome standing in leaf litter never breathed
+out, so it was never hungry, so it never foraged; and a gnome's idea of what
+is too hot took no account of *how much heat a cell can actually deliver*.
+A sauna is 370 K and a bath at 370 K would kill you, so a cell's felt
+temperature is now its real one pulled toward body heat by its heat capacity
+(`gnome::felt_temperature`) — which is also what will eventually let a colony
+stand beside its own still.
+
 ```sh
 # Headless: JSON snapshots (and ASCII maps on stderr) — no browser needed.
 cargo run --release --bin terrarium -- --steps 8000 --every 2000 --map --temps
@@ -116,6 +139,15 @@ evaporation along two vapour-pressure curves read off the table's boiling
 points — spirit's (351.5 K) and water's (373.15 K). Some water comes over
 too, as it does from a real pot still. See `src/chemistry.rs`,
 `src/vapour.rs` and `src/still.rs`.
+
+Since night 9 the mash row turns the *botanical* into wash and leaves the
+water it steeped in alone. It used to turn both cells into wash, which made
+a still a machine for turning water into gin — measured at two thousand Gin
+out of a pool, in a world whose whole premise is that nothing comes from
+nowhere. Wash is the extract now, a gram of bush makes a gram of it, and gin
+is worth 1000 Gin to the gram against juniper's 600 because ethanol carries
+about 1.75 times the energy of dry plant matter. So a still concentrates
+what a garden grew and cannot make more of it.
 
 ```sh
 cargo run --release --bin still -- --steps 4000 --every 500 --map
@@ -194,7 +226,7 @@ live. `residual_mass_g` in that output is the whole argument in one number.
 | `src/path.rs` | Where a gnome can get to: the mobility graph and breadth-first routes over it |
 | `src/chamber.rs` | The gas demonstration room, its bottle, vent and scrubber; the relief valve |
 | `src/gnome.rs` | Gin economy, the ethereal layer, rescue, foraging, drinking, breathing, planting, harvesting, ethereal pipes |
-| `src/order.rs` | The glass pane: dig/build/temper orders a player writes on cells, and what a gnome carries |
+| `src/order.rs` | The glass pane: dig/build/fetch/temper orders a player writes on cells, standing orders, and what a gnome carries |
 | `src/terrarium.rs` | The flagship scenario and its declared boundary conditions |
 | `src/still.rs` | The brewing scenario: mash tun, lyne arm, condenser, receiver |
 | `src/report.rs` | JSON snapshots and an ASCII map, for headless verification |
@@ -293,6 +325,7 @@ NODE_PATH=/usr/local/lib/node_modules node tests/e2e/gases_canvas.test.mjs
 NODE_PATH=/usr/local/lib/node_modules node tests/e2e/still_canvas.test.mjs
 NODE_PATH=/usr/local/lib/node_modules node tests/e2e/terrarium_orders.test.mjs
 NODE_PATH=/usr/local/lib/node_modules node tests/e2e/terrarium_routing.test.mjs
+NODE_PATH=/usr/local/lib/node_modules node tests/e2e/terrarium_fetch.test.mjs
 ```
 
 The last five are the ones worth keeping green: each drives a real page in

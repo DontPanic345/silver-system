@@ -72,6 +72,11 @@
         <button data-tool="warm" aria-pressed="false">Warm</button>
         <button data-tool="chill" aria-pressed="false">Chill</button>
         <button data-tool="erase" aria-pressed="false">Rub out</button>
+        <button data-tool="haul" aria-pressed="false">Fetch</button>
+        <select id="cargo" aria-label="what to fetch"></select>
+        <label class="lede" style="display:inline-flex;align-items:center;gap:.25rem">
+          <input type="checkbox" id="standing"> keep it stocked
+        </label>
       </div>
       <canvas id="canvas"></canvas>
       <p id="inspector">Point at the jar to see what a cell is made of.</p>
@@ -131,6 +136,7 @@
       <p class="lede">
         <span class="dot" style="background:#f0aa3c"></span>dig &nbsp;
         <span class="dot" style="background:#78c8ff"></span>build &nbsp;
+        <span class="dot" style="background:#96eb8c"></span>fetch &nbsp;
         <span class="dot" style="background:#eb649b"></span>warm or chill
       </p>
       <p class="lede">
@@ -154,6 +160,17 @@
         are the same number, because what is in a gnome's hands has left the
         world and the ledger is holding it. <strong>Warm</strong> and
         <strong>chill</strong> are the magic, and they cost Gin.
+      </p>
+      <p class="lede">
+        <strong>Fetch</strong> is those two as one instruction: pick what you
+        want out of the list — it is every non-gas row of the material table
+        — mark the cell you want it in, and the colony finds the nearest one
+        it can actually walk to and carries it there. A gnome will not take
+        the cell it is standing on, or one holding itself up over water,
+        because what that leaves is not a gap but a way into the drink. Tick
+        <strong>keep it stocked</strong> and the order does not end when it
+        is done: it waits a while and asks again, which is how you feed
+        something that consumes what you bring it.
       </p>
 
       <h2>Controls</h2>
@@ -306,15 +323,32 @@
       canvas.addEventListener('mouseleave', () => {
         inspector.textContent = 'Point at the jar to see what a cell is made of.';
       });
+      // What "Fetch" fetches: every non-gas row of the material table, read
+      // from the table itself rather than written down here.
+      const cargo = document.getElementById('cargo');
+      const standing = document.getElementById('standing');
+      for (const name of JSON.parse(wasm.terrarium_haulables())) {
+        const option = document.createElement('option');
+        option.value = name;
+        option.textContent = name;
+        cargo.append(option);
+      }
+      cargo.value = 'water';
+      const asked = () => (tool === 'haul' ? `haul:${cargo.value}` : tool);
+
       canvas.addEventListener('click', (e) => {
         const [i, j] = cellAt(canvas, e, h);
         if (tool === 'erase') wasm.terrarium_cancel_at(i, j);
-        else if (tool !== 'inspect') wasm.terrarium_order_at(i, j, tool);
+        else if (tool !== 'inspect') {
+          if (wasm.terrarium_order_at(i, j, asked()) && standing.checked)
+            wasm.terrarium_keep_at(i, j, 200);
+        }
         show(i, j);
       });
       // So a headless test can drive the same path a mouse does without
       // having to know how the canvas is laid out.
       window.__order = (i, j, what) => wasm.terrarium_order_at(i, j, what);
+      window.__keep = (i, j, every) => wasm.terrarium_keep_at(i, j, every);
       // Repaint without advancing: what the canvas shows right now, which is
       // what a paused jar owes a person who has just marked a cell on it.
       window.__repaint = () => wasm.terrarium_tick_and_draw('canvas', CELL_PX, 0);

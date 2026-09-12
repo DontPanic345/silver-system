@@ -43,10 +43,27 @@ use crate::world::World;
 
 /// The most Gin a gnome can hold.
 pub const MAX_GIN: Scalar = 100.0;
-/// Gin per joule moved by a warming or chilling spell. Tuned so a gnome
+/// Gin per joule moved by a warming or chilling spell. Priced so a gnome
 /// with a full flask can shift roughly the heat in a cell of water by 100 K
 /// a few times over — magic that matters, but that runs out.
-pub const GIN_PER_JOULE: Scalar = 1.0 / 4000.0;
+///
+/// It was `1/4000`, which is that same sentence out by a factor of three
+/// hundred: a full flask would have moved a cell of water by a hundred
+/// *thousand* kelvin. Nothing noticed, because the only thing heat magic was
+/// ever spent on was a gnome nudging the air around itself, and a cell of
+/// air holds 0.00125 J/K — too little for any price to matter.
+///
+/// What made it matter is the still. Distilling a gram of wash takes about a
+/// thousand joules, and a gram of gin is worth a thousand Gin; at the old
+/// price that heat cost a quarter of a Gin, so any player who put a pot on a
+/// fire could have conjured mana four thousand times over. At this one the
+/// heat costs 33 Gin against 1000 gained — a still is worth running, and it
+/// is worth running on the jar's own spring rather than on magic.
+///
+/// The anchor, now that there is one: a gram of juniper is 600 Gin and holds
+/// about 16 kJ of chemical energy, so a Gin is worth something like 27 J.
+/// Everything above is that number rounded to 30.
+pub const GIN_PER_JOULE: Scalar = 1.0 / 30.0;
 /// Gin per gram conjured or banished. Matter is dearer than heat.
 pub const GIN_PER_GRAM: Scalar = 8.0;
 /// Grams a gnome picks off a bush at a time — the bite, not the worth.
@@ -132,6 +149,44 @@ pub const LETHAL_MAX: Scalar = 340.0;
 /// the cell it measured, because the world has a step of physics in between.
 pub const SHUN_MARGIN_K: Scalar = 5.0;
 
+/// The heat capacity of a cell that can hurt a gnome at its face value: a
+/// full cell of water, 4.19 J/K. Anything thinner than this is felt in
+/// proportion to what it can actually deliver — see [`felt_temperature`].
+const SCALDING_CAPACITY: Scalar = 4.19;
+
+/// The least a cell's heat is ever discounted, however thin it is. A flame
+/// front is 1300 K and it is not survivable, whatever its heat capacity
+/// says, because a real one radiates and this simulation has no radiation.
+/// At a twentieth, a cell of air has to be past about 900 K before it is
+/// lethal, which puts fire back on the wrong side of the line without
+/// putting a warm workshop there with it.
+const THINNEST_FELT: Scalar = 0.05;
+
+/// What a cell's temperature *feels like* to a gnome standing in it.
+///
+/// A sauna is 370 K and people sit in them; a bath at 370 K would kill you.
+/// The difference is not temperature, it is how much heat the stuff you are
+/// standing in can put into you, and that is its heat capacity — which this
+/// simulation already knows for every cell, from the table, without naming
+/// any material. So a cell's felt temperature is its real one pulled back
+/// toward a gnome's own body heat by the ratio of its capacity to a full
+/// cell of water's.
+///
+/// This is not a comfort feature. It is what makes a **workshop** possible:
+/// a still has to be hotter than 351 K to distil anything, its pot has to be
+/// within arm's reach of whoever charges it, and the air beside a pot that
+/// hot sits around 350. Under a flat temperature limit the colony cannot
+/// stand next to its own still — not "does not like to", cannot, because the
+/// route refuses the cell and the supply order beside it is unreachable. The
+/// gnome, meanwhile, was paying Gin to chill a cell of air holding a
+/// thousandth of a joule per kelvin.
+pub fn felt_temperature(world: &World, at: GridIndex) -> Scalar {
+    let cell = world.cell(at);
+    let t = cell.temperature;
+    let share = (cell.capacity(world.materials()) / SCALDING_CAPACITY).clamp(THINNEST_FELT, 1.0);
+    BODY_K + (t - BODY_K) * share
+}
+
 /// Whether a gnome would refuse to *walk into* this cell.
 ///
 /// Only heat and cold, and deliberately: drowning, suffocating and being
@@ -140,7 +195,10 @@ pub const SHUN_MARGIN_K: Scalar = 5.0;
 /// the one it is already in. Fire is the one a gnome cannot walk out of
 /// afterwards.
 pub fn dangerous(world: &World, at: GridIndex) -> bool {
-    let t = world.temperature_at(at);
+    if !world.in_bounds(at) {
+        return false;
+    }
+    let t = felt_temperature(world, at);
     t > LETHAL_MAX - SHUN_MARGIN_K || t < LETHAL_MIN + SHUN_MARGIN_K
 }
 
@@ -162,6 +220,12 @@ pub fn dangerous(world: &World, at: GridIndex) -> bool {
 /// bush and about two minutes, and a colony that keeps falling into a hole
 /// somebody dug cuts at most a couple of cells before it is out.
 pub const TRAPPED_STEPS: u32 = 2000;
+
+/// Steps a gnome will hold a load nobody has asked for before setting it
+/// down. Long enough for a player to dig a hole, look at it, and decide
+/// where the spoil goes; short enough that a load orphaned by a cancelled
+/// order comes back into the world rather than leaving with the carrier.
+pub const HOLD_STEPS: u32 = 2000;
 
 /// How many courses of crop a gnome will lift at once to clear its way —
 /// see [`Colony::heave`]. A hedge, not a tree.
@@ -291,6 +355,9 @@ pub struct Gnome {
     pub last_act: Act,
     /// Which way this gnome is walking.
     pub facing: i8,
+    /// Steps this gnome has been carrying something nobody wants — see
+    /// [`Colony::put_down_spare_load`].
+    pub spare_load: u32,
     /// Grams of biomass eaten and not yet breathed out again.
     ///
     /// A gnome's body is the one part of this world that is outside the
@@ -337,6 +404,7 @@ impl Gnome {
             hands: None,
             job: None,
             stuck: 0,
+            spare_load: 0,
         }
     }
 
@@ -484,6 +552,18 @@ impl Colony {
     /// this world. Returns its id.
     pub fn order(&mut self, at: GridIndex, job: Job) -> u64 {
         self.orders.issue(at, job)
+    }
+
+    /// Makes the order already written on a cell a standing one, re-offered
+    /// `every` steps after each time it is done — see [`Orders::repeat`].
+    pub fn keep_order(&mut self, at: GridIndex, every: u32) -> bool {
+        match self.orders.at(at).map(|o| o.id) {
+            Some(id) => {
+                self.orders.repeat(id, every);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Rubs out the order on a cell, and frees whoever was walking to it.
@@ -654,8 +734,12 @@ impl Colony {
         self.respire(world, idx, pos);
 
         // --- Lethal heat or cold: mitigate with Gin, or leave the world ---
-        let too_hot = cell.temperature > LETHAL_MAX;
-        let too_cold = cell.temperature < LETHAL_MIN;
+        //
+        // What the cell can do to a gnome, not what a thermometer in it
+        // reads — see [`felt_temperature`].
+        let felt = felt_temperature(world, pos);
+        let too_hot = felt > LETHAL_MAX;
+        let too_cold = felt < LETHAL_MIN;
         let drowning = self.gnomes[idx].breath == 0;
 
         if too_hot || too_cold {
@@ -685,7 +769,7 @@ impl Colony {
             // time it ran out of breath emptied a working still as fast as
             // the still could fill it, flask long since full, purely
             // because it happened to be standing in the receiver.
-            if self.drink(world, idx, pos, cell.temperature) {
+            if self.sip(world, idx, pos, cell.temperature, true) {
                 return;
             }
             // Then: step out of it. Magic is the *last* resort, not the
@@ -762,6 +846,11 @@ impl Colony {
         // while it suffocates is a colony tuned toward failure, which is
         // the thing `NORTH_STARS.md` #4 opens by objecting to.
         if self.work(world, routes, idx, pos) {
+            return;
+        }
+
+        // --- Put down anything nobody wants any more ---
+        if self.put_down_spare_load(world, idx, pos) {
             return;
         }
 
@@ -1035,11 +1124,27 @@ impl Colony {
         spoken_for: GridIndex,
     ) -> Option<GridIndex> {
         let reach = crate::order::REACH;
+        let underfoot = GridIndex::new(at.i, at.j - 1);
         (-reach..=reach)
             .flat_map(|di| (-reach..=reach).map(move |dj| GridIndex::new(at.i + di, at.j + dj)))
             .find(|&c| {
                 c != spoken_for
                     && world.in_bounds(c)
+                    // Not the cell holding you up. A gnome that lifts its
+                    // own floor falls into the hole, which is funny once.
+                    && c != underfoot
+                    // ...and not a cell that is holding *itself* up over
+                    // water. What lifting one leaves behind is not a gap, it
+                    // is a way into the drink: the first supply order ever
+                    // written took a bush off the garden's bed, the gnome
+                    // stepped into the hole it had made, fell through into
+                    // the water underneath, and paced the bottom of the bed
+                    // for the rest of the run with the bush still in its
+                    // arms. Every bush in the starting garden stands on that
+                    // bed, so this rule is also why the jar is now planted
+                    // two courses deep: the crop worth cutting is the one
+                    // standing on another crop.
+                    && !path::wet(world, GridIndex::new(c.i, c.j - 1))
                     && world.material_at(c) == material
                     && crate::order::liftable(world, c)
                     && self.orders.at(c).is_none()
@@ -1343,6 +1448,13 @@ impl Colony {
                 self.gnomes[idx].last_act = Act::Stocked;
                 true
             }
+            // Nothing to fetch: the cell is full already. The standing
+            // order waits out its cadence; the gnome gets on with its day.
+            Outcome::Already => {
+                self.orders.satisfied(id, now);
+                self.gnomes[idx].job = None;
+                false
+            }
             Outcome::Tempered => {
                 self.orders.complete(id, now);
                 self.gnomes[idx].job = None;
@@ -1366,6 +1478,53 @@ impl Colony {
                 false
             }
         }
+    }
+
+    /// Sets down a load that no outstanding order has wanted for a while.
+    ///
+    /// A gnome holds what it digs — that is the whole of "you cannot build
+    /// what you have not dug", and a gnome walking around with the spoil
+    /// from a dig order, waiting for somewhere to put it, is correct. What
+    /// is not correct is holding something after the order that asked for it
+    /// has been rubbed out or given up on: the load is booked out of the
+    /// world, so the mass simply leaves the jar, and the gnome's hands are
+    /// full for ever so it can never take another fetching job. Measured on
+    /// the first run with a supply order in it: three gnomes standing about
+    /// holding a gram and a half of the garden between them, permanently.
+    ///
+    /// So: if nothing on the queue has wanted what this gnome is holding for
+    /// [`HOLD_STEPS`], it puts it down where it stands. The mass comes back
+    /// into the world and the books return to zero.
+    ///
+    /// The delay is not politeness, it is the dig-then-build workflow. A
+    /// player digs a cell, looks at the hole, decides where the spoil should
+    /// go, and marks it — and for all of those seconds there is no order on
+    /// the queue that wants a load of sand. Dropping it at once made "dig
+    /// here, build it there" impossible to actually perform: by the time the
+    /// second mark was on the glass the gnome's hands were empty and the
+    /// spoil was back on the floor. Both e2e checks caught that, which is
+    /// what they are for.
+    fn put_down_spare_load(&mut self, world: &mut World, idx: usize, pos: GridIndex) -> bool {
+        let Some(load) = self.gnomes[idx].hands else {
+            self.gnomes[idx].spare_load = 0;
+            return false;
+        };
+        if self.gnomes[idx].job.is_some() || self.orders.iter().any(|o| o.job.suits(Some(&load))) {
+            self.gnomes[idx].spare_load = 0;
+            return false;
+        }
+        self.gnomes[idx].spare_load += 1;
+        if self.gnomes[idx].spare_load < HOLD_STEPS {
+            return false;
+        }
+        let mut hands = self.gnomes[idx].hands;
+        let put = crate::order::put_down(world, pos, &mut hands);
+        self.gnomes[idx].hands = hands;
+        if put {
+            self.gnomes[idx].spare_load = 0;
+            self.gnomes[idx].last_act = Act::Built;
+        }
+        put
     }
 
     /// Whether enough updates have passed since the last cutting went in.
@@ -1561,8 +1720,20 @@ impl Colony {
         true
     }
 
-    /// Drinks the cell of gin at `cup`. The matter leaves the world, so it
-    /// goes on the ledger like every other thing a gnome consumes.
+    /// Drinks from the cell of gin at `cup`. The matter leaves the world, so
+    /// it goes on the ledger like every other thing a gnome consumes.
+    ///
+    /// A *sip*, not the cup: only as much as the flask has room for, and no
+    /// more than a belly can hold. A gnome used to drink whatever was in the
+    /// cell and throw away everything past `MAX_GIN`, which was tolerable
+    /// while a cell of gin was worth half a flask and became simple waste
+    /// once it was worth nine of them. What is left stays in the receiver,
+    /// which is what a receiver is for: gin standing in one is the colony's
+    /// mana in the bank.
+    ///
+    /// The exception is `drain`, for a gnome that is *in* the stuff rather
+    /// than beside it: there the point is to clear the cell it is drowning
+    /// in, so it takes the lot.
     fn drink(
         &mut self,
         world: &mut World,
@@ -1570,10 +1741,26 @@ impl Colony {
         cup: GridIndex,
         temperature: Scalar,
     ) -> bool {
-        let held = world.cell(cup).mass;
+        self.sip(world, idx, cup, temperature, false)
+    }
+
+    fn sip(
+        &mut self,
+        world: &mut World,
+        idx: usize,
+        cup: GridIndex,
+        temperature: Scalar,
+        drain: bool,
+    ) -> bool {
+        let standing = world.cell(cup).mass;
         let drink = world.material_at(cup);
         let worth = world.materials().get(drink).nutrition;
-        if held <= 0.0 || worth <= 0.0 {
+        if standing <= 0.0 || worth <= 0.0 {
+            return false;
+        }
+        let room = ((MAX_GIN - self.gnomes[idx].gin) / worth).max(0.0);
+        let held = if drain { standing } else { standing.min(room) };
+        if held <= 0.0 {
             return false;
         }
         world.conjure_mass(cup, drink, -held, temperature);
@@ -2013,8 +2200,10 @@ mod tests {
     #[test]
     fn magic_costs_gin_and_the_ledger_records_exactly_what_it_added() {
         let mut w = cavern();
-        // A pocket of lava-hot air the gnome must chill to survive.
-        w.fill(GridIndex::new(5, 1), t::AIR, 500.0);
+        // A pocket of flame the gnome must chill to survive. Air has to be
+        // genuinely fire-hot to be lethal now, because a cell of it holds so
+        // little heat — see `felt_temperature`.
+        w.fill(GridIndex::new(5, 1), t::AIR, 1500.0);
         w.rebaseline();
         let mut colony = Colony::new(vec![Gnome::new(GridIndex::new(5, 1))]);
         let energy_before = w.total_energy();
@@ -2037,7 +2226,7 @@ mod tests {
     #[test]
     fn a_gnome_out_of_gin_slips_into_the_ethereal_layer_rather_than_dying() {
         let mut w = cavern();
-        w.fill(GridIndex::new(5, 1), t::AIR, 900.0);
+        w.fill(GridIndex::new(5, 1), t::AIR, 1600.0);
         w.rebaseline();
         let mut gnome = Gnome::new(GridIndex::new(5, 1));
         gnome.gin = 0.0;
@@ -2053,7 +2242,7 @@ mod tests {
     #[test]
     fn another_gnome_nearby_pulls_an_ethereal_gnome_back() {
         let mut w = cavern();
-        w.fill(GridIndex::new(5, 1), t::AIR, 900.0);
+        w.fill(GridIndex::new(5, 1), t::AIR, 1600.0);
         w.rebaseline();
         let mut stuck = Gnome::new(GridIndex::new(5, 1));
         stuck.gin = 0.0;

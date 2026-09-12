@@ -248,6 +248,15 @@ pub fn gnome_terrarium(width: usize, height: usize) -> Terrarium {
     // takes real grams of it apart to build plant, and the bed draws down
     // over a long run — which is the shape of the irrigation problem a
     // colony should have, not a bug to plumb away.
+    // One course tall, and it stays one course tall, which is worth writing
+    // down because tonight tried two and measured what happened. A garden
+    // planted two deep starves the colony inside forty thousand steps: the
+    // lower course is in the shade of the upper one (`Material::opacity`) so
+    // it stops growing and gets picked to the graze floor, and the upper
+    // course cannot be foraged at all, because the only place to stand to
+    // reach it is mid-air over the row below. Four gnomes, four grams of
+    // standing crop, empty bellies from step 40 000 and the flask dry by
+    // 70 000. A hedge you can eat is a hedge you can stand beside.
     let garden_to = SHELL + 5;
     for i in SHELL..garden_to {
         world.fill(GridIndex::new(i, SHELL + 1), t::WATER, 291.0);
@@ -312,6 +321,12 @@ pub fn gnome_terrarium(width: usize, height: usize) -> Terrarium {
     for i in pool_from..pool_to {
         thermostats.push(Thermostat::new(GridIndex::new(i, SHELL), VENT_K));
     }
+    // ...including the two cells of it that surface under the still. The
+    // hearth is the same spring as the pool's, held at the same temperature
+    // by the same mechanism and booked in the same ledger; it is not a
+    // second heat source, it is the one the jar already had, reaching two
+    // cells further west. Filling the stone hot without this was a hearth
+    // that went out in four hundred steps.
     // The cold side of the jar is its whole outer skin, not just the lid.
     //
     // It used to be one row across the ceiling, and that was not enough of
@@ -373,6 +388,7 @@ pub fn default_terrarium() -> Terrarium {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::order::Job;
 
     #[test]
     fn the_jar_is_sealed_and_stays_sealed() {
@@ -728,6 +744,60 @@ mod tests {
         );
     }
 
+    /// Scenario: a player marks a cell of the walkway and asks for sand in
+    /// it. Nobody says where any sand is; the colony finds some, lifts it,
+    /// carries it over and puts it down, and the jar's sand is the same sand
+    /// it was.
+    ///
+    /// Sand and not water, and that is worth knowing about this jar: **there
+    /// is no water in it a gnome can reach.** The pool stands behind a bank
+    /// five courses tall and a gnome climbs one course at a time; the
+    /// garden's bed is roofed by its own bushes, and the one cell a gnome
+    /// could have stood in to dip a bucket is where the compost heap is.
+    /// A fetch order for water is therefore an order nobody can fill, and
+    /// the colony correctly gives up on it. That is a fact about the
+    /// scenario's geometry rather than about the code — and it is the thing
+    /// standing between this colony and a still.
+    #[test]
+    fn a_player_can_ask_for_a_material_and_the_colony_finds_it() {
+        let mut terra = default_terrarium();
+        for _ in 0..200 {
+            terra.step(0.05);
+        }
+        let at = GridIndex::new(12, SHELL + 2);
+        assert_ne!(
+            terra.world.material_at(at),
+            t::SAND,
+            "the cell should start empty"
+        );
+        let sand_before = terra.world.mass_of(t::SAND);
+        terra.colony.order(at, Job::Supply { material: t::SAND });
+
+        let mut delivered = None;
+        for step in 0..4000 {
+            terra.step(0.05);
+            if terra.world.material_at(at) == t::SAND && terra.world.mass_at(at) > 0.0 {
+                delivered = Some(step);
+                break;
+            }
+        }
+        assert!(
+            delivered.is_some(),
+            "nothing arrived: {} orders open, {} done, {} given up on",
+            terra.colony.orders.len(),
+            terra.colony.orders.completed(),
+            terra.colony.orders.cancelled()
+        );
+        // It came from somewhere in this jar rather than from nowhere.
+        assert!(
+            (terra.world.mass_of(t::SAND) - sand_before).abs() < 1e-6,
+            "sand went from {sand_before} to {}",
+            terra.world.mass_of(t::SAND)
+        );
+        let r = terra.world.conservation_residuals();
+        assert!(r.mass_relative.abs() < 1e-6, "residuals drifted: {r:?}");
+    }
+
     /// The glass pane, end to end, in the jar a human actually looks at: the
     /// player writes *dig* on a cell of the meadow, a gnome walks over and
     /// takes it away, the player writes *build* on a cell of air, and the
@@ -738,9 +808,9 @@ mod tests {
     /// much lighter and the ledger holds exactly that much against it; when
     /// it is put down, both come back. There is no resource counter anywhere
     /// in between — the mass *is* the resource.
+    ///
     #[test]
     fn a_player_can_dig_a_hole_and_build_the_spoil_somewhere_else() {
-        use crate::order::Job;
         let mut terra = default_terrarium();
         // Let the jar settle and the gnomes find their feet first.
         for _ in 0..200 {
@@ -830,7 +900,6 @@ mod tests {
     /// and the joules land in the ledger.
     #[test]
     fn a_warming_order_is_paid_for_in_gin_and_booked() {
-        use crate::order::Job;
         let mut terra = default_terrarium();
         for _ in 0..200 {
             terra.step(0.05);
@@ -879,7 +948,6 @@ mod tests {
     /// leaving a gnome walking into a wall for the rest of the run.
     #[test]
     fn an_order_nobody_can_reach_is_eventually_abandoned() {
-        use crate::order::Job;
         let mut terra = default_terrarium();
         // The middle of the jar's own outer shell, on the far side of a
         // sealed wall and well over a gnome's head.

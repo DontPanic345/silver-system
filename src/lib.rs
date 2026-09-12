@@ -749,8 +749,10 @@ pub fn terrarium_dimensions() -> Vec<u32> {
 // else the page does is drawing. See `src/order.rs` for why the player never
 // touches the world directly.
 
-/// Writes an order on cell `(i, j)`. `tool` is `"dig"`, `"build"`, `"warm"`
-/// or `"chill"`; anything else is ignored. Returns whether it took.
+/// Writes an order on cell `(i, j)`. `tool` is `"dig"`, `"build"`, `"warm"`,
+/// `"chill"`, or `"haul:<material>"` — the last naming a row of the material
+/// table, e.g. `"haul:water"`. Anything else is ignored. Returns whether it
+/// took.
 ///
 /// Warming and chilling are named rather than given a temperature, because
 /// what a player wants from a button is "hotter" — the targets are the ends
@@ -768,7 +770,10 @@ pub fn terrarium_order_at(i: i32, j: i32, tool: &str) -> bool {
         "chill" => order::Job::Temper {
             target_k: gnome::COMFORT_MIN,
         },
-        _ => return false,
+        other => match other.strip_prefix("haul:").and_then(terrarium_name_to_id) {
+            Some(material) => order::Job::Supply { material },
+            None => return false,
+        },
     };
     TERRARIUM.with(|cell| {
         let mut slot = cell.borrow_mut();
@@ -784,6 +789,47 @@ pub fn terrarium_order_at(i: i32, j: i32, tool: &str) -> bool {
             None => false,
         }
     })
+}
+
+/// Turns the order on cell `(i, j)` into a standing one, re-offered `every`
+/// steps after each time it is done.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn terrarium_keep_at(i: i32, j: i32, every: u32) -> bool {
+    TERRARIUM.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        match slot.as_mut() {
+            Some(t) => t
+                .colony
+                .keep_order(math::GridIndex::new(i, j), every.max(1)),
+            None => false,
+        }
+    })
+}
+
+/// A material id by name, for `"haul:<material>"`.
+#[cfg(target_arch = "wasm32")]
+fn terrarium_name_to_id(name: &str) -> Option<material::MaterialId> {
+    material::terrarium::by_name(name)
+}
+
+/// The materials a gnome could be asked to fetch, as a JSON array of names —
+/// everything in the table that is not a gas, because a gnome carries things
+/// in its arms and cannot carry air.
+///
+/// Served from the table rather than written into the page, so a material
+/// added to `src/material.rs` turns up in the player's list without anybody
+/// editing any HTML.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn terrarium_haulables() -> String {
+    let table = material::MaterialTable::terrarium();
+    let names: Vec<String> = material::terrarium::ALL
+        .iter()
+        .filter(|&&id| table.get(id).phase != material::Phase::Gas)
+        .map(|&id| format!("\"{}\"", material::terrarium::name(id)))
+        .collect();
+    format!("[{}]", names.join(","))
 }
 
 /// Rubs out whatever order is on cell `(i, j)`.
