@@ -876,8 +876,8 @@ it never directed fill it — read in canvas pixels, retrying down the walkway
 because leaf litter and rain land on it too. I looked at a rendered daylight
 frame rather than trusting the numbers: the green fetch marker is clearly a
 different order from the amber dig and the pink warm beside it. Over 80 000
-headless steps the colony stays embodied and breathing, residuals 6.6e-14
-and 2.0e-12.
+headless steps the colony stays embodied and breathing, residuals 5.9e-14
+and 2.6e-12.
 
 Then, with the tree green, I went after the thing I had just written down as
 the next target — **the colony is insolvent: four gnomes and an ethereal pipe
